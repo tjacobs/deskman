@@ -2,11 +2,12 @@
 
 Offline text to speech generation, using the [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) model.
 
-Three tools:
+Four tools:
 
 - `speak.py` — speak a fixed phrase once, with timing stats
 - `say.py` — interactive keyboard control over SSH, with preset phrases, voice and speed control
 - `listen.py` — live speech to text from the microphone, using [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+- `talk.py` — wake word loop, listens for a command and speaks a reply
 
 Both use CUDA when available. Pass `--cpu` to force CPU inference.
 
@@ -73,6 +74,19 @@ Live transcription from the microphone. Speak and lines print as you talk, CTRL-
 On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. The build takes around 30 minutes and only runs once. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.
 
 Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the first USB soundcard with a mic on linux, and with sox from the default input device on mac.
+
+## talk.py
+
+Say the wake word `robot`, then a command, and it speaks a reply. CTRL-C to stop. Needs the same install as `listen.py`.
+
+```bash
+./install.sh --listen
+./talk.py
+```
+
+Replies to a few built in commands like the time, the date, and its name, and echoes anything else back. Edit `make_reply` in `talk.py` to add more.
+
+Pass `--test` to speak one canned exchange and exit. Pass `--fake` to trigger the wake word on a timer instead of by voice, for testing without speaking.
 
 ## Testing
 

@@ -2,6 +2,8 @@
 
 # Imports
 import os
+import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -17,11 +19,15 @@ SAMPLE_RATE = 16000
 CHUNK_SECONDS = 2
 COMMAND_SECONDS = 5
 FAKE_WAKE_SECONDS = 10
+MAC_RECORDER = 'rec'
+LINUX_RECORDER = 'arecord'
 
 # Config voice
 REPO_ID = 'hexgrad/Kokoro-82M'
 VOICE = 'bm_fable'
 SPEECH_SPEED = 1.2
+MAC_PLAYER = 'afplay'
+LINUX_PLAYER = 'aplay'
 
 # Config dirs and env
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,16 +46,11 @@ def main():
     global TEST_MODE, FAKE_MODE
     TEST_MODE, FAKE_MODE = parse_args()
 
-    # Find microphone
-    mic_card = find_capture_card()
-    if mic_card is None:
-        print('No microphone found. Plug in a USB mic and try again.')
-        sys.exit(1)
+    # Build the record command, quits when no microphone is available
+    record = record_command()
 
     # Quit early when audio playback is unavailable
-    if find_usb_card() is None:
-        print('No USB speaker found. Plug one in and run ./tools-audio.sh.')
-        sys.exit(1)
+    check_ready()
 
     # Silence onnxruntime GPU discovery warning from the VAD
     import_onnxruntime_quietly()
@@ -62,7 +63,7 @@ def main():
     if TEST_MODE:
         run_test(kokoro_pipeline)
     else:
-        run_talk_loop(whisper_model, kokoro_pipeline, mic_card)
+        run_talk_loop(whisper_model, kokoro_pipeline, record)
 
 # Parse command line arguments
 def parse_args():
@@ -124,11 +125,11 @@ def run_test(kokoro_pipeline):
     speak(kokoro_pipeline, reply)
 
 # Listen for the wake word, then a command, then reply
-def run_talk_loop(whisper_model, kokoro_pipeline, mic_card):
+def run_talk_loop(whisper_model, kokoro_pipeline, record):
     # Greet, then start listening
     speak(kokoro_pipeline, GREETING)
     print(f'Say "{WAKE_WORD}" to talk, CTRL-C to stop.', flush=True)
-    recorder = start_recorder(mic_card)
+    recorder = start_recorder(record)
     chunk_bytes = SAMPLE_RATE * 2 * CHUNK_SECONDS
     listen_start = time.monotonic()
     try:
@@ -152,7 +153,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, mic_card):
             speak(kokoro_pipeline, 'Yes?')
 
             # Record the command
-            recorder = start_recorder(mic_card)
+            recorder = start_recorder(record)
             command_bytes = SAMPLE_RATE * 2 * COMMAND_SECONDS
             data = recorder.stdout.read(command_bytes)
             command = transcribe(whisper_model, data)
@@ -163,7 +164,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, mic_card):
             reply = make_reply(command)
             print(f'Reply: {reply}', flush=True)
             speak(kokoro_pipeline, reply)
-            recorder = start_recorder(mic_card)
+            recorder = start_recorder(record)
             listen_start = time.monotonic()
     except KeyboardInterrupt:
         print('\nDone.')
@@ -223,18 +224,48 @@ def import_onnxruntime_quietly():
             os.dup2(saved_fd, stderr_fd)
             os.close(saved_fd)
 
+# Build the record command for this platform
+def record_command():
+    if platform.system() == 'Darwin':
+        return mac_record_command()
+    return linux_record_command()
+
+# Record from the default input device with sox
+def mac_record_command():
+    if shutil.which(MAC_RECORDER) is None:
+        print('sox not found. Run ./install.sh --listen to install it.')
+        sys.exit(1)
+    return [MAC_RECORDER, '-q', '-t', 'raw', '-b', '16', '-e', 'signed-integer', '-c', '1', '-r', str(SAMPLE_RATE), '-']
+
+# Record from the first usb microphone with arecord
+def linux_record_command():
+    card = find_capture_card()
+    if card is None:
+        print('No microphone found. Plug in a USB mic and try again.')
+        sys.exit(1)
+    return [LINUX_RECORDER, '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+
 # Return card index for the first device with capture support
 def find_capture_card():
-    result = subprocess.run(['arecord', '-l'], capture_output=True, text=True)
+    result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
     for line in result.stdout.splitlines():
         if line.startswith('card') and 'USB' in line:
             return int(line.split(':')[0].split()[1])
     return None
 
-# Start arecord streaming raw audio to stdout
-def start_recorder(card):
-    command = ['arecord', '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+# Start the recorder streaming raw audio to stdout
+def start_recorder(command):
     return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+# Quit when audio playback is unavailable
+def check_ready():
+    player = audio_player()
+    if shutil.which(player) is None:
+        print(f'Audio playback unavailable: {player} not found.')
+        sys.exit(1)
+    if player == LINUX_PLAYER and find_usb_card() is None:
+        print('No USB speaker found. Plug one in and run ./tools-audio.sh.')
+        sys.exit(1)
 
 # Return true when a card has a capture stream
 def card_has_capture(card_index):
@@ -270,10 +301,17 @@ def find_usb_card():
 
 # Build playback command for one wav file
 def play_wav_command(wav_path):
+    player = audio_player()
+    if player == MAC_PLAYER:
+        return [player, wav_path]
     card = find_usb_card()
     if card is None:
-        return ['aplay', wav_path]
-    return ['aplay', '-D', f'plughw:{card},0', wav_path]
+        return [player, wav_path]
+    return [player, '-D', f'plughw:{card},0', wav_path]
+
+# Return audio player command for this platform
+def audio_player():
+    return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
 
 # Main
 if __name__ == '__main__':
