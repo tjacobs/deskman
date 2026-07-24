@@ -14,11 +14,12 @@ import numpy as np
 # Config wake and listen
 WAKE_WORD = 'robot'
 GREETING = 'Hi!'
+ACKNOWLEDGEMENT = 'Yes?'
+TEST_QUESTION = 'What is the time?'
 WHISPER_MODEL_SIZE = 'base'
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 2
 COMMAND_SECONDS = 5
-FAKE_WAKE_SECONDS = 10
 MAC_RECORDER = 'rec'
 LINUX_RECORDER = 'arecord'
 
@@ -38,13 +39,12 @@ os.environ['HF_HUB_VERBOSITY'] = 'error'
 
 # State
 TEST_MODE = False
-FAKE_MODE = False
 
 # Main
 def main():
     # Parse args
-    global TEST_MODE, FAKE_MODE
-    TEST_MODE, FAKE_MODE = parse_args()
+    global TEST_MODE
+    TEST_MODE = parse_args()
 
     # Build the record command, quits when no microphone is available
     record = record_command()
@@ -59,25 +59,19 @@ def main():
     whisper_model = load_whisper_model()
     kokoro_pipeline = load_kokoro_pipeline()
 
-    # Speak one test exchange or run the wake word loop
-    if TEST_MODE:
-        run_test(kokoro_pipeline)
-    else:
-        run_talk_loop(whisper_model, kokoro_pipeline, record)
+    # Run the wake word loop, test mode does one exchange and exits
+    run_talk_loop(whisper_model, kokoro_pipeline, record)
 
 # Parse command line arguments
 def parse_args():
     test_mode = False
-    fake_mode = False
     for argument in sys.argv[1:]:
         if argument == '--test':
             test_mode = True
-        elif argument == '--fake':
-            fake_mode = True
         else:
             print(f"Unknown argument: {argument}")
             sys.exit(1)
-    return test_mode, fake_mode
+    return test_mode
 
 # Load whisper model on gpu when available
 def load_whisper_model():
@@ -115,63 +109,69 @@ def load_kokoro_pipeline():
     model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
     pipeline = kokoro.KPipeline(lang_code=VOICE[0], repo_id=REPO_ID, model=model)
     pipeline.load_voice(VOICE)
-    print(f'Kokoro on {device.upper()} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
+    print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
     return pipeline
-
-# Speak one canned exchange and exit
-def run_test(kokoro_pipeline):
-    command = 'what time is it'
-    print(f'Command: {command}')
-    reply = make_reply(command)
-    print(f'Reply: {reply}')
-    speak(kokoro_pipeline, reply)
 
 # Listen for the wake word, then a command, then reply
 def run_talk_loop(whisper_model, kokoro_pipeline, record):
     # Greet, then start listening
     speak(kokoro_pipeline, GREETING)
-    print(f'Say "{WAKE_WORD}" to talk, CTRL-C to stop.', flush=True)
+    print_talk_help()
     recorder = start_recorder(record)
     chunk_bytes = SAMPLE_RATE * 2 * CHUNK_SECONDS
-    listen_start = time.monotonic()
+    command_bytes = SAMPLE_RATE * 2 * COMMAND_SECONDS
     try:
         while True:
-            # Listen for the wake word
-            data = recorder.stdout.read(chunk_bytes)
-            if not data:
-                break
-            text = transcribe(whisper_model, data)
-            if text:
-                print(f'Heard: {text}', flush=True)
+            # Ask itself the test question, mic stays on so it hears itself
+            if TEST_MODE:
+                speak(kokoro_pipeline, TEST_QUESTION)
 
-            # Pretend to hear the wake word in fake mode
-            if FAKE_MODE and time.monotonic() - listen_start > FAKE_WAKE_SECONDS:
-                print(f'Fake wake after {FAKE_WAKE_SECONDS}s', flush=True)
-            elif WAKE_WORD not in text.lower():
-                continue
-
-            # Acknowledge, mic off while speaking
-            recorder.terminate()
-            speak(kokoro_pipeline, 'Yes?')
+            # Wait for the wake word, then acknowledge with the mic off
+            else:
+                data = recorder.stdout.read(chunk_bytes)
+                if not data:
+                    break
+                text = transcribe(whisper_model, data)
+                if text:
+                    print(f'Heard: {text}', flush=True)
+                if WAKE_WORD not in text.lower():
+                    continue
+                recorder.terminate()
+                speak(kokoro_pipeline, ACKNOWLEDGEMENT)
+                recorder = start_recorder(record)
 
             # Record the command
-            recorder = start_recorder(record)
-            command_bytes = SAMPLE_RATE * 2 * COMMAND_SECONDS
             data = recorder.stdout.read(command_bytes)
             command = transcribe(whisper_model, data)
             recorder.terminate()
             print(f'Command: {command}', flush=True)
 
-            # Reply and listen again
+            # Fall back to the question text when it could not hear itself
+            if TEST_MODE and not command:
+                command = TEST_QUESTION
+                print(f'Heard nothing, asking: {command}', flush=True)
+
+            # Reply, then quit in test mode
             reply = make_reply(command)
             print(f'Reply: {reply}', flush=True)
             speak(kokoro_pipeline, reply)
+            if TEST_MODE:
+                print('Test done.')
+                break
+
+            # Listen again
             recorder = start_recorder(record)
-            listen_start = time.monotonic()
     except KeyboardInterrupt:
         print('\nDone.')
     finally:
         recorder.terminate()
+
+# Print how to talk, test mode skips the wake word
+def print_talk_help():
+    if TEST_MODE:
+        print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
+    else:
+        print(f'Say "{WAKE_WORD}" to talk, CTRL-C to stop.', flush=True)
 
 # Transcribe raw pcm audio to text
 def transcribe(whisper_model, data):
@@ -189,9 +189,9 @@ def make_reply(command):
 
     # Simple built in replies
     if 'time' in lowered:
-        return time.strftime('It is %I:%M %p.')
+        return f'It is {clock_time()}.'
     if 'date' in lowered or 'day' in lowered:
-        return time.strftime('It is %A, %B %d.')
+        return f'It is {calendar_date()}.'
     if 'your name' in lowered or 'who are you' in lowered:
         return "I am robot."
     if 'hello' in lowered or 'hi ' in lowered or lowered == 'hi':
@@ -314,6 +314,17 @@ def play_wav_command(wav_path):
 # Return audio player command for this platform
 def audio_player():
     return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
+
+# Format the time without a leading zero, speech reads it as a number
+def clock_time():
+    now = time.localtime()
+    hour = now.tm_hour % 12 or 12
+    return f'{hour}:{now.tm_min:02d} {time.strftime("%p", now)}'
+
+# Format the date without a leading zero on the day
+def calendar_date():
+    now = time.localtime()
+    return f'{time.strftime("%A, %B", now)} {now.tm_mday}'
 
 # Main
 if __name__ == '__main__':

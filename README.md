@@ -86,7 +86,7 @@ Say the wake word `robot`, then a command, and it speaks a reply. CTRL-C to stop
 
 Replies to a few built in commands like the time, the date, and its name, and echoes anything else back. Edit `make_reply` in `talk.py` to add more.
 
-Pass `--test` to speak one canned exchange and exit. Pass `--fake` to trigger the wake word on a timer instead of by voice, for testing without speaking.
+Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What is the time?` so it hears itself through the mic, then answers. When the mic cannot hear the speaker it falls back to the question text.
 
 ## Testing
 
