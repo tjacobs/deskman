@@ -2,6 +2,8 @@
 
 # Imports
 import os
+import platform
+import shutil
 import subprocess
 import sys
 
@@ -11,25 +13,45 @@ import numpy as np
 MODEL_SIZE = 'base'
 SAMPLE_RATE = 16000
 CHUNK_SECONDS = 3
+MAC_RECORDER = 'rec'
+LINUX_RECORDER = 'arecord'
 
 # Main
 def main():
-    # Find microphone
-    card = find_capture_card()
-    if card is None:
-        print('No microphone found. Plug in a USB mic and try again.')
-        sys.exit(1)
+    # Build the record command, quits when no microphone is available
+    command = record_command()
 
     # Silence onnxruntime GPU discovery warning from the VAD
     import_onnxruntime_quietly()
 
     # Load model and transcribe the microphone until stopped
     model = load_model()
-    run_transcribe_loop(model, card)
+    run_transcribe_loop(model, command)
+
+# Build the record command for this platform
+def record_command():
+    if platform.system() == 'Darwin':
+        return mac_record_command()
+    return linux_record_command()
+
+# Record from the default input device with sox
+def mac_record_command():
+    if shutil.which(MAC_RECORDER) is None:
+        print('sox not found. Run ./install.sh --listen to install it.')
+        sys.exit(1)
+    return [MAC_RECORDER, '-q', '-t', 'raw', '-b', '16', '-e', 'signed-integer', '-c', '1', '-r', str(SAMPLE_RATE), '-']
+
+# Record from the first usb microphone with arecord
+def linux_record_command():
+    card = find_capture_card()
+    if card is None:
+        print('No microphone found. Plug in a USB mic and try again.')
+        sys.exit(1)
+    return [LINUX_RECORDER, '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
 
 # Return card index for the first device with capture support
 def find_capture_card():
-    result = subprocess.run(['arecord', '-l'], capture_output=True, text=True)
+    result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
     for line in result.stdout.splitlines():
         if line.startswith('card') and 'USB' in line:
             return int(line.split(':')[0].split()[1])
@@ -63,8 +85,8 @@ def load_model():
     return model
 
 # Record chunks from the microphone and print transcripts
-def run_transcribe_loop(model, card):
-    recorder = start_recorder(card)
+def run_transcribe_loop(model, command):
+    recorder = start_recorder(command)
     chunk_bytes = SAMPLE_RATE * 2 * CHUNK_SECONDS
     print('Listening, speak now, CTRL-C to stop.', flush=True)
     try:
@@ -84,9 +106,8 @@ def run_transcribe_loop(model, card):
     finally:
         recorder.terminate()
 
-# Start arecord streaming raw audio to stdout
-def start_recorder(card):
-    command = ['arecord', '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+# Start the recorder streaming raw audio to stdout
+def start_recorder(command):
     return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 # Main

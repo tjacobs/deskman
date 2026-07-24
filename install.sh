@@ -17,6 +17,7 @@ BUILD_PACKAGES=(pybind11 wheel)
 # Config system packages and players
 LINUX_PACKAGES=(espeak-ng alsa-utils)
 MAC_PACKAGES=(espeak-ng)
+MAC_LISTEN_PACKAGES=(sox)
 LINUX_PLAYER="aplay"
 MAC_PLAYER="afplay"
 BREW_PATHS=(/opt/homebrew/bin/brew /usr/local/bin/brew)
@@ -86,9 +87,9 @@ install_uv() {
 install_system_packages() {
     # Pick the package manager for this platform
     if [[ "$(uname -s)" == "Darwin" ]]; then
-        install_mac_packages
+        install_mac_packages "${MAC_PACKAGES[@]}"
     else
-        install_linux_packages
+        install_linux_packages "${LINUX_PACKAGES[@]}"
     fi
 }
 
@@ -103,7 +104,7 @@ install_mac_packages() {
     fi
 
     # Install each package when missing
-    for package in "${MAC_PACKAGES[@]}"; do
+    for package in "$@"; do
         if "${brew_command}" list --formula "${package}" >/dev/null 2>&1; then
             echo "${package} already installed."
             continue
@@ -116,13 +117,13 @@ install_mac_packages() {
 install_linux_packages() {
     # Quit when apt is missing
     if ! command -v apt-get >/dev/null 2>&1; then
-        echo "apt-get not found. Install ${LINUX_PACKAGES[*]} with your package manager, then run again."
+        echo "apt-get not found. Install $* with your package manager, then run again."
         exit 1
     fi
 
     # Skip when every package is already installed
     local missing=()
-    for package in "${LINUX_PACKAGES[@]}"; do
+    for package in "$@"; do
         if ! dpkg -s "${package}" >/dev/null 2>&1; then
             missing+=("${package}")
         fi
@@ -176,10 +177,10 @@ verify_install() {
 
 # Install faster-whisper so listen.py and talk.py can transcribe
 install_listen() {
-    # Skip on mac, listen.py records with arecord which is linux only
+    # Install sox on mac, listen.py records with it there
     if [[ "$(uname -s)" == "Darwin" ]]; then
-        echo "Skipping listen install, it needs arecord which is linux only."
-        INSTALL_LISTEN=false
+        install_mac_packages "${MAC_LISTEN_PACKAGES[@]}"
+        install_packages "${LISTEN_PACKAGES[@]}"
         return 0
     fi
 

@@ -70,9 +70,9 @@ Live transcription from the microphone. Speak and lines print as you talk, CTRL-
 ./listen.py
 ```
 
-`--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. The build takes around 30 minutes and only runs once. Without a CUDA toolkit it installs the CPU wheels from PyPI instead. Linux only, recording uses `arecord`.
+On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. The build takes around 30 minutes and only runs once. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.
 
-Records from the first USB soundcard with a mic. Uses the whisper `base` model on GPU with voice activity detection.
+Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the first USB soundcard with a mic on linux, and with sox from the default input device on mac.
 
 ## Testing
 
