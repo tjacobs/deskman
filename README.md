@@ -19,6 +19,15 @@ Both use CUDA when available. Pass `--cpu` to force CPU inference.
 
 ## Setup
 
+```bash
+./install.sh
+./install.sh --listen
+```
+
+Works on linux and mac. Installs [uv](https://docs.astral.sh/uv/) when missing, installs espeak-ng with brew or apt, plus alsa-utils on linux, then creates `.venv` and installs kokoro, torch, and soundfile into it.
+
+Pass `--listen` to also install speech to text for `listen.py` and `talk.py`, see below.
+
 On first run, the model and all voices download into `cache/`.
 
 ## speak.py
@@ -57,11 +66,11 @@ Pass `--test` to speak the first two preset phrases and exit.
 Live transcription from the microphone. Speak and lines print as you talk, CTRL-C to stop.
 
 ```bash
-./install_listen.sh
+./install.sh --listen
 ./listen.py
 ```
 
-`install_listen.sh` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. The build takes around 30 minutes and only runs once.
+`--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. The build takes around 30 minutes and only runs once. Without a CUDA toolkit it installs the CPU wheels from PyPI instead. Linux only, recording uses `arecord`.
 
 Records from the first USB soundcard with a mic. Uses the whisper `base` model on GPU with voice activity detection.
 
