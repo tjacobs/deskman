@@ -39,7 +39,7 @@ os.environ['HF_HUB_VERBOSITY'] = 'error'
 os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
 
 # Config timeouts
-LOAD_TIMEOUT_SECONDS = 20
+LOAD_TIMEOUT_SECONDS = 60
 TEST_WAIT_SECONDS = 30
 
 # Config status display
@@ -143,6 +143,7 @@ def init():
     warnings.filterwarnings('ignore', category=UserWarning, module='torch.cuda')
 
     # Import kokoro and pick device
+    print("Loading...")
     kokoro_start = time.perf_counter()
     global kokoro, torch, soundfile
     import kokoro
@@ -264,11 +265,17 @@ def print_banner(phrases):
 
 # Print cpu, gpu, and device info
 def print_system_info(perf_set):
-    current_cpu_mode = get_cpu_mode() or 'unknown'
-    if perf_set and current_cpu_mode == 'performance':
-        print(f"CPU: {current_cpu_mode}")
+    # Print the cpu name on mac, the scaling mode on linux
+    if platform.system() == 'Darwin':
+        print(f"CPU: {get_cpu_name()}")
     else:
-        print(f"CPU: {current_cpu_mode} (run with sudo to change)")
+        current_cpu_mode = get_cpu_mode() or 'unknown'
+        if perf_set and current_cpu_mode == 'performance':
+            print(f"CPU: {current_cpu_mode}")
+        else:
+            print(f"CPU: {current_cpu_mode} (run with sudo to change)")
+
+    # Print the gpu and the device in use
     if DEVICE == 'cuda':
         properties = torch.cuda.get_device_properties(0)
         frequency = read_gpu_frequency_mhz()
@@ -426,6 +433,11 @@ def set_cpu_mode(mode):
         except OSError:
             return False
     return True
+
+# Read cpu name on mac
+def get_cpu_name():
+    result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True)
+    return result.stdout.strip() or 'unknown'
 
 # Read jetson gpu clock in mhz from sysfs
 def read_gpu_frequency_mhz():

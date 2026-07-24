@@ -29,7 +29,7 @@ os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
 
 # Config timeouts
-LOAD_TIMEOUT_SECONDS = 20
+LOAD_TIMEOUT_SECONDS = 60
 
 # Config stats and device
 STARTUP_START = time.perf_counter()
@@ -181,11 +181,17 @@ def print_import_timing():
 
 # Print cpu, gpu, and device info
 def print_system_info(perf_set):
-    current_cpu_mode = get_cpu_mode() or 'unknown'
-    if perf_set and current_cpu_mode == 'performance':
-        print(f"CPU: {current_cpu_mode}")
+    # Print the cpu name on mac, the scaling mode on linux
+    if platform.system() == 'Darwin':
+        print(f"CPU: {get_cpu_name()}")
     else:
-        print(f"CPU: {current_cpu_mode} (run with sudo to change)")
+        current_cpu_mode = get_cpu_mode() or 'unknown'
+        if perf_set and current_cpu_mode == 'performance':
+            print(f"CPU: {current_cpu_mode}")
+        else:
+            print(f"CPU: {current_cpu_mode} (run with sudo to change)")
+
+    # Print the gpu and the device in use
     if DEVICE == 'cuda':
         properties = torch.cuda.get_device_properties(0)
         frequency = read_gpu_frequency_mhz()
@@ -242,6 +248,11 @@ def set_cpu_mode(mode):
         except OSError:
             return False
     return True
+
+# Read cpu name on mac
+def get_cpu_name():
+    result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True)
+    return result.stdout.strip() or 'unknown'
 
 # Return true when a card has a capture stream
 def card_has_capture(card_index):
