@@ -81,19 +81,21 @@ def parse_args():
 
 # Load whisper model on gpu when available
 def load_whisper_model():
-    print(f'Loading whisper {WHISPER_MODEL_SIZE} model...', flush=True)
+    print('Loading whisper...', flush=True)
+    load_start = time.perf_counter()
     import ctranslate2
     from faster_whisper import WhisperModel
     device = 'cuda' if ctranslate2.get_cuda_device_count() > 0 else 'cpu'
     compute_type = 'float16' if device == 'cuda' else 'float32'
     model = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
-    print(f'Whisper {WHISPER_MODEL_SIZE} on {device.upper()}')
+    print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec')
     return model
 
 # Load kokoro speech pipeline on gpu when available
 def load_kokoro_pipeline():
     # Suppress torch warnings before kokoro imports torch
-    print('Loading kokoro model...', flush=True)
+    print('Loading kokoro...', flush=True)
+    load_start = time.perf_counter()
     os.environ['OMP_NUM_THREADS'] = '4'
     os.environ['MKL_NUM_THREADS'] = '4'
     os.environ['OPENBLAS_NUM_THREADS'] = '4'
@@ -113,7 +115,7 @@ def load_kokoro_pipeline():
     model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
     pipeline = kokoro.KPipeline(lang_code=VOICE[0], repo_id=REPO_ID, model=model)
     pipeline.load_voice(VOICE)
-    print(f'Kokoro on {device.upper()}, voice {VOICE}')
+    print(f'Kokoro on {device.upper()} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
     return pipeline
 
 # Speak one canned exchange and exit
