@@ -19,6 +19,7 @@ GREETING = 'Hi!'
 ACKNOWLEDGEMENT = 'Yes?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
+REPLAY_WAKE_FLAG = f'--replay-{WAKE_WORD}'
 TEST_QUESTION = 'What is the time?'
 WHISPER_MODEL_SIZE = 'base'
 SAMPLE_RATE = 16000
@@ -63,12 +64,13 @@ os.environ['HF_HUB_VERBOSITY'] = 'error'
 TEST_MODE = False
 REPEAT_MODE = False
 REPLAY_MODE = False
+REPLAY_WAKE_MODE = False
 
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE = parse_args()
 
     # Build the record command, quits when no microphone is available
     record = record_command()
@@ -96,6 +98,7 @@ def parse_args():
     test_mode = False
     repeat_mode = False
     replay_mode = False
+    replay_wake_mode = False
     for argument in sys.argv[1:]:
         if argument == '--test':
             test_mode = True
@@ -103,6 +106,8 @@ def parse_args():
             repeat_mode = True
         elif argument == '--replay':
             replay_mode = True
+        elif argument == REPLAY_WAKE_FLAG:
+            replay_wake_mode = True
         elif argument in ('-h', '--help'):
             print_usage()
             sys.exit(0)
@@ -110,15 +115,16 @@ def parse_args():
             print(f"Unknown argument: {argument}")
             print_usage()
             sys.exit(1)
-    return test_mode, repeat_mode, replay_mode
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode
 
 # Print usage help
 def print_usage():
-    print('Usage: ./talk.py [--test] [--repeat] [--replay]')
-    print(f'  --test    ask itself "{TEST_QUESTION}", answer it, then exit')
-    print('  --repeat  say the transcribed words back after each utterance')
-    print(f'  --replay  play the recording back after each utterance, saved as audio/{HEARD_WAV}')
-    print(f'  (no arg)  say "{WAKE_WORD}" then a command, and it speaks a reply')
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [{REPLAY_WAKE_FLAG}]')
+    print(f'  --test          ask itself "{TEST_QUESTION}", answer it, then exit')
+    print('  --repeat        say the transcribed words back after each utterance')
+    print(f'  --replay        play the recording back after each utterance, saved as audio/{HEARD_WAV}')
+    print(f'  {REPLAY_WAKE_FLAG}  play back only what was said to "{WAKE_WORD}", not every utterance')
+    print(f'  (no arg)        say "{WAKE_WORD}" then a command, and it speaks a reply')
 
 # Listen for the wake word, then a command, then reply
 def run_talk_loop(whisper_model, kokoro_pipeline, listener):
@@ -211,7 +217,7 @@ def print_talk_help():
 def hear_wake_command(whisper_model, kokoro_pipeline, listener):
     while True:
         # Listen until the wake word turns up
-        text = hear_utterance(whisper_model, kokoro_pipeline, listener)
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener, False)
         if text is None:
             return None
         if WAKE_WORD not in text.lower():
@@ -226,7 +232,7 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
 
 # Transcribe the next utterance, falling back when nothing was heard
 def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
-    command = hear_utterance(whisper_model, kokoro_pipeline, listener)
+    command = hear_utterance(whisper_model, kokoro_pipeline, listener, True)
     if command is None:
         return None
     if not command and fallback:
@@ -235,7 +241,7 @@ def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
     return command
 
 # Wait for one utterance and return what was said
-def hear_utterance(whisper_model, kokoro_pipeline, listener):
+def hear_utterance(whisper_model, kokoro_pipeline, listener, after_wake):
     # Transcribe one whole utterance
     audio = listener.next_utterance()
     if audio is None:
@@ -245,11 +251,17 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener):
         print(f'Heard: {text}', flush=True)
 
     # Play back the recording, then say the words back
-    if REPLAY_MODE:
+    if replay_wanted(text, after_wake):
         replay(listener, audio)
     if REPEAT_MODE and text:
         speak_muted(listener, kokoro_pipeline, text)
     return text
+
+# Return true when the recording should be played back
+def replay_wanted(text, after_wake):
+    if REPLAY_MODE:
+        return True
+    return REPLAY_WAKE_MODE and (after_wake or WAKE_WORD in text.lower())
 
 # Return what was said after the wake word
 def text_after_wake(text):

@@ -92,12 +92,13 @@ Replies to a few built in commands like the time, the date, and its name, and ec
 
 Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What is the time?` so it hears itself through the mic, then answers. When the mic cannot hear the speaker it falls back to the question text.
 
-Two flags help check what the mic picked up, and combine with each other and with `--test`:
+Three flags help check what the mic picked up, and combine with each other and with `--test`:
 
 - `--replay` plays the recording back after each utterance, saved as `audio/heard.wav`
+- `--replay-robot` plays back only what was said to it, the utterance with the wake word in it and any command that follows, so a busy room is not replayed back at you
 - `--repeat` says the transcribed words back after each utterance
 
-Both mute the mic while playing, so it does not hear itself.
+All mute the mic while playing, so it does not hear itself.
 
 ## Testing
 
