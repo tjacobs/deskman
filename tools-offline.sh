@@ -15,8 +15,8 @@ LOCAL_TEST_HOST="192.168.1.254"
 PING_COUNT=1
 PING_WAIT_SECONDS=2
 
-# Re-exec with sudo if not root
-if [[ "${EUID}" -ne 0 ]]; then
+# Re-exec with sudo if not root, help does not need it
+if [[ "${EUID}" -ne 0 && "${1:-}" != "-h" && "${1:-}" != "--help" ]]; then
     exec sudo --preserve-env=SUDO_USER,SSH_CONNECTION bash "${BASH_SOURCE[0]}" "$@"
 fi
 
@@ -41,12 +41,22 @@ parse_args() {
     for argument in "$@"; do
         if [[ "${argument}" == "--fix" ]]; then
             FIX_MODE="true"
+        elif [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
+            print_usage
+            exit 0
         else
             echo "Unknown argument: ${argument}"
-            echo "Usage: ./tools-offline.sh [--fix]"
+            print_usage
             exit 1
         fi
     done
+}
+
+# Print usage help
+print_usage() {
+    echo "Usage: ./tools-offline.sh [--fix]"
+    echo "  --fix     restore internet access"
+    echo "  (no arg)  block outbound internet, keeping SSH and local networks"
 }
 
 # Block new outbound internet, keep SSH and local networks working

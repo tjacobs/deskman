@@ -50,8 +50,23 @@ parse_args() {
             INSTALL_MODE="true"
         elif [[ "${argument}" == "--system" ]]; then
             SYSTEM_MODE="true"
+        elif [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
+            print_usage
+            exit 0
+        else
+            echo "Unknown argument: ${argument}"
+            print_usage
+            exit 1
         fi
     done
+}
+
+# Print usage help
+print_usage() {
+    echo "Usage: ./tools-audio.sh [--install] [--system]"
+    echo "  --install  install the udev rule and blacklist so this runs on plug in, needs sudo"
+    echo "  --system   write the system config only, used by the udev rule"
+    echo "  (no arg)   route audio to the first USB soundcard for this user"
 }
 
 # Return true when a card has a capture stream

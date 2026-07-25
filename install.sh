@@ -60,13 +60,24 @@ parse_args() {
             --listen)
                 INSTALL_LISTEN=true
                 ;;
+            -h|--help)
+                print_usage
+                exit 0
+                ;;
             *)
                 echo "Unknown argument: ${argument}"
-                echo "Usage: ./install.sh [--listen]"
+                print_usage
                 exit 1
                 ;;
         esac
     done
+}
+
+# Print usage help
+print_usage() {
+    echo "Usage: ./install.sh [--listen]"
+    echo "  --listen  also install speech to text for listen.py and talk.py"
+    echo "  (no arg)  install text to speech for speak.py and say.py into .venv"
 }
 
 # Install uv when missing

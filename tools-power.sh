@@ -16,8 +16,8 @@ NAME_MIN="15W"
 NAME_MID="25W"
 NAME_MAX="25W"
 
-# Re-exec with sudo if not root
-if [[ "${EUID}" -ne 0 ]]; then
+# Re-exec with sudo if not root, help does not need it
+if [[ "${EUID}" -ne 0 && "${1:-}" != "-h" && "${1:-}" != "--help" ]]; then
     exec sudo --preserve-env=SUDO_USER bash "${BASH_SOURCE[0]}" "$@"
 fi
 
@@ -67,10 +67,10 @@ parse_args() {
 # Print usage help
 print_usage() {
     echo "Usage: ./tools-power.sh [min|mid|max]"
-    echo "  min  ${NAME_MIN}, quietest and coolest, clocks scale with load"
-    echo "  mid  ${NAME_MID}, balanced"
-    echo "  max  ${NAME_MAX}, full performance, clocks locked high"
-    echo "  (no arg) show current power status"
+    echo "  min       ${NAME_MIN}, quietest and coolest, clocks scale with load"
+    echo "  mid       ${NAME_MID}, balanced"
+    echo "  max       ${NAME_MAX}, full performance, clocks locked high"
+    echo "  (no arg)  show current power status"
 }
 
 # Apply min, mid, or max power settings

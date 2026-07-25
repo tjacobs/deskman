@@ -89,10 +89,20 @@ def parse_args():
     for argument in sys.argv[1:]:
         if argument == '--fresh':
             fresh = True
+        elif argument in ('-h', '--help'):
+            print_usage()
+            sys.exit(0)
         else:
             print(f"Unknown argument: {argument}")
+            print_usage()
             sys.exit(1)
     return fresh
+
+# Print usage help
+def print_usage():
+    print('Usage: ./test.py [--fresh]')
+    print('  --fresh   clear cache/ and audio/ before testing')
+    print('  (no arg)  run the speak, say, and talk tests online, on cpu, and offline')
 
 # Remove cache and audio dirs for a fresh run
 def clean_dirs():

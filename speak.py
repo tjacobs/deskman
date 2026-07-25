@@ -77,10 +77,20 @@ def parse_args():
     for argument in sys.argv[1:]:
         if argument == '--cpu':
             force_cpu = True
+        elif argument in ('-h', '--help'):
+            print_usage()
+            sys.exit(0)
         else:
             print(f"Unknown argument: {argument}")
+            print_usage()
             sys.exit(1)
     return force_cpu
+
+# Print usage help
+def print_usage():
+    print('Usage: ./speak.py [--cpu]')
+    print('  --cpu     force CPU inference instead of CUDA')
+    print('  (no arg)  speak the TEXT constant once, with timing stats')
 
 # Import kokoro and configure runtime
 def init():

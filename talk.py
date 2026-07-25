@@ -17,6 +17,8 @@ import numpy as np
 WAKE_WORD = 'robot'
 GREETING = 'Hi!'
 ACKNOWLEDGEMENT = 'Yes?'
+GOODBYE = 'Goodbye!'
+QUIT_WORDS = ('quit', 'exit')
 TEST_QUESTION = 'What is the time?'
 WHISPER_MODEL_SIZE = 'base'
 SAMPLE_RATE = 16000
@@ -52,17 +54,21 @@ LINUX_PLAYER = 'aplay'
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
+SPOKEN_WAV = 'talk.wav'
+HEARD_WAV = 'heard.wav'
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
 
 # State
 TEST_MODE = False
+REPEAT_MODE = False
+REPLAY_MODE = False
 
 # Main
 def main():
     # Parse args
-    global TEST_MODE
-    TEST_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE = parse_args()
 
     # Build the record command, quits when no microphone is available
     record = record_command()
@@ -88,13 +94,31 @@ def main():
 # Parse command line arguments
 def parse_args():
     test_mode = False
+    repeat_mode = False
+    replay_mode = False
     for argument in sys.argv[1:]:
         if argument == '--test':
             test_mode = True
+        elif argument == '--repeat':
+            repeat_mode = True
+        elif argument == '--replay':
+            replay_mode = True
+        elif argument in ('-h', '--help'):
+            print_usage()
+            sys.exit(0)
         else:
             print(f"Unknown argument: {argument}")
+            print_usage()
             sys.exit(1)
-    return test_mode
+    return test_mode, repeat_mode, replay_mode
+
+# Print usage help
+def print_usage():
+    print('Usage: ./talk.py [--test] [--repeat] [--replay]')
+    print(f'  --test    ask itself "{TEST_QUESTION}", answer it, then exit')
+    print('  --repeat  say the transcribed words back after each utterance')
+    print(f'  --replay  play the recording back after each utterance, saved as audio/{HEARD_WAV}')
+    print(f'  (no arg)  say "{WAKE_WORD}" then a command, and it speaks a reply')
 
 # Listen for the wake word, then a command, then reply
 def run_talk_loop(whisper_model, kokoro_pipeline, listener):
@@ -106,7 +130,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             # Ask itself the test question, mic stays on so it hears itself
             if TEST_MODE:
                 speak(kokoro_pipeline, TEST_QUESTION)
-                command = hear_command(whisper_model, listener, TEST_QUESTION)
+                command = hear_command(whisper_model, kokoro_pipeline, listener, TEST_QUESTION)
 
             # Wait for the wake word, then take the rest of what was said
             else:
@@ -114,6 +138,13 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             if command is None:
                 break
             print(f'Command: {command}', flush=True)
+
+            # Say goodbye and stop when asked to quit
+            if wants_to_quit(command):
+                print(f'Reply: {GOODBYE}', flush=True)
+                speak_muted(listener, kokoro_pipeline, GOODBYE)
+                print('Done.')
+                break
 
             # Reply, mic muted so it does not hear itself
             reply = make_reply(command)
@@ -174,20 +205,15 @@ def print_talk_help():
     if TEST_MODE:
         print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
     else:
-        print(f'Say "{WAKE_WORD}" to talk, CTRL-C to stop.', flush=True)
+        print(f'Say "{WAKE_WORD}" to talk, "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
 
 # Wait for the wake word, then return the command that follows it
 def hear_wake_command(whisper_model, kokoro_pipeline, listener):
     while True:
-        # Transcribe one whole utterance
-        audio = listener.next_utterance()
-        if audio is None:
+        # Listen until the wake word turns up
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener)
+        if text is None:
             return None
-        text = transcribe(whisper_model, audio)
-        if text:
-            print(f'Heard: {text}', flush=True)
-
-        # Keep listening until the wake word turns up
         if WAKE_WORD not in text.lower():
             continue
 
@@ -196,18 +222,34 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
         if command:
             return command
         speak_muted(listener, kokoro_pipeline, ACKNOWLEDGEMENT)
-        return hear_command(whisper_model, listener, '')
+        return hear_command(whisper_model, kokoro_pipeline, listener, '')
 
 # Transcribe the next utterance, falling back when nothing was heard
-def hear_command(whisper_model, listener, fallback):
-    audio = listener.next_utterance()
-    if audio is None:
+def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
+    command = hear_utterance(whisper_model, kokoro_pipeline, listener)
+    if command is None:
         return None
-    command = transcribe(whisper_model, audio)
     if not command and fallback:
         print(f'Heard nothing, asking: {fallback}', flush=True)
         return fallback
     return command
+
+# Wait for one utterance and return what was said
+def hear_utterance(whisper_model, kokoro_pipeline, listener):
+    # Transcribe one whole utterance
+    audio = listener.next_utterance()
+    if audio is None:
+        return None
+    text = transcribe(whisper_model, audio)
+    if text:
+        print(f'Heard: {text}', flush=True)
+
+    # Play back the recording, then say the words back
+    if REPLAY_MODE:
+        replay(listener, audio)
+    if REPEAT_MODE and text:
+        speak_muted(listener, kokoro_pipeline, text)
+    return text
 
 # Return what was said after the wake word
 def text_after_wake(text):
@@ -219,26 +261,31 @@ def transcribe(whisper_model, audio):
     segments, info = whisper_model.transcribe(audio, language='en', vad_filter=True)
     return ' '.join(segment.text.strip() for segment in segments).strip()
 
+# Return true when the command asks to stop
+def wants_to_quit(command):
+    text = command.lower()
+    return any(word in text for word in QUIT_WORDS)
+
 # Build a reply for the command
 def make_reply(command):
-    lowered = command.lower()
+    text = command.lower()
 
     # No speech heard
-    if not lowered:
+    if not text:
         return "I didn't catch that."
 
     # Simple built in replies
-    if 'time' in lowered:
+    if 'time' in text:
         return f'It is {clock_time()}.'
-    if 'date' in lowered or 'day' in lowered:
+    if 'date' in text or 'day' in text:
         return f'It is {calendar_date()}.'
-    if 'your name' in lowered or 'who are you' in lowered:
+    if 'your name' in text or 'who are you' in text:
         return "I am robot."
-    if 'hello' in lowered or 'hi ' in lowered or lowered == 'hi':
+    if 'hello' in text or 'hi ' in text or text == 'hi':
         return 'Hello there!'
-    if 'how are you' in lowered:
+    if 'how are you' in text:
         return "I'm doing great, thank you!"
-    if 'thank' in lowered:
+    if 'thank' in text:
         return "You're welcome!"
 
     # Echo anything else
@@ -255,9 +302,22 @@ def speak(kokoro_pipeline, text):
     os.makedirs(AUDIO_DIR, exist_ok=True)
     generator = kokoro_pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
     for index, (graphemes, phonemes, audio) in enumerate(generator):
-        wav_path = os.path.join(AUDIO_DIR, 'talk.wav')
+        wav_path = os.path.join(AUDIO_DIR, SPOKEN_WAV)
         soundfile.write(wav_path, audio, 24000)
-        subprocess.run(play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        play_wav(wav_path)
+
+# Play back the recording, mic muted so it does not hear it
+def replay(listener, audio):
+    listener.mute()
+    os.makedirs(AUDIO_DIR, exist_ok=True)
+    wav_path = os.path.join(AUDIO_DIR, HEARD_WAV)
+    soundfile.write(wav_path, audio, SAMPLE_RATE)
+    play_wav(wav_path)
+    listener.unmute()
+
+# Play one wav file on the speaker
+def play_wav(wav_path):
+    subprocess.run(play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # Keep the microphone open and hand out one utterance at a time
 class Listener:

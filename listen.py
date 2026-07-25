@@ -18,6 +18,9 @@ LINUX_RECORDER = 'arecord'
 
 # Main
 def main():
+    # Show help or reject unknown arguments
+    parse_args()
+
     # Build the record command, quits when no microphone is available
     command = record_command()
 
@@ -27,6 +30,22 @@ def main():
     # Load model and transcribe the microphone until stopped
     model = load_model()
     run_transcribe_loop(model, command)
+
+# Parse command line arguments
+def parse_args():
+    for argument in sys.argv[1:]:
+        if argument in ('-h', '--help'):
+            print_usage()
+            sys.exit(0)
+        else:
+            print(f"Unknown argument: {argument}")
+            print_usage()
+            sys.exit(1)
+
+# Print usage help
+def print_usage():
+    print('Usage: ./listen.py')
+    print(f'  (no arg)  transcribe the microphone with the whisper {MODEL_SIZE} model, CTRL-C to stop')
 
 # Build the record command for this platform
 def record_command():

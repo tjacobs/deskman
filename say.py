@@ -110,10 +110,21 @@ def parse_args():
             force_cpu = True
         elif argument == '--test':
             test_mode = True
+        elif argument in ('-h', '--help'):
+            print_usage()
+            sys.exit(0)
         else:
             print(f"Unknown argument: {argument}")
+            print_usage()
             sys.exit(1)
     return force_cpu, test_mode
+
+# Print usage help
+def print_usage():
+    print('Usage: ./say.py [--cpu] [--test]')
+    print('  --cpu     force CPU inference instead of CUDA')
+    print('  --test    speak the first two preset phrases, then exit')
+    print('  (no arg)  press keys to speak phrases, h shows the controls')
 
 # Import kokoro and configure runtime
 def init():

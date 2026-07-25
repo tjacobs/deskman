@@ -9,7 +9,7 @@ Four tools:
 - `listen.py` — live speech to text from the microphone, using [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 - `talk.py` — wake word loop, listens for a command and speaks a reply
 
-Both use CUDA when available. Pass `--cpu` to force CPU inference.
+Both use CUDA when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
 
 ```bash
 ./speak.py
@@ -77,7 +77,7 @@ Uses the whisper `base` model with voice activity detection, on GPU when availab
 
 ## talk.py
 
-Say the wake word `robot`, then a command, and it speaks a reply. CTRL-C to stop. Needs the same install as `listen.py`.
+Say the wake word `robot`, then a command, and it speaks a reply. Say `robot, quit` or CTRL-C to stop. Needs the same install as `listen.py`.
 
 ```bash
 ./install.sh --listen
@@ -88,9 +88,16 @@ Say it all in one breath, `robot, what is the time`, and it answers straight awa
 
 The microphone stays open the whole time. A background thread reads it into blocks, the silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. Nothing is missed between turns, and silence is never transcribed. The mic is muted only while it speaks, so it does not hear itself.
 
-Replies to a few built in commands like the time, the date, and its name, and echoes anything else back. Edit `make_reply` in `talk.py` to add more.
+Replies to a few built in commands like the time, the date, and its name, and echoes anything else back. Edit `make_reply` in `talk.py` to add more. Say `quit` or `exit` as the command and it says `Goodbye!` and stops.
 
 Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What is the time?` so it hears itself through the mic, then answers. When the mic cannot hear the speaker it falls back to the question text.
+
+Two flags help check what the mic picked up, and combine with each other and with `--test`:
+
+- `--replay` plays the recording back after each utterance, saved as `audio/heard.wav`
+- `--repeat` says the transcribed words back after each utterance
+
+Both mute the mic while playing, so it does not hear itself.
 
 ## Testing
 
