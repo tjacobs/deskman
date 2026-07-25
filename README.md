@@ -90,6 +90,8 @@ The microphone stays open the whole time. A background thread reads it into bloc
 
 Replies to a few built in commands like the time, the date, and its name, and echoes anything else back. Edit `make_reply` in `talk.py` to add more. Say `quit` or `exit` as the command and it says `Goodbye!` and stops.
 
+When it nearly hears its name, a transcription with `rob` or `rub` in it but not `robot`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
+
 Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What is the time?` so it hears itself through the mic, then answers. When the mic cannot hear the speaker it falls back to the question text.
 
 Three flags help check what the mic picked up, and combine with each other and with `--test`:

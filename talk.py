@@ -19,6 +19,7 @@ GREETING = 'Hi!'
 ACKNOWLEDGEMENT = 'Yes?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
+NEAR_WAKE_WORDS = ('rob', 'rub')
 REPLAY_WAKE_FLAG = f'--replay-{WAKE_WORD}'
 TEST_QUESTION = 'What is the time?'
 WHISPER_MODEL_SIZE = 'base'
@@ -250,12 +251,24 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, after_wake):
     if text:
         print(f'Heard: {text}', flush=True)
 
+    # Show when it nearly heard its name
+    near_miss = near_wake_word(text)
+    if near_miss:
+        print(f'Nearly "{WAKE_WORD}"', flush=True)
+
     # Play back the recording, then say the words back
-    if replay_wanted(text, after_wake):
+    if near_miss or replay_wanted(text, after_wake):
         replay(listener, audio)
-    if REPEAT_MODE and text:
+    if near_miss or (REPEAT_MODE and text):
         speak_muted(listener, kokoro_pipeline, text)
     return text
+
+# Return true when the text almost says the wake word, but not quite
+def near_wake_word(text):
+    lowered = text.lower()
+    if WAKE_WORD in lowered:
+        return False
+    return any(word in lowered for word in NEAR_WAKE_WORDS)
 
 # Return true when the recording should be played back
 def replay_wanted(text, after_wake):
