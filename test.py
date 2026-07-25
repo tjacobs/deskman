@@ -3,6 +3,7 @@
 # Imports
 import glob
 import os
+import platform
 import shutil
 import signal
 import subprocess
@@ -12,11 +13,15 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK = os.path.join(SCRIPT_DIR, 'speak.py')
 SAY = os.path.join(SCRIPT_DIR, 'say.py')
+TALK = os.path.join(SCRIPT_DIR, 'talk.py')
 OFFLINE_TOOL = os.path.join(SCRIPT_DIR, 'tools-offline.sh')
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 ONLINE_TIMEOUT_SECONDS = 30
 OFFLINE_TIMEOUT_SECONDS = 30
+TALK_TIMEOUT_SECONDS = 120
+MAC_RECORDER = 'rec'
+LINUX_RECORDER = 'arecord'
 STEP_NAME_WIDTH = 19
 GREEN = '\033[92m'
 RED = '\033[91m'
@@ -47,6 +52,13 @@ def main():
     # Run online cuda tests when cuda is available
     failed |= not run_step('Online speak.py', lambda: run_speak([], *device()))
     failed |= not run_step('Online say.py', lambda: run_say(['--test'], *device()))
+
+    # Run the talk test when speech to text and a microphone are available
+    talk_blocker = find_talk_blocker()
+    if talk_blocker:
+        print_skip(f'talk.py, {talk_blocker}')
+    else:
+        failed |= not run_step('Online talk.py', lambda: run_talk(['--test'], 'Test done.', *talk_device()))
 
     # Run cpu mode tests
     failed |= not run_step('CPU speak.py', lambda: run_speak(['--cpu'], 'Device: cpu', 'GPU: disabled'))
@@ -125,6 +137,37 @@ def cuda_available():
     result = subprocess.run([sys.executable, '-c', "import torch; print(torch.cuda.is_available())"], capture_output=True, text=True, cwd=SCRIPT_DIR)
     return result.stdout.strip() == 'True'
 
+# Return why talk.py cannot run, or none when it can
+def find_talk_blocker():
+    if not whisper_available():
+        return 'faster-whisper not installed, run ./install.sh --listen'
+    if not microphone_available():
+        return 'no microphone found'
+    return None
+
+# Return true when faster-whisper is installed
+def whisper_available():
+    result = subprocess.run([sys.executable, '-c', "import faster_whisper"], capture_output=True, cwd=SCRIPT_DIR)
+    return result.returncode == 0
+
+# Return true when a microphone is available for this platform
+def microphone_available():
+    # Record with sox on mac
+    if platform.system() == 'Darwin':
+        return shutil.which(MAC_RECORDER) is not None
+
+    # Look for a USB capture card on linux
+    if shutil.which(LINUX_RECORDER) is None:
+        return False
+    result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
+    return any(line.startswith('card') and 'USB' in line for line in result.stdout.splitlines())
+
+# Return expected output for the device talk.py loads on
+def talk_device():
+    if cuda_available():
+        return ('Loaded on CUDA',)
+    return ('Loaded on CPU',)
+
 # Run speak.py with args and check output
 def run_speak(args, *expects, env=None, timeout=ONLINE_TIMEOUT_SECONDS):
     return run_script(SPEAK, args, expects, env, timeout)
@@ -132,6 +175,10 @@ def run_speak(args, *expects, env=None, timeout=ONLINE_TIMEOUT_SECONDS):
 # Run say.py with args and check output
 def run_say(args, *expects, env=None, timeout=ONLINE_TIMEOUT_SECONDS):
     return run_script(SAY, args, expects, env, timeout)
+
+# Run talk.py with args and check output
+def run_talk(args, *expects, env=None, timeout=TALK_TIMEOUT_SECONDS):
+    return run_script(TALK, args, expects, env, timeout)
 
 # Run a script and verify output and audio files
 def run_script(script, args, expects, env, timeout):

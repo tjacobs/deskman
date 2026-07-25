@@ -95,7 +95,9 @@ Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What
 ./test.py --fresh
 ```
 
-Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline. Pass `--fresh` to clear `cache/` and `audio/` first. Requires internet when the model is not cached.
+Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `talk.py --test`. Pass `--fresh` to clear `cache/` and `audio/` first. Requires internet when the model is not cached.
+
+The talk step is skipped when faster-whisper or a microphone is missing.
 
 ## Tools
 
