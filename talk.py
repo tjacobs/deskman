@@ -2,13 +2,15 @@
 
 # Imports
 import os
-import platform
-import shutil
-import subprocess
 import sys
 import time
+import queue
+import shutil
 import warnings
-
+import platform
+import threading
+import subprocess
+import collections
 import numpy as np
 
 # Config wake and listen
@@ -18,10 +20,26 @@ ACKNOWLEDGEMENT = 'Yes?'
 TEST_QUESTION = 'What is the time?'
 WHISPER_MODEL_SIZE = 'base'
 SAMPLE_RATE = 16000
-CHUNK_SECONDS = 2
-COMMAND_SECONDS = 5
 MAC_RECORDER = 'rec'
 LINUX_RECORDER = 'arecord'
+
+# Config speech detection, silero reads 512 sample frames
+VAD_FRAME_SAMPLES = 512
+VAD_BLOCK_FRAMES = 8
+VAD_THRESHOLD = 0.5
+PRE_ROLL_SECONDS = 0.5
+SILENCE_END_SECONDS = 0.7
+MIN_SPEECH_SECONDS = 0.3
+MAX_UTTERANCE_SECONDS = 15
+
+# Config block sizes worked out from the frame size
+BLOCK_SAMPLES = VAD_FRAME_SAMPLES * VAD_BLOCK_FRAMES
+BLOCK_BYTES = BLOCK_SAMPLES * 2
+BLOCK_SECONDS = BLOCK_SAMPLES / SAMPLE_RATE
+PRE_ROLL_BLOCKS = round(PRE_ROLL_SECONDS / BLOCK_SECONDS)
+SILENCE_END_BLOCKS = round(SILENCE_END_SECONDS / BLOCK_SECONDS)
+MIN_SPEECH_BLOCKS = round(MIN_SPEECH_SECONDS / BLOCK_SECONDS)
+MAX_UTTERANCE_BLOCKS = round(MAX_UTTERANCE_SECONDS / BLOCK_SECONDS)
 
 # Config voice
 REPO_ID = 'hexgrad/Kokoro-82M'
@@ -57,10 +75,15 @@ def main():
 
     # Load models
     whisper_model = load_whisper_model()
+    vad_model = load_vad_model()
     kokoro_pipeline = load_kokoro_pipeline()
 
-    # Run the wake word loop, test mode does one exchange and exits
-    run_talk_loop(whisper_model, kokoro_pipeline, record)
+    # Listen continuously, test mode does one exchange and exits
+    listener = Listener(record, vad_model)
+    try:
+        run_talk_loop(whisper_model, kokoro_pipeline, listener)
+    finally:
+        listener.stop()
 
 # Parse command line arguments
 def parse_args():
@@ -73,6 +96,35 @@ def parse_args():
             sys.exit(1)
     return test_mode
 
+# Listen for the wake word, then a command, then reply
+def run_talk_loop(whisper_model, kokoro_pipeline, listener):
+    # Greet, then start listening
+    speak_muted(listener, kokoro_pipeline, GREETING)
+    print_talk_help()
+    try:
+        while True:
+            # Ask itself the test question, mic stays on so it hears itself
+            if TEST_MODE:
+                speak(kokoro_pipeline, TEST_QUESTION)
+                command = hear_command(whisper_model, listener, TEST_QUESTION)
+
+            # Wait for the wake word, then take the rest of what was said
+            else:
+                command = hear_wake_command(whisper_model, kokoro_pipeline, listener)
+            if command is None:
+                break
+            print(f'Command: {command}', flush=True)
+
+            # Reply, mic muted so it does not hear itself
+            reply = make_reply(command)
+            print(f'Reply: {reply}', flush=True)
+            speak_muted(listener, kokoro_pipeline, reply)
+            if TEST_MODE:
+                print('Test done.')
+                break
+    except KeyboardInterrupt:
+        print('\nDone.')
+
 # Load whisper model on gpu when available
 def load_whisper_model():
     print('Loading whisper...', flush=True)
@@ -84,6 +136,11 @@ def load_whisper_model():
     model = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
     print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec')
     return model
+
+# Load the silero speech detector bundled with faster-whisper
+def load_vad_model():
+    from faster_whisper.vad import get_vad_model
+    return get_vad_model()
 
 # Load kokoro speech pipeline on gpu when available
 def load_kokoro_pipeline():
@@ -112,60 +169,6 @@ def load_kokoro_pipeline():
     print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
     return pipeline
 
-# Listen for the wake word, then a command, then reply
-def run_talk_loop(whisper_model, kokoro_pipeline, record):
-    # Greet, then start listening
-    speak(kokoro_pipeline, GREETING)
-    print_talk_help()
-    recorder = start_recorder(record)
-    chunk_bytes = SAMPLE_RATE * 2 * CHUNK_SECONDS
-    command_bytes = SAMPLE_RATE * 2 * COMMAND_SECONDS
-    try:
-        while True:
-            # Ask itself the test question, mic stays on so it hears itself
-            if TEST_MODE:
-                speak(kokoro_pipeline, TEST_QUESTION)
-
-            # Wait for the wake word, then acknowledge with the mic off
-            else:
-                data = recorder.stdout.read(chunk_bytes)
-                if not data:
-                    break
-                text = transcribe(whisper_model, data)
-                if text:
-                    print(f'Heard: {text}', flush=True)
-                if WAKE_WORD not in text.lower():
-                    continue
-                recorder.terminate()
-                speak(kokoro_pipeline, ACKNOWLEDGEMENT)
-                recorder = start_recorder(record)
-
-            # Record the command
-            data = recorder.stdout.read(command_bytes)
-            command = transcribe(whisper_model, data)
-            recorder.terminate()
-            print(f'Command: {command}', flush=True)
-
-            # Fall back to the question text when it could not hear itself
-            if TEST_MODE and not command:
-                command = TEST_QUESTION
-                print(f'Heard nothing, asking: {command}', flush=True)
-
-            # Reply, then quit in test mode
-            reply = make_reply(command)
-            print(f'Reply: {reply}', flush=True)
-            speak(kokoro_pipeline, reply)
-            if TEST_MODE:
-                print('Test done.')
-                break
-
-            # Listen again
-            recorder = start_recorder(record)
-    except KeyboardInterrupt:
-        print('\nDone.')
-    finally:
-        recorder.terminate()
-
 # Print how to talk, test mode skips the wake word
 def print_talk_help():
     if TEST_MODE:
@@ -173,9 +176,46 @@ def print_talk_help():
     else:
         print(f'Say "{WAKE_WORD}" to talk, CTRL-C to stop.', flush=True)
 
-# Transcribe raw pcm audio to text
-def transcribe(whisper_model, data):
-    audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+# Wait for the wake word, then return the command that follows it
+def hear_wake_command(whisper_model, kokoro_pipeline, listener):
+    while True:
+        # Transcribe one whole utterance
+        audio = listener.next_utterance()
+        if audio is None:
+            return None
+        text = transcribe(whisper_model, audio)
+        if text:
+            print(f'Heard: {text}', flush=True)
+
+        # Keep listening until the wake word turns up
+        if WAKE_WORD not in text.lower():
+            continue
+
+        # Use the rest of the utterance, or acknowledge and wait for more
+        command = text_after_wake(text)
+        if command:
+            return command
+        speak_muted(listener, kokoro_pipeline, ACKNOWLEDGEMENT)
+        return hear_command(whisper_model, listener, '')
+
+# Transcribe the next utterance, falling back when nothing was heard
+def hear_command(whisper_model, listener, fallback):
+    audio = listener.next_utterance()
+    if audio is None:
+        return None
+    command = transcribe(whisper_model, audio)
+    if not command and fallback:
+        print(f'Heard nothing, asking: {fallback}', flush=True)
+        return fallback
+    return command
+
+# Return what was said after the wake word
+def text_after_wake(text):
+    position = text.lower().find(WAKE_WORD)
+    return text[position + len(WAKE_WORD):].strip(' ,.!?')
+
+# Transcribe audio samples to text
+def transcribe(whisper_model, audio):
     segments, info = whisper_model.transcribe(audio, language='en', vad_filter=True)
     return ' '.join(segment.text.strip() for segment in segments).strip()
 
@@ -204,6 +244,12 @@ def make_reply(command):
     # Echo anything else
     return f'You said: {command}'
 
+# Speak with the mic muted so it does not hear itself
+def speak_muted(listener, kokoro_pipeline, text):
+    listener.mute()
+    speak(kokoro_pipeline, text)
+    listener.unmute()
+
 # Generate speech and play it on the usb speaker
 def speak(kokoro_pipeline, text):
     os.makedirs(AUDIO_DIR, exist_ok=True)
@@ -212,6 +258,84 @@ def speak(kokoro_pipeline, text):
         wav_path = os.path.join(AUDIO_DIR, 'talk.wav')
         soundfile.write(wav_path, audio, 24000)
         subprocess.run(play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+# Keep the microphone open and hand out one utterance at a time
+class Listener:
+    # Start recording and drain the microphone in the background
+    def __init__(self, record, vad_model):
+        self.vad_model = vad_model
+        self.blocks = queue.Queue()
+        self.muted = False
+        self.recorder = start_recorder(record)
+        self.reader = threading.Thread(target=self.read_blocks, daemon=True)
+        self.reader.start()
+
+    # Read blocks until the recorder stops, dropping them while muted
+    def read_blocks(self):
+        while True:
+            data = self.recorder.stdout.read(BLOCK_BYTES)
+            if len(data) < BLOCK_BYTES:
+                self.blocks.put(None)
+                return
+            if self.muted:
+                continue
+            self.blocks.put(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
+
+    # Collect audio from when speech starts until it stops
+    def next_utterance(self):
+        pre_roll = collections.deque(maxlen=PRE_ROLL_BLOCKS)
+        utterance = []
+        speech_blocks = 0
+        silence_blocks = 0
+        while True:
+            # Stop when the recorder has gone away
+            block = self.blocks.get()
+            if block is None:
+                return None
+            speaking = speech_probability(self.vad_model, block) > VAD_THRESHOLD
+
+            # Wait for speech, keeping a little audio from before it started
+            if not utterance:
+                pre_roll.append(block)
+                if speaking:
+                    utterance = list(pre_roll)
+                    speech_blocks = 1
+                continue
+
+            # Collect the utterance and count the silence at the end of it
+            utterance.append(block)
+            if speaking:
+                speech_blocks += 1
+                silence_blocks = 0
+            else:
+                silence_blocks += 1
+
+            # Return once speech has stopped, or the utterance is long enough
+            if silence_blocks >= SILENCE_END_BLOCKS or len(utterance) >= MAX_UTTERANCE_BLOCKS:
+                if speech_blocks >= MIN_SPEECH_BLOCKS:
+                    return np.concatenate(utterance)
+                pre_roll.clear()
+                utterance = []
+                speech_blocks = 0
+                silence_blocks = 0
+
+    # Drop microphone audio, used while speaking
+    def mute(self):
+        self.muted = True
+
+    # Listen again, throwing away anything captured while muted
+    def unmute(self):
+        self.muted = False
+        while not self.blocks.empty():
+            self.blocks.get()
+
+    # Stop recording
+    def stop(self):
+        self.recorder.terminate()
+
+# Return the highest speech probability in one block
+def speech_probability(vad_model, block):
+    return float(vad_model(block).max())
 
 # Import onnxruntime with stderr muted, it warns during gpu discovery on jetson
 def import_onnxruntime_quietly():
