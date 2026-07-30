@@ -26,7 +26,7 @@ http://127.0.0.1:8080/v1/chat/completions
 
 Use `Authorization: Bearer local` for direct API requests. `ask.py` includes this automatically.
 
-When you ask it to look left or right, it calls `~/robot/src/look.py` through an LLM tool, default 60 degrees, max 90. When you ask the time, date, or day, Python answers through `get_time`, `get_date`, and `get_day` tools.
+When you ask it to look left or right, it calls `~/robot/src/look.py` through an LLM tool, default 60 degrees, max 90. When you ask the time, date, or day, Python answers through `get_time`, `get_date`, and `get_day` tools. Math goes through the `calculate` tool, which evaluates a Python expression.
 
 ## Files
 

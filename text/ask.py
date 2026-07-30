@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 # Imports
+import ast
 import json
+import math
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -15,7 +18,7 @@ MODEL = "gemma-4-e2b"
 DEFAULT_PROMPT = "Introduce yourself in one short sentence."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPT_PATH = os.path.join(SCRIPT_DIR, "prompt.json")
-DEFAULT_SYSTEM_PROMPT = "I am a robot head on a desk, answering questions. Answer in one or two short sentences suitable for speaking aloud. When asked to look left, right, or center, call the look tool. Never guess the time, date, or day of the week. Always call get_time, get_date, or get_day first, then answer using only that tool result."
+DEFAULT_SYSTEM_PROMPT = "I am a robot head on a desk, answering questions. Answer in one or two short sentences suitable for speaking aloud. When asked to look left, right, or center, call the look tool. Never guess the time, date, or day of the week. Always call get_time, get_date, or get_day first, then answer using only that tool result. Never guess arithmetic. Always call calculate with a Python math expression, then answer using only that tool result."
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
@@ -24,6 +27,40 @@ MAX_HISTORY_MESSAGES = 20
 ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 60
 CLOCK_RETRY_PROMPT = "Do not guess. Call get_time, get_date, or get_day now, then answer using only the tool result."
+MATH_RETRY_PROMPT = "Do not guess. Call calculate with a Python math expression now, then answer using only the tool result."
+MATH_ENV = {
+    "math": math,
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "pow": pow,
+    "sqrt": math.sqrt,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "pi": math.pi,
+    "e": math.e,
+}
+MATH_SAFE_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Constant,
+    ast.Call,
+    ast.Name,
+    ast.Load,
+    ast.Attribute,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.FloorDiv,
+    ast.Mod,
+    ast.Pow,
+    ast.UAdd,
+    ast.USub,
+)
 
 # Tools the local model can call
 TOOLS = [
@@ -73,6 +110,23 @@ TOOLS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Evaluate a math expression with Python. Required for any arithmetic, multiplication, division, roots, or numeric calculation. Never invent the answer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Python math expression, for example 17 * 43 or math.sqrt(144).",
+                    },
+                },
+                "required": ["expression"],
+            },
+        },
+    },
 ]
 
 # Conversation history kept across asks in this process
@@ -102,6 +156,8 @@ def ask_model(prompt):
     messages.append({"role": "user", "content": prompt})
     clock_retry_used = False
     clock_tool_used = False
+    math_retry_used = False
+    math_tool_used = False
 
     # Loop until the model replies with spoken text
     for _ in range(MAX_TOOL_ROUNDS):
@@ -118,6 +174,14 @@ def ask_model(prompt):
                 messages.append({"role": "user", "content": CLOCK_RETRY_PROMPT})
                 continue
 
+            # Force calculate when the model guessed arithmetic
+            if needs_math_tool(prompt) and not math_tool_used and not math_retry_used:
+                math_retry_used = True
+                print("[ask] missing math tool, retrying", flush=True)
+                messages.append(message)
+                messages.append({"role": "user", "content": MATH_RETRY_PROMPT})
+                continue
+
             print(f"[ask] reply: {reply}", flush=True)
             remember_exchange(prompt, reply)
             return reply
@@ -127,8 +191,11 @@ def ask_model(prompt):
         messages.append(message)
         for tool_call in tool_calls:
             result = run_tool(tool_call)
-            if (tool_call.get("function") or {}).get("name") in ("get_time", "get_date", "get_day"):
+            tool_name = (tool_call.get("function") or {}).get("name")
+            if tool_name in ("get_time", "get_date", "get_day"):
                 clock_tool_used = True
+            if tool_name == "calculate":
+                math_tool_used = True
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
 
     # Give up after too many tool rounds
@@ -139,9 +206,20 @@ def ask_model(prompt):
 # Return true when the question needs a live clock tool
 def needs_clock_tool(prompt):
     text = prompt.lower()
-    if "time" in text or "date" in text or "today" in text:
+    if re.search(r"\bdate\b", text) or re.search(r"\btoday\b", text):
         return True
-    return "day" in text and any(phrase in text for phrase in ("what day", "which day", "day is", "day of"))
+    if re.search(r"\btime\b", text):
+        return True
+    return bool(re.search(r"\b(what|which)\s+day\b|\bday\s+(is|of)\b", text))
+
+# Return true when the question needs the Python math tool
+def needs_math_tool(prompt):
+    text = prompt.lower()
+    if any(word in text for word in ("plus", "minus", "times", "divided", "multiply", "square root", "calculate", "percent")):
+        return True
+    if re.search(r"\d+\s*[\+\-\*\/x×÷]\s*\d+", text):
+        return True
+    return bool(re.search(r"\b(what is|what's)\s+\d", text))
 
 # Remember one question and spoken reply for later asks
 def remember_exchange(prompt, reply):
@@ -216,6 +294,12 @@ def run_tool(tool_call):
         print(f"[tool] {name} -> {result}", flush=True)
         return result
 
+    # Evaluate math in Python
+    if name == "calculate":
+        result = run_calculate(arguments.get("expression", ""))
+        print(f"[tool] {name} -> {result}", flush=True)
+        return result
+
     # Unknown tool
     result = f"Unknown tool: {name}"
     print(f"[tool] {name} -> {result}", flush=True)
@@ -261,8 +345,50 @@ def load_robot_look():
         return None
     return look
 
-# Format the time without a leading zero, speech reads it as a number
-def clock_time():
+# Evaluate a safe Python math expression
+def run_calculate(expression):
+    expression = str(expression or "").strip()
+    if not expression:
+        return "Math error: empty expression."
+
+    # Parse and reject anything outside basic math
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as error:
+        return f"Math error: {error.msg}"
+    if not math_expression_safe(tree):
+        return "Math error: expression not allowed."
+
+    # Evaluate with a tiny math-only environment
+    try:
+        result = eval(compile(tree, "<math>", "eval"), {"__builtins__": {}}, MATH_ENV)
+    except Exception as error:
+        return f"Math error: {error}"
+    return format_math_result(result)
+
+# Return true when the expression tree is only basic math
+def math_expression_safe(tree):
+    for node in ast.walk(tree):
+        if not isinstance(node, MATH_SAFE_NODES):
+            return False
+        if isinstance(node, ast.Name) and node.id not in MATH_ENV:
+            return False
+        if isinstance(node, ast.Attribute):
+            if not isinstance(node.value, ast.Name) or node.value.id != "math":
+                return False
+    return True
+
+# Format a math result for a short spoken reply
+def format_math_result(result):
+    if isinstance(result, bool):
+        return str(result)
+    if isinstance(result, int):
+        return str(result)
+    if isinstance(result, float):
+        if result.is_integer():
+            return str(int(result))
+        return f"{result:.10g}"
+    return str(result)
     now = time.localtime()
     hour = now.tm_hour % 12 or 12
     return f"{hour}:{now.tm_min:02d} {time.strftime('%p', now)}"
