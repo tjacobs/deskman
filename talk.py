@@ -11,6 +11,8 @@ import platform
 import threading
 import subprocess
 import collections
+import urllib.error
+import urllib.request
 import numpy as np
 
 # Config wake and listen
@@ -21,7 +23,9 @@ GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
 NEAR_WAKE_WORDS = ('rob', 'rub')
 REPLAY_WAKE_FLAG = f'--replay-{WAKE_WORD}'
+NO_REPLAY_WAKE_FLAG = f'--no-replay-{WAKE_WORD}'
 TEST_QUESTION = 'What is the time?'
+FOLLOW_UP_SECONDS = 20.0
 WHISPER_MODEL_SIZE = 'base'
 SAMPLE_RATE = 16000
 MAC_RECORDER = 'rec'
@@ -58,14 +62,25 @@ CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 SPOKEN_WAV = 'talk.wav'
 HEARD_WAV = 'heard.wav'
+TEXT_DIR = os.path.join(SCRIPT_DIR, 'text')
+TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
+TEXT_HEALTH_URL = 'http://127.0.0.1:8080/health'
+TEXT_UNAVAILABLE = 'The language model is not running.'
+TEXT_SERVER_START_SECONDS = 180
+TEXT_SERVER_POLL_SECONDS = 0.5
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
+
+# Import local text model helper
+sys.path.insert(0, TEXT_DIR)
+import ask as text_ask
 
 # State
 TEST_MODE = False
 REPEAT_MODE = False
 REPLAY_MODE = False
-REPLAY_WAKE_MODE = False
+REPLAY_WAKE_MODE = True
+LAST_ASK_AT = 0.0
 
 # Main
 def main():
@@ -79,6 +94,51 @@ def main():
     # Quit early when audio playback is unavailable
     check_ready()
 
+    # Start the local text model server when it is not already up
+    text_server = start_text_server()
+    try:
+        run_talk(record)
+    finally:
+        stop_text_server(text_server)
+
+# Parse command line arguments
+def parse_args():
+    test_mode = False
+    repeat_mode = False
+    replay_mode = False
+    replay_wake_mode = True
+    for argument in sys.argv[1:]:
+        if argument == '--test':
+            test_mode = True
+        elif argument == '--repeat':
+            repeat_mode = True
+        elif argument == '--replay':
+            replay_mode = True
+        elif argument == REPLAY_WAKE_FLAG:
+            replay_wake_mode = True
+        elif argument == NO_REPLAY_WAKE_FLAG:
+            replay_wake_mode = False
+        elif argument in ('-h', '--help'):
+            print_usage()
+            sys.exit(0)
+        else:
+            print(f"Unknown argument: {argument}")
+            print_usage()
+            sys.exit(1)
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode
+
+# Print usage help
+def print_usage():
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [{NO_REPLAY_WAKE_FLAG}]')
+    print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
+    print('  --repeat           say the transcribed words back after each utterance')
+    print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
+    print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
+    print(f'  (no arg)           say "{WAKE_WORD}" then a command, asks the local LLM, and speaks the reply')
+    print(f'                     by default plays back what was said to "{WAKE_WORD}"')
+
+# Load models and run the talk loop
+def run_talk(record):
     # Silence onnxruntime GPU discovery warning from the VAD
     import_onnxruntime_quietly()
 
@@ -94,41 +154,10 @@ def main():
     finally:
         listener.stop()
 
-# Parse command line arguments
-def parse_args():
-    test_mode = False
-    repeat_mode = False
-    replay_mode = False
-    replay_wake_mode = False
-    for argument in sys.argv[1:]:
-        if argument == '--test':
-            test_mode = True
-        elif argument == '--repeat':
-            repeat_mode = True
-        elif argument == '--replay':
-            replay_mode = True
-        elif argument == REPLAY_WAKE_FLAG:
-            replay_wake_mode = True
-        elif argument in ('-h', '--help'):
-            print_usage()
-            sys.exit(0)
-        else:
-            print(f"Unknown argument: {argument}")
-            print_usage()
-            sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode
-
-# Print usage help
-def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [{REPLAY_WAKE_FLAG}]')
-    print(f'  --test          ask itself "{TEST_QUESTION}", answer it, then exit')
-    print('  --repeat        say the transcribed words back after each utterance')
-    print(f'  --replay        play the recording back after each utterance, saved as audio/{HEARD_WAV}')
-    print(f'  {REPLAY_WAKE_FLAG}  play back only what was said to "{WAKE_WORD}", not every utterance')
-    print(f'  (no arg)        say "{WAKE_WORD}" then a command, and it speaks a reply')
-
 # Listen for the wake word, then a command, then reply
 def run_talk_loop(whisper_model, kokoro_pipeline, listener):
+    global LAST_ASK_AT
+
     # Greet, then start listening
     speak_muted(listener, kokoro_pipeline, GREETING)
     print_talk_help()
@@ -157,6 +186,10 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             reply = make_reply(command)
             print(f'Reply: {reply}', flush=True)
             speak_muted(listener, kokoro_pipeline, reply)
+
+            # Keep the conversation open so the next line needs no wake word
+            LAST_ASK_AT = time.time()
+            print(f'Follow-up open {FOLLOW_UP_SECONDS:g}s', flush=True)
             if TEST_MODE:
                 print('Test done.')
                 break
@@ -212,15 +245,26 @@ def print_talk_help():
     if TEST_MODE:
         print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
     else:
-        print(f'Say "{WAKE_WORD}" to talk, "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
+        print(f'Say "{WAKE_WORD}" to talk, then keep talking for {FOLLOW_UP_SECONDS:g}s without it. "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
 
-# Wait for the wake word, then return the command that follows it
+# Wait for the wake word, or a follow-up while the conversation is still open
 def hear_wake_command(whisper_model, kokoro_pipeline, listener):
     while True:
-        # Listen until the wake word turns up
-        text = hear_utterance(whisper_model, kokoro_pipeline, listener, False)
+        # Listen for the next utterance, using follow-up replay while the window is open
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener, conversation_open())
         if text is None:
             return None
+
+        # While the follow-up window is still open, treat any speech as the command
+        if conversation_open():
+            if not text:
+                continue
+            if WAKE_WORD in text.lower():
+                command = text_after_wake(text)
+                return command if command else text
+            return text
+
+        # Otherwise wait until the wake word turns up
         if WAKE_WORD not in text.lower():
             continue
 
@@ -230,6 +274,10 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
             return command
         speak_muted(listener, kokoro_pipeline, ACKNOWLEDGEMENT)
         return hear_command(whisper_model, kokoro_pipeline, listener, '')
+
+# Return true when a recent ask still allows wake-free follow-ups
+def conversation_open():
+    return LAST_ASK_AT > 0.0 and (time.time() - LAST_ASK_AT) < FOLLOW_UP_SECONDS
 
 # Transcribe the next utterance, falling back when nothing was heard
 def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
@@ -291,30 +339,17 @@ def wants_to_quit(command):
     text = command.lower()
     return any(word in text for word in QUIT_WORDS)
 
-# Build a reply for the command
+# Ask the local text model for a spoken reply
 def make_reply(command):
-    text = command.lower()
-
     # No speech heard
-    if not text:
+    if not command.strip():
         return "I didn't catch that."
 
-    # Simple built in replies
-    if 'time' in text:
-        return f'It is {clock_time()}.'
-    if 'date' in text or 'day' in text:
-        return f'It is {calendar_date()}.'
-    if 'your name' in text or 'who are you' in text:
-        return "I am robot."
-    if 'hello' in text or 'hi ' in text or text == 'hi':
-        return 'Hello there!'
-    if 'how are you' in text:
-        return "I'm doing great, thank you!"
-    if 'thank' in text:
-        return "You're welcome!"
-
-    # Echo anything else
-    return f'You said: {command}'
+    # Ask the local LLM, fall back when the server is down
+    try:
+        return text_ask.ask_model(command)
+    except urllib.error.URLError:
+        return TEXT_UNAVAILABLE
 
 # Speak with the mic muted so it does not hear itself
 def speak_muted(listener, kokoro_pipeline, text):
@@ -478,6 +513,57 @@ def check_ready():
         print('No USB speaker found. Plug one in and run ./tools-audio.sh.')
         sys.exit(1)
 
+# Start the local text model server when needed, return the process we started
+def start_text_server():
+    # Reuse a server that is already healthy
+    if text_server_healthy():
+        return None
+
+    # Quit when the install is incomplete
+    if not os.access(TEXT_SERVER_SCRIPT, os.X_OK):
+        print(f'Text server missing. Run ./install.sh --text first.')
+        sys.exit(1)
+
+    # Start server.sh in the background
+    print('Starting text model server...', flush=True)
+    process = subprocess.Popen([TEXT_SERVER_SCRIPT], cwd=TEXT_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Wait until the health endpoint answers
+    deadline = time.time() + TEXT_SERVER_START_SECONDS
+    while time.time() < deadline:
+        if process.poll() is not None:
+            print('Text server failed to start. Run ./text/server.sh to see the error.')
+            sys.exit(1)
+        if text_server_healthy():
+            print('Text model server ready.', flush=True)
+            return process
+        time.sleep(TEXT_SERVER_POLL_SECONDS)
+
+    # Timed out waiting for the model to load
+    stop_text_server(process)
+    print('Text server did not become ready in time.')
+    sys.exit(1)
+
+# Return true when the local text model health endpoint answers
+def text_server_healthy():
+    try:
+        request = urllib.request.Request(TEXT_HEALTH_URL, headers={'Authorization': f'Bearer {text_ask.API_KEY}'})
+        urllib.request.urlopen(request, timeout=2)
+        return True
+    except urllib.error.URLError:
+        return False
+
+# Stop a text model server that talk.py started
+def stop_text_server(process):
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
 # Return true when a card has a capture stream
 def card_has_capture(card_index):
     stream_path = f'/proc/asound/card{card_index}/stream0'
@@ -523,17 +609,6 @@ def play_wav_command(wav_path):
 # Return audio player command for this platform
 def audio_player():
     return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
-
-# Format the time without a leading zero, speech reads it as a number
-def clock_time():
-    now = time.localtime()
-    hour = now.tm_hour % 12 or 12
-    return f'{hour}:{now.tm_min:02d} {time.strftime("%p", now)}'
-
-# Format the date without a leading zero on the day
-def calendar_date():
-    now = time.localtime()
-    return f'{time.strftime("%A, %B", now)} {now.tm_mday}'
 
 # Main
 if __name__ == '__main__':

@@ -77,30 +77,47 @@ Uses the whisper `base` model with voice activity detection, on GPU when availab
 
 ## talk.py
 
-Say the wake word `robot`, then a command, and it speaks a reply. Say `robot, quit` or CTRL-C to stop. Needs the same install as `listen.py`.
+Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Needs the same install as `listen.py`, plus `./install.sh --text`. Starts `./text/server.sh` itself when the model is not already running.
 
 ```bash
-./install.sh --listen
+./install.sh --listen --text
 ./talk.py
 ```
 
-Say it all in one breath, `robot, what is the time`, and it answers straight away. Say just `robot` and it replies `Yes?`, then waits for the command.
+Say it all in one breath, `robot, what is the time`, and it answers straight away. Say just `robot` and it replies `Yes?`, then waits for the command. After each reply, you can keep talking for 20 seconds without saying `robot` again.
 
 The microphone stays open the whole time. A background thread reads it into blocks, the silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. Nothing is missed between turns, and silence is never transcribed. The mic is muted only while it speaks, so it does not hear itself.
 
-Replies to a few built in commands like the time, the date, and its name, and echoes anything else back. Edit `make_reply` in `talk.py` to add more. Say `quit` or `exit` as the command and it says `Goodbye!` and stops.
+Each command is sent to Gemma through `text/ask.py`, and the spoken reply is whatever the model returns. If you ask it to look left or right, it calls the look tool in `~/robot/src/look.py`, default 60 degrees, max 90. Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit.
 
 When it nearly hears its name, a transcription with `rob` or `rub` in it but not `robot`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
 
 Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What is the time?` so it hears itself through the mic, then answers. When the mic cannot hear the speaker it falls back to the question text.
 
-Three flags help check what the mic picked up, and combine with each other and with `--test`:
+Two flags help check what the mic picked up, and combine with each other and with `--test`:
 
 - `--replay` plays the recording back after each utterance, saved as `audio/heard.wav`
-- `--replay-robot` plays back only what was said to it, the utterance with the wake word in it and any command that follows, so a busy room is not replayed back at you
 - `--repeat` says the transcribed words back after each utterance
 
-All mute the mic while playing, so it does not hear itself.
+By default it also plays back what was said to it, the utterance with the wake word in it and any command that follows, so you can hear what it caught. Pass `--no-replay-robot` to turn that off. All mute the mic while playing, so it does not hear itself.
+
+## talk service
+
+Install a systemd service that runs `talk_service.sh` on boot, which starts `~/robot/src/real.py` and `talk.py`, same pattern as `~/robot/install/install_robot_service.sh`:
+
+```bash
+./install_talk.sh
+./install_talk.sh --start
+./install_talk.sh --uninstall
+```
+
+```bash
+sudo service talk start
+sudo service talk stop
+sudo service talk status
+journalctl -u talk -f
+tail -f ~/speak/log.txt
+```
 
 ## Testing
 
