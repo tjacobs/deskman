@@ -60,6 +60,7 @@ LINUX_PLAYER = 'aplay'
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
+TALKS_DIR = os.path.join(SCRIPT_DIR, 'talks')
 SPOKEN_WAV = 'talk.wav'
 HEARD_WAV = 'heard.wav'
 TEXT_DIR = os.path.join(SCRIPT_DIR, 'text')
@@ -178,6 +179,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             # Say goodbye and stop when asked to quit
             if wants_to_quit(command):
                 print(f'Reply: {GOODBYE}', flush=True)
+                log_talk(command, GOODBYE)
                 speak_muted(listener, kokoro_pipeline, GOODBYE)
                 print('Done.')
                 break
@@ -185,6 +187,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             # Reply, mic muted so it does not hear itself
             reply = make_reply(command)
             print(f'Reply: {reply}', flush=True)
+            log_talk(command, reply)
             speak_muted(listener, kokoro_pipeline, reply)
 
             # Keep the conversation open so the next line needs no wake word
@@ -350,6 +353,22 @@ def make_reply(command):
         return text_ask.ask_model(command)
     except urllib.error.URLError:
         return TEXT_UNAVAILABLE
+
+# Append one command and reply to today's talk log
+def log_talk(command, reply):
+    os.makedirs(TALKS_DIR, exist_ok=True)
+    path = os.path.join(TALKS_DIR, time.strftime('%Y-%m-%d') + '.txt')
+    stamp = talk_log_time()
+    with open(path, 'a', encoding='utf-8') as talk_file:
+        talk_file.write(f'{stamp} {command}\n')
+        talk_file.write(f'{stamp} Reply: {reply}\n')
+        talk_file.write('\n')
+
+# Format log time like 7:49pm
+def talk_log_time():
+    now = time.localtime()
+    hour = now.tm_hour % 12 or 12
+    return f'{hour}:{now.tm_min:02d}{time.strftime("%p", now).lower()}'
 
 # Speak with the mic muted so it does not hear itself
 def speak_muted(listener, kokoro_pipeline, text):
