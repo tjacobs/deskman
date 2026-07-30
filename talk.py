@@ -51,10 +51,17 @@ MAX_UTTERANCE_BLOCKS = round(MAX_UTTERANCE_SECONDS / BLOCK_SECONDS)
 
 # Config voice
 REPO_ID = 'hexgrad/Kokoro-82M'
-VOICE = 'bm_fable'
+DEFAULT_VOICE = 'bm_fable'
+VOICE = DEFAULT_VOICE
 SPEECH_SPEED = 1.2
 MAC_PLAYER = 'afplay'
 LINUX_PLAYER = 'aplay'
+VOICES = [
+    'af_heart', 'af_alloy', 'af_aoede', 'af_bella', 'af_jessica', 'af_kore', 'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
+    'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael', 'am_onyx', 'am_puck', 'am_santa',
+    'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
+    'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
+]
 
 # Config dirs and env
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +82,7 @@ os.environ['HF_HUB_VERBOSITY'] = 'error'
 # Import local text model helper
 sys.path.insert(0, TEXT_DIR)
 import ask as text_ask
+text_ask.set_talk_module(sys.modules[__name__])
 
 # State
 TEST_MODE = False
@@ -82,6 +90,8 @@ REPEAT_MODE = False
 REPLAY_MODE = False
 REPLAY_WAKE_MODE = True
 LAST_ASK_AT = 0.0
+kokoro_model = None
+kokoro_pipelines = {}
 
 # Main
 def main():
@@ -159,8 +169,10 @@ def run_talk(record):
 def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     global LAST_ASK_AT
 
-    # Greet, then start listening
+    # Greet, then keep the conversation open so the first line needs no wake word
     speak_muted(listener, kokoro_pipeline, GREETING)
+    LAST_ASK_AT = time.time()
+    print(f'Follow-up open {FOLLOW_UP_SECONDS:g}s', flush=True)
     print_talk_help()
     try:
         while True:
@@ -218,6 +230,8 @@ def load_vad_model():
 
 # Load kokoro speech pipeline on gpu when available
 def load_kokoro_pipeline():
+    global kokoro, torch, soundfile, kokoro_model
+
     # Suppress torch warnings before kokoro imports torch
     print('Loading kokoro...', flush=True)
     load_start = time.perf_counter()
@@ -229,26 +243,68 @@ def load_kokoro_pipeline():
     warnings.filterwarnings('ignore', category=UserWarning, module='torch.cuda')
 
     # Import kokoro and pick device
-    global kokoro, torch, soundfile
     import kokoro
     import torch
     import soundfile
     torch.set_num_threads(4)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    # Load model and voice
-    model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
-    pipeline = kokoro.KPipeline(lang_code=VOICE[0], repo_id=REPO_ID, model=model)
+    # Load model and the default voice
+    kokoro_model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
+    pipeline = get_kokoro_pipeline(VOICE[0])
     pipeline.load_voice(VOICE)
     print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
     return pipeline
+
+# Return a kokoro pipeline for one language code
+def get_kokoro_pipeline(lang_code):
+    if lang_code in kokoro_pipelines:
+        return kokoro_pipelines[lang_code]
+    pipeline = kokoro.KPipeline(lang_code=lang_code, repo_id=REPO_ID, model=kokoro_model)
+    kokoro_pipelines[lang_code] = pipeline
+    return pipeline
+
+# Change the speaking voice used by talk
+def set_voice(voice_name):
+    global VOICE
+    voice = normalize_voice_name(voice_name)
+    if voice not in VOICES:
+        return f'Unknown voice: {voice_name}. Available: {", ".join(VOICES)}.'
+    if kokoro_model is None:
+        return 'Speech is not ready yet.'
+
+    # Load the voice on a pipeline for its language
+    try:
+        pipeline = get_kokoro_pipeline(voice[0])
+        pipeline.load_voice(voice)
+    except Exception as error:
+        return f'Voice {voice} unavailable: {error}'
+    VOICE = voice
+    print(f'Voice set to {VOICE}', flush=True)
+    return f'Voice set to {voice}.'
+
+# List available speaking voices
+def list_voices():
+    return f'Current voice {VOICE}. Voices: {", ".join(VOICES)}.'
+
+# Normalize a spoken or typed voice name to a kokoro id
+def normalize_voice_name(voice_name):
+    text = str(voice_name or '').strip().lower().replace(' ', '_').replace('-', '_')
+    if text in VOICES:
+        return text
+
+    # Match by the name after the language prefix
+    matches = [voice for voice in VOICES if voice.split('_', 1)[-1] == text]
+    if len(matches) == 1:
+        return matches[0]
+    return text
 
 # Print how to talk, test mode skips the wake word
 def print_talk_help():
     if TEST_MODE:
         print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
     else:
-        print(f'Say "{WAKE_WORD}" to talk, then keep talking for {FOLLOW_UP_SECONDS:g}s without it. "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
+        print(f'After Hi, talk for {FOLLOW_UP_SECONDS:g}s without "{WAKE_WORD}". Then say "{WAKE_WORD}" to talk again. "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
 
 # Wait for the wake word, or a follow-up while the conversation is still open
 def hear_wake_command(whisper_model, kokoro_pipeline, listener):
@@ -379,7 +435,8 @@ def speak_muted(listener, kokoro_pipeline, text):
 # Generate speech and play it on the usb speaker
 def speak(kokoro_pipeline, text):
     os.makedirs(AUDIO_DIR, exist_ok=True)
-    generator = kokoro_pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
+    pipeline = get_kokoro_pipeline(VOICE[0])
+    generator = pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
     for index, (graphemes, phonemes, audio) in enumerate(generator):
         wav_path = os.path.join(AUDIO_DIR, SPOKEN_WAV)
         soundfile.write(wav_path, audio, 24000)

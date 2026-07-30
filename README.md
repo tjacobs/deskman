@@ -84,7 +84,7 @@ Say the wake word `robot`, then a command, and it speaks a reply from the local 
 ./talk.py
 ```
 
-Say it all in one breath, `robot, what is the time`, and it answers straight away. Say just `robot` and it replies `Yes?`, then waits for the command. After each reply, you can keep talking for 20 seconds without saying `robot` again.
+Say it all in one breath, `robot, what is the time`, and it answers straight away. Say just `robot` and it replies `Yes?`, then waits for the command. Right after `Hi!`, and after each reply, you can keep talking for 20 seconds without saying `robot` again.
 
 The microphone stays open the whole time. A background thread reads it into blocks, the silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. Nothing is missed between turns, and silence is never transcribed. The mic is muted only while it speaks, so it does not hear itself.
 

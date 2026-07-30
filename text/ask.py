@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import time
+import subprocess
 import urllib.error
 import urllib.request
 
@@ -18,7 +19,7 @@ MODEL = "gemma-4-e2b"
 DEFAULT_PROMPT = "Introduce yourself in one short sentence."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPT_PATH = os.path.join(SCRIPT_DIR, "prompt.json")
-DEFAULT_SYSTEM_PROMPT = "I am a robot head on a desk, answering questions. Answer in one or two short sentences suitable for speaking aloud. When asked to look left, right, or center, call the look tool. Never guess the time, date, or day of the week. Always call get_time, get_date, or get_day first, then answer using only that tool result. Never guess arithmetic. Always call calculate with a Python math expression, then answer using only that tool result."
+DEFAULT_SYSTEM_PROMPT = "I am a robot head on a desk, answering questions. Answer in one or two short sentences suitable for speaking aloud. When asked to look left, right, or center, call the look tool. Never guess or claim a volume change. To change volume you must call set_volume with the percent. To check volume you must call get_volume. Never guess voice changes. Always call set_voice or list_voices first, then answer using only that tool result. When listing voices, keep the spoken answer short and mention only a few examples plus the current voice. Never guess the time, date, or day of the week. Always call get_time, get_date, or get_day first, then answer using only that tool result. Never guess arithmetic. Always call calculate with a Python math expression, then answer using only that tool result."
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
@@ -26,8 +27,11 @@ MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 20
 ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 60
+VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
 CLOCK_RETRY_PROMPT = "Do not guess. Call get_time, get_date, or get_day now, then answer using only the tool result."
 MATH_RETRY_PROMPT = "Do not guess. Call calculate with a Python math expression now, then answer using only the tool result."
+VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested percent, then answer using only the tool result."
+VOICE_RETRY_PROMPT = "Do not guess. Call set_voice or list_voices now, then answer using only the tool result."
 MATH_ENV = {
     "math": math,
     "abs": abs,
@@ -127,10 +131,61 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_volume",
+            "description": "Set the speaker volume to a percent from 0 to 100.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "percent": {
+                        "type": "number",
+                        "description": "Volume percent from 0 to 100.",
+                    },
+                },
+                "required": ["percent"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_volume",
+            "description": "Get the current speaker volume percent.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_voice",
+            "description": "Change the speaking voice. Use a Kokoro voice id like bm_fable or af_heart, or a short name like fable or heart.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "voice": {
+                        "type": "string",
+                        "description": "Voice id or short name, for example bm_fable, af_bella, or george.",
+                    },
+                },
+                "required": ["voice"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_voices",
+            "description": "List the available speaking voices and the current voice.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 # Conversation history kept across asks in this process
 conversation_history = []
+talk_module = None
 
 # Main
 def main():
@@ -158,6 +213,11 @@ def ask_model(prompt):
     clock_tool_used = False
     math_retry_used = False
     math_tool_used = False
+    volume_retry_used = False
+    volume_set_used = False
+    volume_get_used = False
+    voice_retry_used = False
+    voice_tool_used = False
 
     # Loop until the model replies with spoken text
     for _ in range(MAX_TOOL_ROUNDS):
@@ -182,8 +242,39 @@ def ask_model(prompt):
                 messages.append({"role": "user", "content": MATH_RETRY_PROMPT})
                 continue
 
-            remember_exchange(prompt, reply)
-            return reply
+            # Force or apply set_volume when the model skipped a volume change
+            if needs_set_volume(prompt) and not volume_set_used:
+                forced = force_set_volume(prompt, messages, message, volume_retry_used)
+                if forced is True:
+                    volume_retry_used = True
+                    continue
+                if forced:
+                    remember_exchange(prompt, forced)
+                    return forced
+
+            # Force get_volume when the model guessed the current volume
+            if needs_get_volume(prompt) and not volume_get_used and not volume_retry_used:
+                volume_retry_used = True
+                print("[ask] missing get_volume, retrying", flush=True)
+                messages.append(message)
+                messages.append({"role": "user", "content": "Do not guess. Call get_volume now, then answer using only the tool result."})
+                continue
+
+            # Force voice tools when the model guessed a voice change
+            if needs_voice_tool(prompt) and not voice_tool_used and not voice_retry_used:
+                voice_retry_used = True
+                print("[ask] missing voice tool, retrying", flush=True)
+                messages.append(message)
+                messages.append({"role": "user", "content": VOICE_RETRY_PROMPT})
+                continue
+
+            # Prefer a clear spoken confirmation after a successful volume set
+            if not reply and volume_set_used:
+                percent = parse_volume_percent(prompt)
+                if percent is not None:
+                    reply = f"I have set the volume to {percent} percent."
+            remember_exchange(prompt, reply or "Okay.")
+            return reply or "Okay."
 
         # Keep the assistant tool call turn, then return each tool result
         print(f"[ask] tools: {[call.get('function', {}).get('name') for call in tool_calls]}", flush=True)
@@ -195,7 +286,23 @@ def ask_model(prompt):
                 clock_tool_used = True
             if tool_name == "calculate":
                 math_tool_used = True
+            if tool_name == "set_volume":
+                volume_set_used = True
+            if tool_name == "get_volume":
+                volume_get_used = True
+            if tool_name in ("set_voice", "list_voices"):
+                voice_tool_used = True
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
+
+        # If it checked volume instead of setting it, set it in Python now
+        if needs_set_volume(prompt) and not volume_set_used:
+            forced = force_set_volume(prompt, messages, None, True)
+            if forced is True:
+                volume_set_used = True
+                continue
+            if forced:
+                remember_exchange(prompt, forced)
+                return forced
 
     # Give up after too many tool rounds
     reply = "I could not finish that request."
@@ -214,11 +321,84 @@ def needs_clock_tool(prompt):
 # Return true when the question needs the Python math tool
 def needs_math_tool(prompt):
     text = prompt.lower()
-    if any(word in text for word in ("plus", "minus", "times", "divided", "multiply", "square root", "calculate", "percent")):
+    if "volume" in text:
+        return False
+    if any(word in text for word in ("plus", "minus", "times", "divided", "multiply", "square root", "calculate")):
+        return True
+    if re.search(r"\d+\s*percent\s+of\b", text):
         return True
     if re.search(r"\d+\s*[\+\-\*\/x×÷]\s*\d+", text):
         return True
     return bool(re.search(r"\b(what is|what's)\s+\d", text))
+
+# Return true when the question needs a volume tool
+def needs_volume_tool(prompt):
+    return needs_set_volume(prompt) or needs_get_volume(prompt)
+
+# Return true when the user wants the volume changed
+def needs_set_volume(prompt):
+    text = prompt.lower()
+    if re.search(r"\b(louder|quieter|mute|unmute)\b", text):
+        return True
+    if "volume" not in text:
+        return False
+    if re.search(r"\d+\s*%", text):
+        return True
+    return bool(re.search(r"\b(set|change|make|turn|raise|lower)\b", text))
+
+# Return true when the user only wants the current volume
+def needs_get_volume(prompt):
+    text = prompt.lower()
+    if "volume" not in text:
+        return False
+    if needs_set_volume(prompt):
+        return False
+    return bool(re.search(r"\b(what|how|current|check|get|tell)\b", text))
+
+# Read a volume percent from the user text when present
+def parse_volume_percent(prompt):
+    text = prompt.lower()
+    if re.search(r"\bmute\b", text) and not re.search(r"\bunmute\b", text):
+        return 0
+    match = re.search(r"(\d+)\s*%", text)
+    if match:
+        return max(0, min(100, int(match.group(1))))
+    match = re.search(r"\b(?:to|at)\s+(\d+)\b", text)
+    if match:
+        return max(0, min(100, int(match.group(1))))
+    return None
+
+# Retry set_volume once, then apply it in Python if still missing
+def force_set_volume(prompt, messages, message, already_retried):
+    percent = parse_volume_percent(prompt)
+
+    # First miss, ask the model again with an explicit set_volume order
+    if not already_retried:
+        print("[ask] missing set_volume, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        if percent is None:
+            retry = VOLUME_RETRY_PROMPT
+        else:
+            retry = f"Do not guess. Call set_volume with percent {percent} now, then answer using only the tool result."
+        messages.append({"role": "user", "content": retry})
+        return True
+
+    # Second miss, set it directly in Python
+    if percent is None:
+        return None
+    result = run_set_volume({"percent": percent})
+    print(f"[ask] forced set_volume -> {result}", flush=True)
+    return f"I have set the volume to {percent} percent."
+
+# Return true when the question needs a voice tool
+def needs_voice_tool(prompt):
+    text = prompt.lower()
+    if re.search(r"\b(list|show|what|which)\b.*\bvoices?\b", text):
+        return True
+    if re.search(r"\bvoices?\b.*\b(list|available|have|use|using)\b", text):
+        return True
+    return bool(re.search(r"\b(change|set|switch|use)\b.*\bvoice\b|\bvoice\b.*\b(to|change|set|switch)\b", text))
 
 # Remember one question and spoken reply for later asks
 def remember_exchange(prompt, reply):
@@ -296,6 +476,30 @@ def run_tool(tool_call):
     # Evaluate math in Python
     if name == "calculate":
         result = run_calculate(arguments.get("expression", ""))
+        print(f"[tool] {name} -> {result}", flush=True)
+        return result
+
+    # Set the speaker volume
+    if name == "set_volume":
+        result = run_set_volume(arguments)
+        print(f"[tool] {name} -> {result}", flush=True)
+        return result
+
+    # Read the speaker volume
+    if name == "get_volume":
+        result = run_get_volume()
+        print(f"[tool] {name} -> {result}", flush=True)
+        return result
+
+    # Change the speaking voice
+    if name == "set_voice":
+        result = run_set_voice(arguments)
+        print(f"[tool] {name} -> {result}", flush=True)
+        return result
+
+    # List speaking voices
+    if name == "list_voices":
+        result = run_list_voices()
         print(f"[tool] {name} -> {result}", flush=True)
         return result
 
@@ -388,6 +592,143 @@ def format_math_result(result):
             return str(int(result))
         return f"{result:.10g}"
     return str(result)
+
+# Set speaker volume from tool arguments
+def run_set_volume(arguments):
+    if "percent" not in arguments:
+        return "Volume percent is required."
+    try:
+        percent = int(round(float(arguments["percent"])))
+    except (TypeError, ValueError):
+        return "Volume percent must be a number."
+    percent = max(0, min(100, percent))
+    if not set_speaker_volume(percent):
+        return "Could not set the volume."
+    actual = read_speaker_volume()
+    if actual is None:
+        return f"Volume set to {percent} percent."
+    return f"Volume set to {actual} percent."
+
+# Read speaker volume for the tool
+def run_get_volume():
+    percent = read_speaker_volume()
+    if percent is None:
+        return "Could not read the volume."
+    return f"Volume is {percent} percent."
+
+# Change the talk speaking voice
+def run_set_voice(arguments):
+    talk = load_talk_module()
+    if talk is None:
+        return "Voice control is unavailable."
+    voice = arguments.get("voice", "")
+    try:
+        return talk.set_voice(voice)
+    except Exception as error:
+        return f"Voice change failed: {error}"
+
+# List talk speaking voices
+def run_list_voices():
+    talk = load_talk_module()
+    if talk is None:
+        return "Voice list is unavailable."
+    try:
+        return talk.list_voices()
+    except Exception as error:
+        return f"Voice list failed: {error}"
+
+# Import talk.py once for voice control
+def load_talk_module():
+    if talk_module is not None:
+        return talk_module
+    if "talk" in sys.modules:
+        return sys.modules["talk"]
+    if "__main__" in sys.modules and getattr(sys.modules["__main__"], "set_voice", None):
+        return sys.modules["__main__"]
+    talk_path = os.path.join(os.path.dirname(SCRIPT_DIR), "talk.py")
+    if not os.path.isfile(talk_path):
+        return None
+    speak_dir = os.path.dirname(SCRIPT_DIR)
+    if speak_dir not in sys.path:
+        sys.path.insert(0, speak_dir)
+    try:
+        import talk
+    except ImportError:
+        return None
+    return talk
+
+# Let talk.py register itself when running as __main__
+def set_talk_module(module):
+    global talk_module
+    talk_module = module
+
+# Set the USB speaker volume with amixer
+def set_speaker_volume(percent):
+    card = find_volume_card()
+    control = find_volume_control(card)
+    if card is None or control is None:
+        return False
+    result = subprocess.run(["amixer", "-c", str(card), "set", control, f"{percent}%", "unmute"], capture_output=True, text=True)
+    return result.returncode == 0
+
+# Read the current USB speaker volume percent
+def read_speaker_volume():
+    card = find_volume_card()
+    control = find_volume_control(card)
+    if card is None or control is None:
+        return None
+    result = subprocess.run(["amixer", "-c", str(card), "get", control], capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    match = re.search(r"\[(\d+)%\]", result.stdout)
+    if not match:
+        return None
+    return int(match.group(1))
+
+# Find the first playback volume control on a card
+def find_volume_control(card):
+    if card is None:
+        return None
+    for control in VOLUME_CONTROLS:
+        result = subprocess.run(["amixer", "-c", str(card), "get", control], capture_output=True, text=True)
+        if result.returncode == 0 and re.search(r"\[\d+%\]", result.stdout):
+            return control
+    return None
+
+# Find the USB playback card index used for speech
+def find_volume_card():
+    cards_path = "/proc/asound/cards"
+    if not os.path.isfile(cards_path):
+        return 0 if os.path.exists("/proc/asound/card0") else None
+
+    # Collect USB card indexes
+    usb_cards = []
+    with open(cards_path) as cards_file:
+        for line in cards_file:
+            if "USB-Audio" not in line:
+                continue
+            card_index_text = line.strip().split(None, 1)[0]
+            if card_index_text.isdigit():
+                usb_cards.append(int(card_index_text))
+
+    # Prefer the speaker-only card, one without a mic
+    for card_index in usb_cards:
+        if not volume_card_has_capture(card_index):
+            return card_index
+    if usb_cards:
+        return usb_cards[0]
+    return 0 if os.path.exists("/proc/asound/card0") else None
+
+# Return true when a card has a capture stream
+def volume_card_has_capture(card_index):
+    stream_path = f"/proc/asound/card{card_index}/stream0"
+    if not os.path.isfile(stream_path):
+        return False
+    with open(stream_path) as stream_file:
+        return "Capture:" in stream_file.read()
+
+# Format the time without a leading zero, speech reads it as a number
+def clock_time():
     now = time.localtime()
     hour = now.tm_hour % 12 or 12
     return f"{hour}:{now.tm_min:02d} {time.strftime('%p', now)}"
