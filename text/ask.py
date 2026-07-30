@@ -182,7 +182,6 @@ def ask_model(prompt):
                 messages.append({"role": "user", "content": MATH_RETRY_PROMPT})
                 continue
 
-            print(f"[ask] reply: {reply}", flush=True)
             remember_exchange(prompt, reply)
             return reply
 
