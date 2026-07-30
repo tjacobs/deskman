@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install dependencies into .venv with uv, works on linux and mac.
-# Usage: ./install.sh [--listen]
+# Usage: ./install.sh [--listen] [--text]
 
 # Exit on error, undefined variables, and pipe failure
 set -euo pipefail
@@ -36,8 +36,21 @@ CUDA_BIN="/usr/local/cuda/bin"
 CUDA_ARCHITECTURE=87
 BUILD_JOBS=3
 
+# Config llama.cpp and the text model
+LLAMA_CPP_URL="https://github.com/ggml-org/llama.cpp.git"
+TEXT_DIR="${SCRIPT_DIR}/text"
+LLAMA_CPP_DIR="${TEXT_DIR}/llama.cpp"
+TEXT_MODEL_DIR="${TEXT_DIR}/models"
+TEXT_MODEL_NAME="gemma-4-E2B-it-Q4_K_S.gguf"
+TEXT_MODEL_PATH="${TEXT_MODEL_DIR}/${TEXT_MODEL_NAME}"
+TEXT_MODEL_PART="${TEXT_MODEL_PATH}.part"
+TEXT_MODEL_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/${TEXT_MODEL_NAME}"
+LLAMA_SERVER="${LLAMA_CPP_DIR}/build/bin/llama-server"
+LLAMA_LIBRARY_DIR="${LLAMA_CPP_DIR}/build/bin"
+
 # State
 INSTALL_LISTEN=false
+INSTALL_TEXT=false
 
 # Main
 main() {
@@ -50,6 +63,9 @@ main() {
     if [[ "${INSTALL_LISTEN}" == true ]]; then
         install_listen
     fi
+    if [[ "${INSTALL_TEXT}" == true ]]; then
+        install_text
+    fi
     print_done
 }
 
@@ -59,6 +75,9 @@ parse_args() {
         case "${argument}" in
             --listen)
                 INSTALL_LISTEN=true
+                ;;
+            --text)
+                INSTALL_TEXT=true
                 ;;
             -h|--help)
                 print_usage
@@ -75,8 +94,9 @@ parse_args() {
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./install.sh [--listen]"
+    echo "Usage: ./install.sh [--listen] [--text]"
     echo "  --listen  also install speech to text for listen.py and talk.py"
+    echo "  --text    also install llama.cpp and Gemma 4 E2B for local responses"
     echo "  (no arg)  install text to speech for speak.py and say.py into .venv"
 }
 
@@ -273,11 +293,71 @@ verify_cuda() {
     echo "CUDA OK, ${device_count} GPU found."
 }
 
+# Install llama.cpp and Gemma for local text responses
+install_text() {
+    check_build_tools
+    clone_repository "${LLAMA_CPP_URL}" "${LLAMA_CPP_DIR}" --depth 1
+    download_text_model
+    build_llama_cpp
+    chmod +x "${TEXT_DIR}/server.sh" "${TEXT_DIR}/ask.py"
+    verify_text
+}
+
+# Download the Gemma GGUF model with resume support
+download_text_model() {
+    # Skip when model is already downloaded
+    if [[ -f "${TEXT_MODEL_PATH}" ]]; then
+        echo "${TEXT_MODEL_NAME} already downloaded."
+        return 0
+    fi
+
+    # Download to a partial file and rename only after success
+    mkdir -p "${TEXT_MODEL_DIR}"
+    echo "Downloading ${TEXT_MODEL_NAME}, about 3 GB..."
+    curl --fail --location --continue-at - --output "${TEXT_MODEL_PART}" "${TEXT_MODEL_URL}"
+    mv "${TEXT_MODEL_PART}" "${TEXT_MODEL_PATH}"
+}
+
+# Build llama.cpp for CUDA when available, else CPU
+build_llama_cpp() {
+    # Skip when llama-server is already built
+    if [[ -x "${LLAMA_SERVER}" ]]; then
+        echo "llama.cpp already built."
+        return 0
+    fi
+
+    # Configure CUDA on Jetson or CPU elsewhere
+    if [[ -x "${CUDA_BIN}/nvcc" ]]; then
+        PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+    else
+        cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+    fi
+
+    # Build the server, client, and benchmark
+    PATH="${CUDA_BIN}:${PATH}" cmake --build "${LLAMA_CPP_DIR}/build" --target llama-server llama-cli llama-bench "-j${BUILD_JOBS}"
+}
+
+# Quit when llama-server or the model is unavailable
+verify_text() {
+    # Check runtime and model
+    if [[ ! -x "${LLAMA_SERVER}" || ! -f "${TEXT_MODEL_PATH}" ]]; then
+        echo "Text install failed, llama-server or model missing."
+        exit 1
+    fi
+
+    # Print installed runtime version
+    LD_LIBRARY_PATH="${LLAMA_LIBRARY_DIR}:${LD_LIBRARY_PATH:-}" "${LLAMA_SERVER}" --version
+    echo "Verified local text model."
+}
+
 # Print what to run next
 print_done() {
     echo "Done. Run ./speak.py to speak."
     if [[ "${INSTALL_LISTEN}" == true ]]; then
         echo "Run ./listen.py to transcribe from the microphone."
+    fi
+    if [[ "${INSTALL_TEXT}" == true ]]; then
+        echo "Run ./text/server.sh, then ./text/ask.py to ask the local model."
     fi
 }
 
