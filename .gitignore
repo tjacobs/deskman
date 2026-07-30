@@ -3,3 +3,4 @@ cache/
 __pycache__/
 *.wav
 .DS_Store
+faster-whisper/
