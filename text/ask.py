@@ -18,8 +18,8 @@ API_KEY = "local"
 MODEL = "gemma-4-e2b"
 DEFAULT_PROMPT = "Introduce yourself in one short sentence."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROMPT_PATH = os.path.join(SCRIPT_DIR, "prompt.json")
-DEFAULT_SYSTEM_PROMPT = "I am a robot head on a desk, answering questions. Answer in one or two short sentences suitable for speaking aloud. When asked to look left, right, or center, call the look tool. Never guess or claim a volume change. To change volume you must call set_volume with the percent. To check volume you must call get_volume. Use the exact percent returned by the tool. Never guess voice changes. To change voice you must call set_voice. To list voices you must call list_voices, then speak the names from the tool result. Never guess the time, date, or day of the week. Always call get_time, get_date, or get_day first, then answer using only that tool result. Never guess arithmetic. Always call calculate with a Python math expression, then answer using only that tool result."
+SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
+PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
@@ -545,17 +545,14 @@ def remember_exchange(prompt, reply):
     while len(conversation_history) > MAX_HISTORY_MESSAGES:
         conversation_history.pop(0)
 
-# Load the system prompt from prompt.json
+# Load the system prompt from speak/prompt.json
 def load_system_prompt():
-    try:
-        with open(PROMPT_PATH, encoding="utf-8") as prompt_file:
-            data = json.load(prompt_file)
-        prompt = str(data.get("system") or "").strip()
-        if prompt:
-            return prompt
-    except (OSError, json.JSONDecodeError, TypeError):
-        pass
-    return DEFAULT_SYSTEM_PROMPT
+    with open(PROMPT_PATH, encoding="utf-8") as prompt_file:
+        data = json.load(prompt_file)
+    prompt = str(data.get("system") or "").strip()
+    if not prompt:
+        raise ValueError(f"Missing system prompt in {PROMPT_PATH}")
+    return prompt
 
 # Send one chat request to llama-server
 def chat_completion(messages):

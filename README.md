@@ -41,7 +41,7 @@ Generated audio files are saved in `audio/` as `001.wav`, `002.wav`, etc.
 
 Interactive speech tool. Press keys to speak phrases.
 
-Single keypresses work without Enter. Preset phrases are in `phrases.json`, triggered by keys `1`–`9`.
+Single keypresses work without Enter. Preset phrases are in `say.py` as `PHRASES`, triggered by keys `1`–`9`.
 
 ### Controls
 

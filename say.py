@@ -2,7 +2,6 @@
 
 # Imports
 import glob
-import json
 import os
 import platform
 import queue
@@ -27,12 +26,22 @@ VOICES = [
     'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
     'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
 ]
+PHRASES = {
+    '1': 'hi there',
+    '2': 'hello there',
+    '3': 'i am a robot!',
+    '4': 'beep boop!',
+    '5': 'bye for now!',
+    '6': 'thank you!',
+    '7': 'yes please',
+    '8': 'no thanks',
+    '9': 'no way!',
+}
 
 # Config dirs and env
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 MODEL_CACHE_DIR = os.path.join(CACHE_DIR, 'models--hexgrad--Kokoro-82M', 'snapshots')
-PHRASES_PATH = os.path.join(SCRIPT_DIR, 'phrases.json')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
@@ -89,11 +98,10 @@ def main():
     # Run
     try:
         # Run test phrases or handle keyboard input until quit
-        phrases = load_phrases()
         if TEST_MODE:
-            run_test_loop(engine, phrases)
+            run_test_loop(engine, PHRASES)
         else:
-            run_input_loop(engine, phrases)
+            run_input_loop(engine, PHRASES)
 
     # Done
     finally:
@@ -146,7 +154,7 @@ def init():
 
     # Print banner before heavy imports
     if not TEST_MODE:
-        print_banner(load_phrases())
+        print_banner(PHRASES)
 
     # Suppress warnings
     warnings.filterwarnings('ignore', category=UserWarning, module='torch.nn.modules.rnn')
@@ -352,11 +360,6 @@ def write_line(text):
     with OUTPUT_LOCK:
         sys.stdout.write('\r\033[K' + text + '\n')
         sys.stdout.flush()
-
-# Load preset phrases from json file
-def load_phrases():
-    with open(PHRASES_PATH) as phrases_file:
-        return json.load(phrases_file)
 
 # Return true when a card has a capture stream
 def card_has_capture(card_index):
