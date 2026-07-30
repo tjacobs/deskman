@@ -2,6 +2,7 @@
 
 # Imports
 import os
+import re
 import sys
 import time
 import queue
@@ -17,6 +18,7 @@ import numpy as np
 
 # Config wake and listen
 WAKE_WORD = 'robot'
+WAKE_WORD_PATTERN = re.compile(rf'\b{re.escape(WAKE_WORD)}\b', re.IGNORECASE)
 GREETING = 'Hi!'
 ACKNOWLEDGEMENT = 'Yes?'
 GOODBYE = 'Goodbye!'
@@ -269,7 +271,8 @@ def set_voice(voice_name):
     global VOICE
     voice = normalize_voice_name(voice_name)
     if voice not in VOICES:
-        return f'Unknown voice: {voice_name}. Available: {", ".join(VOICES)}.'
+        names = ', '.join(voice_short_name(item) for item in VOICES)
+        return f'Unknown voice: {voice_name}. Available: {names}.'
     if kokoro_model is None:
         return 'Speech is not ready yet.'
 
@@ -281,17 +284,35 @@ def set_voice(voice_name):
         return f'Voice {voice} unavailable: {error}'
     VOICE = voice
     print(f'Voice set to {VOICE}', flush=True)
-    return f'Voice set to {voice}.'
+    return f'Voice set to {voice_short_name(voice)}.'
 
-# List available speaking voices
-def list_voices():
-    return f'Current voice {VOICE}. Voices: {", ".join(VOICES)}.'
+# List available speaking voices without language prefixes
+def list_voices(count=None):
+    names = [voice_short_name(voice) for voice in VOICES]
+    current = voice_short_name(VOICE)
+    if count is not None:
+        count = max(1, min(len(names), int(count)))
+        names = names[:count]
+        return f'Current voice {current}. {count} voices: {", ".join(names)}.'
+    return f'Current voice {current}. All voices: {", ".join(names)}.'
+
+# Return the voice name without af am bf bm prefix
+def voice_short_name(voice):
+    parts = voice.split('_', 1)
+    return parts[1] if len(parts) == 2 else voice
 
 # Normalize a spoken or typed voice name to a kokoro id
 def normalize_voice_name(voice_name):
-    text = str(voice_name or '').strip().lower().replace(' ', '_').replace('-', '_')
+    text = str(voice_name or '').strip().lower()
+    text = re.sub(r'[^a-z0-9]+', '_', text).strip('_')
     if text in VOICES:
         return text
+
+    # Drop a leading language gender prefix when present
+    for prefix in ('af_', 'am_', 'bf_', 'bm_'):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
 
     # Match by the name after the language prefix
     matches = [voice for voice in VOICES if voice.split('_', 1)[-1] == text]
@@ -318,13 +339,13 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
         if conversation_open():
             if not text:
                 continue
-            if WAKE_WORD in text.lower():
+            if has_wake_word(text):
                 command = text_after_wake(text)
                 return command if command else text
             return text
 
         # Otherwise wait until the wake word turns up
-        if WAKE_WORD not in text.lower():
+        if not has_wake_word(text):
             continue
 
         # Use the rest of the utterance, or acknowledge and wait for more
@@ -373,20 +394,26 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, after_wake):
 # Return true when the text almost says the wake word, but not quite
 def near_wake_word(text):
     lowered = text.lower()
-    if WAKE_WORD in lowered:
+    if has_wake_word(lowered):
         return False
-    return any(word in lowered for word in NEAR_WAKE_WORDS)
+    return any(re.search(rf'\b{re.escape(word)}\b', lowered) for word in NEAR_WAKE_WORDS)
 
 # Return true when the recording should be played back
 def replay_wanted(text, after_wake):
     if REPLAY_MODE:
         return True
-    return REPLAY_WAKE_MODE and (after_wake or WAKE_WORD in text.lower())
+    return REPLAY_WAKE_MODE and (after_wake or has_wake_word(text))
+
+# Return true when the wake word appears as its own word
+def has_wake_word(text):
+    return bool(WAKE_WORD_PATTERN.search(text))
 
 # Return what was said after the wake word
 def text_after_wake(text):
-    position = text.lower().find(WAKE_WORD)
-    return text[position + len(WAKE_WORD):].strip(' ,.!?')
+    match = WAKE_WORD_PATTERN.search(text)
+    if not match:
+        return ''
+    return text[match.end():].strip(' ,.!?')
 
 # Transcribe audio samples to text
 def transcribe(whisper_model, audio):

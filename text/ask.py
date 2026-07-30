@@ -19,7 +19,7 @@ MODEL = "gemma-4-e2b"
 DEFAULT_PROMPT = "Introduce yourself in one short sentence."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPT_PATH = os.path.join(SCRIPT_DIR, "prompt.json")
-DEFAULT_SYSTEM_PROMPT = "I am a robot head on a desk, answering questions. Answer in one or two short sentences suitable for speaking aloud. When asked to look left, right, or center, call the look tool. Never guess or claim a volume change. To change volume you must call set_volume with the percent. To check volume you must call get_volume. Never guess voice changes. Always call set_voice or list_voices first, then answer using only that tool result. When listing voices, keep the spoken answer short and mention only a few examples plus the current voice. Never guess the time, date, or day of the week. Always call get_time, get_date, or get_day first, then answer using only that tool result. Never guess arithmetic. Always call calculate with a Python math expression, then answer using only that tool result."
+DEFAULT_SYSTEM_PROMPT = "I am a robot head on a desk, answering questions. Answer in one or two short sentences suitable for speaking aloud. When asked to look left, right, or center, call the look tool. Never guess or claim a volume change. To change volume you must call set_volume with the percent. To check volume you must call get_volume. Use the exact percent returned by the tool. Never guess voice changes. To change voice you must call set_voice. To list voices you must call list_voices, then speak the names from the tool result. Never guess the time, date, or day of the week. Always call get_time, get_date, or get_day first, then answer using only that tool result. Never guess arithmetic. Always call calculate with a Python math expression, then answer using only that tool result."
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
@@ -31,7 +31,7 @@ VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
 CLOCK_RETRY_PROMPT = "Do not guess. Call get_time, get_date, or get_day now, then answer using only the tool result."
 MATH_RETRY_PROMPT = "Do not guess. Call calculate with a Python math expression now, then answer using only the tool result."
 VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested percent, then answer using only the tool result."
-VOICE_RETRY_PROMPT = "Do not guess. Call set_voice or list_voices now, then answer using only the tool result."
+VOICE_RETRY_PROMPT = "Do not guess. Call set_voice with the requested voice name now, then answer using only the tool result."
 MATH_ENV = {
     "math": math,
     "abs": abs,
@@ -177,8 +177,16 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_voices",
-            "description": "List the available speaking voices and the current voice.",
-            "parameters": {"type": "object", "properties": {}},
+            "description": "List speaking voice names without af am bf bm prefixes. Use count when the user asks for a number of voices.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "number",
+                        "description": "Optional number of voices to list from the start of the list.",
+                    },
+                },
+            },
         },
     },
 ]
@@ -186,6 +194,7 @@ TOOLS = [
 # Conversation history kept across asks in this process
 conversation_history = []
 talk_module = None
+last_volume_percent = None
 
 # Main
 def main():
@@ -205,6 +214,12 @@ def parse_args():
 
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
+    # Answer volume follow-ups from the last actual ALSA value
+    if last_volume_percent is not None and re.search(r"\bwhat did you set\b", prompt.lower()) and "voice" not in prompt.lower():
+        reply = f"I set the volume to {last_volume_percent} percent."
+        remember_exchange(prompt, reply)
+        return reply
+
     # Start from the system prompt, prior turns, and this question
     messages = [{"role": "system", "content": load_system_prompt()}]
     messages.extend(conversation_history)
@@ -217,7 +232,8 @@ def ask_model(prompt):
     volume_set_used = False
     volume_get_used = False
     voice_retry_used = False
-    voice_tool_used = False
+    voice_set_used = False
+    last_list_voices_result = None
 
     # Loop until the model replies with spoken text
     for _ in range(MAX_TOOL_ROUNDS):
@@ -260,19 +276,29 @@ def ask_model(prompt):
                 messages.append({"role": "user", "content": "Do not guess. Call get_volume now, then answer using only the tool result."})
                 continue
 
-            # Force voice tools when the model guessed a voice change
-            if needs_voice_tool(prompt) and not voice_tool_used and not voice_retry_used:
-                voice_retry_used = True
-                print("[ask] missing voice tool, retrying", flush=True)
-                messages.append(message)
-                messages.append({"role": "user", "content": VOICE_RETRY_PROMPT})
-                continue
+            # Force or apply set_voice when the model skipped a voice change
+            if needs_set_voice(prompt) and not voice_set_used:
+                forced = force_set_voice(prompt, messages, message, voice_retry_used)
+                if forced is True:
+                    voice_retry_used = True
+                    continue
+                if forced:
+                    remember_exchange(prompt, forced)
+                    return forced
+
+            # Prefer the exact list_voices tool text when listing
+            if needs_list_voices(prompt) and not needs_set_voice(prompt):
+                if last_list_voices_result:
+                    remember_exchange(prompt, last_list_voices_result)
+                    return last_list_voices_result
+                result = run_list_voices(list_voices_arguments(prompt))
+                remember_exchange(prompt, result)
+                return result
 
             # Prefer a clear spoken confirmation after a successful volume set
             if not reply and volume_set_used:
-                percent = parse_volume_percent(prompt)
-                if percent is not None:
-                    reply = f"I have set the volume to {percent} percent."
+                if last_volume_percent is not None:
+                    reply = f"I have set the volume to {last_volume_percent} percent."
             remember_exchange(prompt, reply or "Okay.")
             return reply or "Okay."
 
@@ -280,6 +306,7 @@ def ask_model(prompt):
         print(f"[ask] tools: {[call.get('function', {}).get('name') for call in tool_calls]}", flush=True)
         messages.append(message)
         for tool_call in tool_calls:
+            inject_list_voices_count(tool_call, prompt)
             result = run_tool(tool_call)
             tool_name = (tool_call.get("function") or {}).get("name")
             if tool_name in ("get_time", "get_date", "get_day"):
@@ -290,8 +317,10 @@ def ask_model(prompt):
                 volume_set_used = True
             if tool_name == "get_volume":
                 volume_get_used = True
-            if tool_name in ("set_voice", "list_voices"):
-                voice_tool_used = True
+            if tool_name == "set_voice":
+                voice_set_used = True
+            if tool_name == "list_voices":
+                last_list_voices_result = result
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
 
         # If it checked volume instead of setting it, set it in Python now
@@ -303,6 +332,21 @@ def ask_model(prompt):
             if forced:
                 remember_exchange(prompt, forced)
                 return forced
+
+        # If it listed voices instead of setting one, set it in Python now
+        if needs_set_voice(prompt) and not voice_set_used:
+            forced = force_set_voice(prompt, messages, None, True)
+            if forced is True:
+                voice_set_used = True
+                continue
+            if forced:
+                remember_exchange(prompt, forced)
+                return forced
+
+        # Speak the exact voice list from the tool, do not let the model shorten it
+        if needs_list_voices(prompt) and last_list_voices_result and not needs_set_voice(prompt):
+            remember_exchange(prompt, last_list_voices_result)
+            return last_list_voices_result
 
     # Give up after too many tool rounds
     reply = "I could not finish that request."
@@ -349,6 +393,8 @@ def needs_set_volume(prompt):
 # Return true when the user only wants the current volume
 def needs_get_volume(prompt):
     text = prompt.lower()
+    if re.search(r"\bwhat did you set\b", text) and "voice" not in text:
+        return True
     if "volume" not in text:
         return False
     if needs_set_volume(prompt):
@@ -389,16 +435,106 @@ def force_set_volume(prompt, messages, message, already_retried):
         return None
     result = run_set_volume({"percent": percent})
     print(f"[ask] forced set_volume -> {result}", flush=True)
+    if last_volume_percent is not None:
+        return f"I have set the volume to {last_volume_percent} percent."
     return f"I have set the volume to {percent} percent."
 
-# Return true when the question needs a voice tool
-def needs_voice_tool(prompt):
+# Return true when the user wants the speaking voice changed
+def needs_set_voice(prompt):
     text = prompt.lower()
-    if re.search(r"\b(list|show|what|which)\b.*\bvoices?\b", text):
-        return True
-    if re.search(r"\bvoices?\b.*\b(list|available|have|use|using)\b", text):
+    if re.search(r"\b(did you|have you)\b", text):
+        return False
+    if needs_list_voices(prompt):
+        return False
+    if re.search(r"\bvoice\s+to\b", text):
         return True
     return bool(re.search(r"\b(change|set|switch|use)\b.*\bvoice\b|\bvoice\b.*\b(to|change|set|switch)\b", text))
+
+# Return true when the user wants the voice list spoken
+def needs_list_voices(prompt):
+    text = prompt.lower()
+    if re.search(r"\b(list|show)\b.*\bvoices?\b", text):
+        return True
+    if re.search(r"\bwhat voices\b|\bwhich voices\b", text):
+        return True
+    return bool(re.search(r"\bvoices?\b.*\b(list|available|have)\b", text))
+
+# Read a voice name from the user text when present
+def parse_voice_name(prompt):
+    talk = load_talk_module()
+    text = prompt.lower()
+
+    # Prefer a known full or short voice name mentioned in the text
+    if talk is not None:
+        voices = getattr(talk, "VOICES", [])
+        matches = []
+        for voice in voices:
+            short = talk.voice_short_name(voice)
+            for name in (voice, short, voice.replace("_", " "), short.replace("_", " ")):
+                if re.search(rf"\b{re.escape(name)}\b", text):
+                    matches.append((len(name), voice))
+        if matches:
+            matches.sort(reverse=True)
+            return matches[0][1]
+
+    # Fall back to the words after voice to
+    match = re.search(r"\bvoice\s+to\s+(.+?)(?:[.!?]|$)", text)
+    if match:
+        return match.group(1).strip(" ,")
+    return None
+
+# Read how many voices to list when the user asked for a count
+def parse_voice_count(prompt):
+    match = re.search(r"\b(\d+)\s+voices?\b", prompt.lower())
+    if match:
+        return max(1, int(match.group(1)))
+    match = re.search(r"\blist\s+(\d+)\b", prompt.lower())
+    if match:
+        return max(1, int(match.group(1)))
+    return None
+
+# Build list_voices arguments from the user text
+def list_voices_arguments(prompt):
+    count = parse_voice_count(prompt)
+    if count is None:
+        return {}
+    return {"count": count}
+
+# Fill in list_voices count when the model omitted it
+def inject_list_voices_count(tool_call, prompt):
+    function = tool_call.get("function") or {}
+    if function.get("name") != "list_voices":
+        return
+    arguments = parse_tool_arguments(function.get("arguments"))
+    if "count" in arguments:
+        return
+    count = parse_voice_count(prompt)
+    if count is None:
+        return
+    function["arguments"] = json.dumps({**arguments, "count": count})
+
+# Retry set_voice once, then apply it in Python if still missing
+def force_set_voice(prompt, messages, message, already_retried):
+    voice = parse_voice_name(prompt)
+
+    # First miss, ask the model again with an explicit set_voice order
+    if not already_retried:
+        print("[ask] missing set_voice, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        if voice is None:
+            retry = VOICE_RETRY_PROMPT
+        else:
+            retry = f"Do not guess. Call set_voice with voice {voice} now, then answer using only the tool result."
+        messages.append({"role": "user", "content": retry})
+        return True
+
+    # Second miss, set it directly in Python
+    if voice is None:
+        return None
+    result = run_set_voice({"voice": voice})
+    print(f"[ask] forced set_voice -> {result}", flush=True)
+    return result
 
 # Remember one question and spoken reply for later asks
 def remember_exchange(prompt, reply):
@@ -499,7 +635,7 @@ def run_tool(tool_call):
 
     # List speaking voices
     if name == "list_voices":
-        result = run_list_voices()
+        result = run_list_voices(arguments)
         print(f"[tool] {name} -> {result}", flush=True)
         return result
 
@@ -595,6 +731,7 @@ def format_math_result(result):
 
 # Set speaker volume from tool arguments
 def run_set_volume(arguments):
+    global last_volume_percent
     if "percent" not in arguments:
         return "Volume percent is required."
     try:
@@ -606,14 +743,18 @@ def run_set_volume(arguments):
         return "Could not set the volume."
     actual = read_speaker_volume()
     if actual is None:
+        last_volume_percent = percent
         return f"Volume set to {percent} percent."
+    last_volume_percent = actual
     return f"Volume set to {actual} percent."
 
 # Read speaker volume for the tool
 def run_get_volume():
+    global last_volume_percent
     percent = read_speaker_volume()
     if percent is None:
         return "Could not read the volume."
+    last_volume_percent = percent
     return f"Volume is {percent} percent."
 
 # Change the talk speaking voice
@@ -628,12 +769,16 @@ def run_set_voice(arguments):
         return f"Voice change failed: {error}"
 
 # List talk speaking voices
-def run_list_voices():
+def run_list_voices(arguments=None):
     talk = load_talk_module()
     if talk is None:
         return "Voice list is unavailable."
+    arguments = arguments or {}
+    count = arguments.get("count")
     try:
-        return talk.list_voices()
+        if count is None:
+            return talk.list_voices()
+        return talk.list_voices(count)
     except Exception as error:
         return f"Voice list failed: {error}"
 
