@@ -257,6 +257,12 @@ def ask_model(prompt):
         if reply:
             return reply
 
+    # Answer with the last day-count number from history
+    if needs_prior_calculate_result(prompt):
+        reply = answer_prior_calculate_result(prompt)
+        if reply:
+            return reply
+
     # Start from the system prompt, prior turns, and this question
     messages = [{"role": "system", "content": load_system_prompt()}]
     messages.extend(conversation_history)
@@ -266,6 +272,8 @@ def ask_model(prompt):
     math_retry_used = False
     math_tool_used = False
     date_math_retry_used = False
+    last_calculate_expression = None
+    last_calculate_result = None
     volume_retry_used = False
     volume_set_used = False
     volume_get_used = False
@@ -288,8 +296,12 @@ def ask_model(prompt):
                 messages.append({"role": "user", "content": CLOCK_RETRY_PROMPT})
                 continue
 
-            # Force real date math when the model guessed a day count
+            # Prefer a date expression already calculated, else force Python date math
             if needs_date_math(prompt):
+                spoken = speak_model_date_calculate(last_calculate_expression, last_calculate_result)
+                if spoken:
+                    remember_turn(messages, spoken)
+                    return spoken
                 forced = force_date_calculate(prompt, messages, message, date_math_retry_used)
                 if forced is True:
                     date_math_retry_used = True
@@ -363,6 +375,9 @@ def ask_model(prompt):
                 clock_tool_used = True
             if tool_name == "calculate":
                 math_tool_used = True
+                arguments = parse_tool_arguments((tool_call.get("function") or {}).get("arguments"))
+                last_calculate_expression = arguments.get("expression", "")
+                last_calculate_result = result
             if tool_name == "set_volume":
                 volume_set_used = True
             if tool_name == "get_volume":
@@ -373,12 +388,16 @@ def ask_model(prompt):
                 last_list_voices_result = result
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
 
-        # Always resolve day counts in Python, ignore a guessed year from the model
+        # Resolve day counts in Python, or keep a valid date expression the model already ran
         if needs_date_math(prompt):
             forced = force_date_calculate(prompt, messages, None, True)
             if forced:
                 remember_turn(messages, forced)
                 return forced
+            spoken = speak_model_date_calculate(last_calculate_expression, last_calculate_result)
+            if spoken:
+                remember_turn(messages, spoken)
+                return spoken
 
         # If it checked volume instead of setting it, set it in Python now
         if needs_set_volume(prompt) and not volume_set_used:
@@ -432,7 +451,7 @@ def needs_date_math(prompt):
         return True
     if re.search(r"\b(until|till)\b.*\b(" + "|".join(MONTH_NAMES) + r")\b", text):
         return True
-    return bool(re.search(r"\b(end of|left in)\s+(the\s+)?month\b", text))
+    return bool(re.search(r"\b(end of|left in)\s+(the\s+)?(month|year)\b|\bnew year'?s?\b", text))
 
 # Return true when the question needs the Python math tool
 def needs_math_tool(prompt):
@@ -454,6 +473,17 @@ def needs_prior_calculate_year(prompt):
     text = prompt.lower()
     return bool(re.search(r"\b(which|what)\s+year\b", text))
 
+# Return true when the user asks for the last calculated day count
+def needs_prior_calculate_result(prompt):
+    text = prompt.lower()
+    if needs_date_math(prompt):
+        return False
+    if re.search(r"\b(tell me|what was|what's|what is)\s+(the\s+)?number\b", text):
+        return True
+    if re.search(r"\bthe number\b", text) and re.search(r"\b(history|calculation|calculated)\b", text):
+        return True
+    return bool(re.search(r"\b(read|check)\b.*\b(history|calculation|context)\b", text))
+
 # Answer day counts with a Python date expression and keep it in history
 def answer_date_math(prompt):
     expression, target = date_math_expression(prompt)
@@ -474,6 +504,15 @@ def answer_prior_calculate_year(prompt):
     if not match:
         return None
     reply = f"I used the year {match.group(1)}."
+    remember_exchange(prompt, reply)
+    return reply
+
+# Answer with the last calculate day-count result from history
+def answer_prior_calculate_result(prompt):
+    result = last_history_calculate_result()
+    if result is None:
+        return None
+    reply = f"The number is {result}."
     remember_exchange(prompt, reply)
     return reply
 
@@ -510,6 +549,25 @@ def last_history_calculate_expression():
                 return expression
     return None
 
+# Read the most recent calculate tool result from history
+def last_history_calculate_result():
+    for index in range(len(conversation_history) - 1, -1, -1):
+        message = conversation_history[index]
+        if message.get("role") != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        for prior_index in range(index - 1, -1, -1):
+            prior = conversation_history[prior_index]
+            for tool_call in prior.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                if tool_call.get("id") == tool_call_id and function.get("name") == "calculate":
+                    content = message.get("content")
+                    if content is not None and str(content).strip() != "":
+                        return str(content).strip()
+            if prior.get("role") == "user":
+                break
+    return None
+
 # Build a date subtraction expression for the user question
 def date_math_expression(prompt):
     target = parse_target_date(prompt)
@@ -517,12 +575,35 @@ def date_math_expression(prompt):
         year, month, day = target
         return f"(date({year}, {month}, {day}) - today()).days", target
     text = prompt.lower()
+    today_value = date.today()
+    if re.search(r"\bend of (the )?year\b|\bnew year'?s?\b|\bleft in (the )?year\b", text):
+        target = (today_value.year, 12, 31)
+        return f"(date({target[0]}, 12, 31) - today()).days", target
     if re.search(r"\bdays?\s+left|\bremaining days\b|\bend of (the )?month\b|\bleft in (the )?month\b", text):
-        today_value = date.today()
         last_day = calendar.monthrange(today_value.year, today_value.month)[1]
         target = (today_value.year, today_value.month, last_day)
         return f"(date({target[0]}, {target[1]}, {target[2]}) - today()).days", target
     return None, None
+
+# Speak a day count from a date expression the model already calculated
+def speak_model_date_calculate(expression, result):
+    if result is None or not expression:
+        return None
+    if not re.search(r"\btoday\s*\(\s*\)", expression):
+        return None
+    if not re.search(r"\.days\b", expression):
+        return None
+    target = parse_date_expression_target(expression)
+    if target is None:
+        return None
+    return speak_date_math_result(result, target)
+
+# Read year month day from a date(...) call in an expression
+def parse_date_expression_target(expression):
+    match = re.search(r"\bdate\s*\(\s*(\d{4})\s*,\s*(\d{1,2})\s*,\s*(\d{1,2})\s*\)", expression or "")
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
 
 # Read a month day and optional year from the user text
 def parse_target_date(prompt):

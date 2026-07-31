@@ -32,7 +32,7 @@ VOICES = [
 WAKE_WORD = 'robot'
 NEAR_WAKE_WORDS = ('rob', 'rub')
 GREETING = 'Hi!'
-ACKNOWLEDGEMENT = 'Yes?'
+ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
 
