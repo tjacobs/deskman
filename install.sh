@@ -9,10 +9,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 PYTHON_VERSION="3.12"
-PYTHON_PACKAGES=(kokoro soundfile torch)
+PYTHON_PACKAGES=(kokoro soundfile)
 SPACY_MODEL_URL="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 LISTEN_PACKAGES=(faster-whisper)
 BUILD_PACKAGES=(pybind11 wheel)
+
+# Config torch, the default linux wheel pulls cuda libraries a raspberry pi cannot load
+TORCH_PACKAGES=(torch)
+TORCH_CPU_INDEX_URL="https://download.pytorch.org/whl/cpu"
+CUDA_PACKAGE_PATTERN="^nvidia-"
+DEVICE_TREE_MODEL="/proc/device-tree/model"
+RASPBERRY_PI_MATCH="Raspberry Pi"
 
 # Config system packages and players
 LINUX_PACKAGES=(espeak-ng alsa-utils)
@@ -183,11 +190,45 @@ create_venv() {
 
 # Install the python packages into the venv
 install_python_packages() {
+    # Install torch first so kokoro does not pull the cuda build in as a dependency
+    install_torch
+
     # Install kokoro and its runtime
     install_packages "${PYTHON_PACKAGES[@]}"
 
     # Install the spacy english model kokoro downloads on first run
     install_packages "${SPACY_MODEL_URL}"
+}
+
+# Install torch, cpu wheels on a raspberry pi and the default wheels elsewhere
+install_torch() {
+    # Use the default index when the machine can run cuda
+    if ! is_raspberry_pi; then
+        install_packages "${TORCH_PACKAGES[@]}"
+        return 0
+    fi
+
+    # Drop any cuda packages a previous run installed, they are gigabytes of dead weight here
+    echo "Raspberry Pi detected, installing CPU torch."
+    remove_cuda_packages
+
+    # Install from the cpu index, the default wheel preloads cuda libraries and crashes on import
+    uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_CPU_INDEX_URL}" "${TORCH_PACKAGES[@]}"
+}
+
+# Uninstall the nvidia cuda packages when present
+remove_cuda_packages() {
+    # Skip when no cuda packages are installed
+    local installed
+    installed="$(uv pip list --python "${VENV_DIR}/bin/python" 2>/dev/null | awk '{print $1}' | grep -E "${CUDA_PACKAGE_PATTERN}" || true)"
+    if [[ -z "${installed}" ]]; then
+        return 0
+    fi
+
+    # Remove them so the venv stays small and torch cannot preload them
+    echo "Removing CUDA packages not needed on this machine..."
+    # shellcheck disable=SC2086
+    uv pip uninstall --python "${VENV_DIR}/bin/python" ${installed}
 }
 
 # Quit when the imports or the audio player are unavailable
@@ -211,6 +252,13 @@ install_listen() {
     # Install sox on mac, listen.py records with it there
     if [[ "$(uname -s)" == "Darwin" ]]; then
         install_mac_packages "${MAC_LISTEN_PACKAGES[@]}"
+        install_packages "${LISTEN_PACKAGES[@]}"
+        return 0
+    fi
+
+    # Install cpu wheels on a raspberry pi, it has no cuda gpu to build against
+    if is_raspberry_pi; then
+        echo "Raspberry Pi detected, installing CPU wheels."
         install_packages "${LISTEN_PACKAGES[@]}"
         return 0
     fi
@@ -327,7 +375,7 @@ build_llama_cpp() {
     fi
 
     # Configure CUDA on Jetson or CPU elsewhere
-    if [[ -x "${CUDA_BIN}/nvcc" ]]; then
+    if [[ -x "${CUDA_BIN}/nvcc" ]] && ! is_raspberry_pi; then
         PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
     else
         cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
@@ -394,6 +442,15 @@ find_brew() {
             return 0
         fi
     done
+}
+
+# Return true when running on a raspberry pi
+is_raspberry_pi() {
+    # Read the board name the firmware exposes, missing on other machines
+    if [[ -r "${DEVICE_TREE_MODEL}" ]] && tr -d '\0' < "${DEVICE_TREE_MODEL}" | grep -q "${RASPBERRY_PI_MATCH}"; then
+        return 0
+    fi
+    return 1
 }
 
 # Return audio player command for this platform
