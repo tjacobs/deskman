@@ -2,6 +2,7 @@
 
 # Imports
 import ast
+import calendar
 import json
 import math
 import os
@@ -11,6 +12,7 @@ import time
 import subprocess
 import urllib.error
 import urllib.request
+from datetime import date
 
 # Config
 API_URL = "http://127.0.0.1:8080/v1/chat/completions"
@@ -30,22 +32,25 @@ LOOK_DEFAULT_DEGREES = 60
 VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
 CLOCK_RETRY_PROMPT = "Do not guess. Call get_time, get_date, or get_day now, then answer using only the tool result."
 MATH_RETRY_PROMPT = "Do not guess. Call calculate with a Python math expression now, then answer using only the tool result."
+DATE_MATH_RETRY_PROMPT = "Do not guess. Call calculate with a date expression using date and today, for example (date(2026, 8, 15) - today()).days, then answer using only the tool result. Never pass a bare number."
 VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested percent, then answer using only the tool result."
 VOICE_RETRY_PROMPT = "Do not guess. Call set_voice with the requested voice name now, then answer using only the tool result."
-MATH_ENV = {
-    "math": math,
-    "abs": abs,
-    "round": round,
-    "min": min,
-    "max": max,
-    "pow": pow,
-    "sqrt": math.sqrt,
-    "sin": math.sin,
-    "cos": math.cos,
-    "tan": math.tan,
-    "pi": math.pi,
-    "e": math.e,
+MONTH_NAMES = {
+    "january": 1, "jan": 1,
+    "february": 2, "feb": 2,
+    "march": 3, "mar": 3,
+    "april": 4, "apr": 4,
+    "may": 5,
+    "june": 6, "jun": 6,
+    "july": 7, "jul": 7,
+    "august": 8, "aug": 8,
+    "september": 9, "sep": 9, "sept": 9,
+    "october": 10, "oct": 10,
+    "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
 }
+MONTH_LABELS = ("", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+DATE_ATTRS = ("days", "year", "month", "day")
 MATH_SAFE_NODES = (
     ast.Expression,
     ast.BinOp,
@@ -65,6 +70,22 @@ MATH_SAFE_NODES = (
     ast.UAdd,
     ast.USub,
 )
+
+MATH_ENV = {
+    "math": math,
+    "date": date,
+    "abs": abs,
+    "round": round,
+    "min": min,
+    "max": max,
+    "pow": pow,
+    "sqrt": math.sqrt,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "pi": math.pi,
+    "e": math.e,
+}
 
 # Tools the local model can call
 TOOLS = [
@@ -118,13 +139,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "calculate",
-            "description": "Evaluate a math expression with Python. Required for any arithmetic, multiplication, division, roots, or numeric calculation. Never invent the answer.",
+            "description": "Evaluate a Python math or date expression. Required for arithmetic and day counts. For days until a date use (date(year, month, day) - today()).days. Never invent the answer and never pass a bare number.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "expression": {
                         "type": "string",
-                        "description": "Python math expression, for example 17 * 43 or math.sqrt(144).",
+                        "description": "Python expression, for example 17 * 43, math.sqrt(144), or (date(2026, 8, 15) - today()).days.",
                     },
                 },
                 "required": ["expression"],
@@ -195,6 +216,7 @@ TOOLS = [
 conversation_history = []
 talk_module = None
 last_volume_percent = None
+last_tool_log = []
 
 # Main
 def main():
@@ -214,11 +236,26 @@ def parse_args():
 
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
+    # Start a fresh tool log for this ask
+    last_tool_log.clear()
+
     # Answer volume follow-ups from the last actual ALSA value
     if last_volume_percent is not None and re.search(r"\bwhat did you set\b", prompt.lower()) and "voice" not in prompt.lower():
         reply = f"I set the volume to {last_volume_percent} percent."
         remember_exchange(prompt, reply)
         return reply
+
+    # Answer day counts in Python with the next matching future date
+    if needs_date_math(prompt):
+        reply = answer_date_math(prompt)
+        if reply:
+            return reply
+
+    # Answer which year the last date calculation used
+    if needs_prior_calculate_year(prompt):
+        reply = answer_prior_calculate_year(prompt)
+        if reply:
+            return reply
 
     # Start from the system prompt, prior turns, and this question
     messages = [{"role": "system", "content": load_system_prompt()}]
@@ -228,6 +265,7 @@ def ask_model(prompt):
     clock_tool_used = False
     math_retry_used = False
     math_tool_used = False
+    date_math_retry_used = False
     volume_retry_used = False
     volume_set_used = False
     volume_get_used = False
@@ -242,13 +280,23 @@ def ask_model(prompt):
         if not tool_calls:
             reply = (message.get("content") or "").strip()
 
-            # Force a clock tool when the model guessed time, date, or day
+            # Force a clock tool when the model guessed today's time, date, or day
             if needs_clock_tool(prompt) and not clock_tool_used and not clock_retry_used:
                 clock_retry_used = True
                 print("[ask] missing clock tool, retrying", flush=True)
                 messages.append(message)
                 messages.append({"role": "user", "content": CLOCK_RETRY_PROMPT})
                 continue
+
+            # Force real date math when the model guessed a day count
+            if needs_date_math(prompt):
+                forced = force_date_calculate(prompt, messages, message, date_math_retry_used)
+                if forced is True:
+                    date_math_retry_used = True
+                    continue
+                if forced:
+                    remember_turn(messages, forced)
+                    return forced
 
             # Force calculate when the model guessed arithmetic
             if needs_math_tool(prompt) and not math_tool_used and not math_retry_used:
@@ -291,7 +339,9 @@ def ask_model(prompt):
                 if last_list_voices_result:
                     remember_turn(messages, last_list_voices_result)
                     return last_list_voices_result
-                result = run_list_voices(list_voices_arguments(prompt))
+                arguments = list_voices_arguments(prompt)
+                result = run_list_voices(arguments)
+                record_tool("list_voices", arguments, result)
                 remember_turn(messages, result)
                 return result
 
@@ -323,6 +373,13 @@ def ask_model(prompt):
                 last_list_voices_result = result
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
 
+        # Always resolve day counts in Python, ignore a guessed year from the model
+        if needs_date_math(prompt):
+            forced = force_date_calculate(prompt, messages, None, True)
+            if forced:
+                remember_turn(messages, forced)
+                return forced
+
         # If it checked volume instead of setting it, set it in Python now
         if needs_set_volume(prompt) and not volume_set_used:
             forced = force_set_volume(prompt, messages, None, True)
@@ -353,27 +410,191 @@ def ask_model(prompt):
     remember_turn(messages, reply)
     return reply
 
-# Return true when the question needs a live clock tool
+# Return true when the question needs today's time, date, or weekday
 def needs_clock_tool(prompt):
     text = prompt.lower()
-    if re.search(r"\bdate\b", text) or re.search(r"\btoday\b", text):
+    if needs_date_math(prompt):
+        return False
+    if re.search(r"\b(what|what's|whats)\s+time\b|\btime\s+is\s+it\b|\bcurrent time\b", text):
         return True
-    if re.search(r"\btime\b", text):
+    if re.search(r"\b(what|what's|whats)\s+(is\s+)?(the\s+)?(current\s+)?date\b|\bcurrent date\b|\btoday'?s date\b", text):
         return True
-    return bool(re.search(r"\b(what|which)\s+day\b|\bday\s+(is|of)\b", text))
+    if re.search(r"\b(what|which)\s+day\b|\bday\s+(is it|of the week)\b|\bwhat day is today\b", text):
+        return True
+    return bool(re.search(r"\btoday\b", text) and re.search(r"\b(date|day)\b", text))
+
+# Return true when the question needs a day-count date calculation
+def needs_date_math(prompt):
+    text = prompt.lower()
+    if re.search(r"\bhow many days\b", text):
+        return True
+    if re.search(r"\bdays?\s+(until|till|to|left|remaining)\b", text):
+        return True
+    if re.search(r"\b(until|till)\b.*\b(" + "|".join(MONTH_NAMES) + r")\b", text):
+        return True
+    return bool(re.search(r"\b(end of|left in)\s+(the\s+)?month\b", text))
 
 # Return true when the question needs the Python math tool
 def needs_math_tool(prompt):
     text = prompt.lower()
-    if "volume" in text:
+    if "volume" in text or needs_date_math(prompt):
         return False
-    if any(word in text for word in ("plus", "minus", "times", "divided", "multiply", "square root", "calculate")):
+    if "square root" in text:
+        return True
+    if re.search(r"\b(plus|minus|times|divided|multiply|calculate)\b", text):
         return True
     if re.search(r"\d+\s*percent\s+of\b", text):
         return True
     if re.search(r"\d+\s*[\+\-\*\/x×÷]\s*\d+", text):
         return True
     return bool(re.search(r"\b(what is|what's)\s+\d", text))
+
+# Return true when the user asks which year a prior calculation used
+def needs_prior_calculate_year(prompt):
+    text = prompt.lower()
+    return bool(re.search(r"\b(which|what)\s+year\b", text))
+
+# Answer day counts with a Python date expression and keep it in history
+def answer_date_math(prompt):
+    expression, target = date_math_expression(prompt)
+    if expression is None:
+        return None
+    result = run_calculate(expression)
+    record_tool("calculate", {"expression": expression}, result)
+    reply = speak_date_math_result(result, target)
+    remember_date_math_turn(prompt, expression, result, reply)
+    return reply
+
+# Answer which year the last calculate date expression used
+def answer_prior_calculate_year(prompt):
+    expression = last_history_calculate_expression()
+    if not expression:
+        return None
+    match = re.search(r"\bdate\s*\(\s*(\d{4})", expression)
+    if not match:
+        return None
+    reply = f"I used the year {match.group(1)}."
+    remember_exchange(prompt, reply)
+    return reply
+
+# Keep a date-math tool call and spoken reply in conversation history
+def remember_date_math_turn(prompt, expression, result, reply):
+    tool_call_id = "date_math"
+    conversation_history.append({"role": "user", "content": prompt})
+    conversation_history.append({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": "calculate",
+                "arguments": json.dumps({"expression": expression}),
+            },
+        }],
+    })
+    conversation_history.append({"role": "tool", "tool_call_id": tool_call_id, "content": result})
+    conversation_history.append({"role": "assistant", "content": reply})
+    trim_conversation_history()
+
+# Read the most recent calculate expression from history
+def last_history_calculate_expression():
+    for message in reversed(conversation_history):
+        for tool_call in message.get("tool_calls") or []:
+            function = tool_call.get("function") or {}
+            if function.get("name") != "calculate":
+                continue
+            arguments = parse_tool_arguments(function.get("arguments"))
+            expression = arguments.get("expression")
+            if expression:
+                return expression
+    return None
+
+# Build a date subtraction expression for the user question
+def date_math_expression(prompt):
+    target = parse_target_date(prompt)
+    if target is not None:
+        year, month, day = target
+        return f"(date({year}, {month}, {day}) - today()).days", target
+    text = prompt.lower()
+    if re.search(r"\bdays?\s+left|\bremaining days\b|\bend of (the )?month\b|\bleft in (the )?month\b", text):
+        today_value = date.today()
+        last_day = calendar.monthrange(today_value.year, today_value.month)[1]
+        target = (today_value.year, today_value.month, last_day)
+        return f"(date({target[0]}, {target[1]}, {target[2]}) - today()).days", target
+    return None, None
+
+# Read a month day and optional year from the user text
+def parse_target_date(prompt):
+    text = prompt.lower()
+    month_pattern = "|".join(sorted(MONTH_NAMES, key=len, reverse=True))
+    match = re.search(rf"\b({month_pattern})\s+(\d{{1,2}})(?:st|nd|rd|th)?(?:\s*,?\s*(\d{{4}}))?\b", text)
+    if match:
+        month = MONTH_NAMES[match.group(1)]
+        day = int(match.group(2))
+        year_text = match.group(3)
+    else:
+        match = re.search(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?({month_pattern})(?:\s*,?\s*(\d{{4}}))?\b", text)
+        if not match:
+            return None
+        day = int(match.group(1))
+        month = MONTH_NAMES[match.group(2)]
+        year_text = match.group(3)
+    if day < 1 or day > 31:
+        return None
+    today_value = date.today()
+    if year_text:
+        year = int(year_text)
+    else:
+        year = today_value.year
+        if date(year, month, min(day, calendar.monthrange(year, month)[1])) < today_value:
+            year += 1
+    last_day = calendar.monthrange(year, month)[1]
+    if day > last_day:
+        return None
+    return year, month, day
+
+# Retry date math once, then compute it in Python if still missing
+def force_date_calculate(prompt, messages, message, already_retried):
+    expression, target = date_math_expression(prompt)
+
+    # First miss, ask the model again with an explicit date expression
+    if not already_retried:
+        print("[ask] missing date math, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        if expression is None:
+            retry = DATE_MATH_RETRY_PROMPT
+        else:
+            retry = f"Do not guess. Call calculate with expression {expression} now, then answer using only the tool result."
+        messages.append({"role": "user", "content": retry})
+        return True
+
+    # Second miss, calculate it directly in Python
+    if expression is None:
+        return None
+    result = run_calculate(expression)
+    record_tool("calculate", {"expression": expression}, result)
+    print(f"[ask] forced date calculate -> {result}", flush=True)
+    return speak_date_math_result(result, target)
+
+# Turn a day-count tool result into a short spoken reply
+def speak_date_math_result(result, target):
+    try:
+        days = int(result)
+    except (TypeError, ValueError):
+        return f"I could not finish that date calculation."
+    if target is None:
+        return f"There are {days} days."
+    year, month, day = target
+    label = f"{MONTH_LABELS[month]} {day}, {year}"
+    if days < 0:
+        return f"{label} was {abs(days)} days ago."
+    if days == 0:
+        return f"Today is {label}."
+    if days == 1:
+        return f"There is 1 day until {label}."
+    return f"There are {days} days until {label}."
 
 # Return true when the question needs a volume tool
 def needs_volume_tool(prompt):
@@ -433,7 +654,9 @@ def force_set_volume(prompt, messages, message, already_retried):
     # Second miss, set it directly in Python
     if percent is None:
         return None
-    result = run_set_volume({"percent": percent})
+    arguments = {"percent": percent}
+    result = run_set_volume(arguments)
+    record_tool("set_volume", arguments, result)
     print(f"[ask] forced set_volume -> {result}", flush=True)
     if last_volume_percent is not None:
         return f"I have set the volume to {last_volume_percent} percent."
@@ -532,7 +755,9 @@ def force_set_voice(prompt, messages, message, already_retried):
     # Second miss, set it directly in Python
     if voice is None:
         return None
-    result = run_set_voice({"voice": voice})
+    arguments = {"voice": voice}
+    result = run_set_voice(arguments)
+    record_tool("set_voice", arguments, result)
     print(f"[ask] forced set_voice -> {result}", flush=True)
     return result
 
@@ -591,66 +816,74 @@ def run_tool(tool_call):
     function = tool_call.get("function") or {}
     name = function.get("name", "")
     arguments = parse_tool_arguments(function.get("arguments"))
-    print(f"[tool] {name} {arguments}", flush=True)
 
     # Turn the head through robot look.py
     if name == "look":
         result = run_look(arguments)
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Return the current clock time
     if name == "get_time":
         result = clock_time()
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Return the current calendar date
     if name == "get_date":
         result = calendar_date()
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Return the current weekday
     if name == "get_day":
         result = calendar_day()
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Evaluate math in Python
     if name == "calculate":
         result = run_calculate(arguments.get("expression", ""))
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Set the speaker volume
     if name == "set_volume":
         result = run_set_volume(arguments)
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Read the speaker volume
     if name == "get_volume":
         result = run_get_volume()
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Change the speaking voice
     if name == "set_voice":
         result = run_set_voice(arguments)
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # List speaking voices
     if name == "list_voices":
         result = run_list_voices(arguments)
-        print(f"[tool] {name} -> {result}", flush=True)
+        record_tool(name, arguments, result)
         return result
 
     # Unknown tool
     result = f"Unknown tool: {name}"
-    print(f"[tool] {name} -> {result}", flush=True)
+    record_tool(name, arguments, result)
     return result
+
+# Print a tool call and keep it for the talks log
+def record_tool(name, arguments, result):
+    call_line = f"[tool] {name} {arguments}"
+    result_line = f"[tool] {name} -> {result}"
+    last_tool_log.append(call_line)
+    last_tool_log.append(result_line)
+    print(call_line, flush=True)
+    print(result_line, flush=True)
 
 # Parse tool arguments from JSON text or a dict
 def parse_tool_arguments(raw_arguments):
@@ -692,6 +925,12 @@ def load_robot_look():
         return None
     return look
 
+# Return today's date for calculate expressions
+def math_today():
+    return date.today()
+
+MATH_ENV["today"] = math_today
+
 # Evaluate a safe Python math expression
 def run_calculate(expression):
     expression = str(expression or "").strip()
@@ -713,7 +952,7 @@ def run_calculate(expression):
         return f"Math error: {error}"
     return format_math_result(result)
 
-# Return true when the expression tree is only basic math
+# Return true when the expression tree is only basic math or dates
 def math_expression_safe(tree):
     for node in ast.walk(tree):
         if not isinstance(node, MATH_SAFE_NODES):
@@ -721,8 +960,11 @@ def math_expression_safe(tree):
         if isinstance(node, ast.Name) and node.id not in MATH_ENV:
             return False
         if isinstance(node, ast.Attribute):
-            if not isinstance(node.value, ast.Name) or node.value.id != "math":
-                return False
+            if isinstance(node.value, ast.Name) and node.value.id == "math":
+                continue
+            if node.attr in DATE_ATTRS:
+                continue
+            return False
     return True
 
 # Format a math result for a short spoken reply
@@ -735,6 +977,8 @@ def format_math_result(result):
         if result.is_integer():
             return str(int(result))
         return f"{result:.10g}"
+    if isinstance(result, date):
+        return f"{MONTH_LABELS[result.month]} {result.day}, {result.year}"
     return str(result)
 
 # Set speaker volume from tool arguments

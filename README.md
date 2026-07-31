@@ -88,7 +88,7 @@ Say it all in one breath, `robot, what is the time`, and it answers straight awa
 
 The microphone stays open the whole time. A background thread reads it into blocks, the silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. Nothing is missed between turns, and silence is never transcribed. The mic is muted only while it speaks, so it does not hear itself.
 
-Each command is sent to Gemma through `text/ask.py`, and the spoken reply is whatever the model returns. If you ask it to look left or right, it calls the look tool in `~/robot/src/look.py`, default 60 degrees, max 90. Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit. Conversations are appended to `talks/YYYY-MM-DD.txt`.
+Each command is sent to Gemma through `text/ask.py`, and the spoken reply is whatever the model returns. If you ask it to look left or right, it calls the look tool in `~/robot/src/look.py`, default 60 degrees, max 90. Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit. Conversations are appended to `talks/YYYY-MM-DD.txt`, including tool calls and results.
 
 When it nearly hears its name, a transcription with `rob` or `rub` in it but not `robot`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
 

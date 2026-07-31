@@ -206,6 +206,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             # Say goodbye and stop when asked to quit
             if wants_to_quit(command):
                 print(f'Reply: {GOODBYE}', flush=True)
+                text_ask.last_tool_log.clear()
                 log_talk(command, GOODBYE)
                 speak_muted(listener, kokoro_pipeline, GOODBYE)
                 print('Done.')
@@ -445,21 +446,25 @@ def wants_to_quit(command):
 def make_reply(command):
     # No speech heard
     if not command.strip():
+        text_ask.last_tool_log.clear()
         return "I didn't catch that."
 
     # Ask the local LLM, fall back when the server is down
     try:
         return text_ask.ask_model(command)
     except urllib.error.URLError:
+        text_ask.last_tool_log.clear()
         return TEXT_UNAVAILABLE
 
-# Append one command and reply to today's talk log
+# Append one command, tool lines, and reply to today's talk log
 def log_talk(command, reply):
     os.makedirs(TALKS_DIR, exist_ok=True)
     path = os.path.join(TALKS_DIR, time.strftime('%Y-%m-%d') + '.txt')
     stamp = talk_log_time()
     with open(path, 'a', encoding='utf-8') as talk_file:
         talk_file.write(f'{stamp} {command}\n')
+        for line in text_ask.last_tool_log:
+            talk_file.write(f'{stamp} {line}\n')
         talk_file.write(f'{stamp} Reply: {reply}\n')
         talk_file.write('\n')
 
