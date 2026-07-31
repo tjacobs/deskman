@@ -1,5 +1,7 @@
 #!.venv/bin/python
 
+# Talk.py is a voice assistant that uses a local speech to text, a local LLM, a local text to speech, and local wake word detection to answer questions and commands.
+
 # Imports
 import os
 import re
@@ -11,29 +13,45 @@ import warnings
 import platform
 import threading
 import subprocess
+import numpy as np
 import collections
 import urllib.error
 import urllib.request
-import numpy as np
 
-# Config wake and listen
+# Config voice
+DEFAULT_VOICE = 'bm_fable'
+SPEECH_SPEED = 1.2
+VOICES = [
+    'af_heart', 'af_alloy', 'af_aoede', 'af_bella', 'af_jessica', 'af_kore', 'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
+    'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael', 'am_onyx', 'am_puck', 'am_santa',
+    'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
+    'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
+]
+
+# Config wake word and phrases
 WAKE_WORD = 'robot'
-WAKE_WORD_PATTERN = re.compile(rf'\b{re.escape(WAKE_WORD)}\b', re.IGNORECASE)
+NEAR_WAKE_WORDS = ('rob', 'rub')
 GREETING = 'Hi!'
 ACKNOWLEDGEMENT = 'Yes?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
-NEAR_WAKE_WORDS = ('rob', 'rub')
+
+# Config follow-up window
+FOLLOW_UP_SECONDS = 20.0
+
+# Config replay flags
 REPLAY_WAKE_FLAG = f'--replay-{WAKE_WORD}'
 NO_REPLAY_WAKE_FLAG = f'--no-replay-{WAKE_WORD}'
-TEST_QUESTION = 'What is the time?'
-FOLLOW_UP_SECONDS = 20.0
+
+# Config whisper model size
 WHISPER_MODEL_SIZE = 'base'
+
+# Config audio recording
 SAMPLE_RATE = 16000
 MAC_RECORDER = 'rec'
 LINUX_RECORDER = 'arecord'
 
-# Config speech detection, silero reads 512 sample frames
+# Config speech detection
 VAD_FRAME_SAMPLES = 512
 VAD_BLOCK_FRAMES = 8
 VAD_THRESHOLD = 0.5
@@ -53,17 +71,12 @@ MAX_UTTERANCE_BLOCKS = round(MAX_UTTERANCE_SECONDS / BLOCK_SECONDS)
 
 # Config voice
 REPO_ID = 'hexgrad/Kokoro-82M'
-DEFAULT_VOICE = 'bm_fable'
 VOICE = DEFAULT_VOICE
-SPEECH_SPEED = 1.2
 MAC_PLAYER = 'afplay'
 LINUX_PLAYER = 'aplay'
-VOICES = [
-    'af_heart', 'af_alloy', 'af_aoede', 'af_bella', 'af_jessica', 'af_kore', 'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
-    'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael', 'am_onyx', 'am_puck', 'am_santa',
-    'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
-    'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
-]
+
+# Config test question
+TEST_QUESTION = 'What is the time?'
 
 # Config dirs and env
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -101,10 +114,10 @@ def main():
     global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE
     TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE = parse_args()
 
-    # Build the record command, quits when no microphone is available
+    # Build the record command
     record = record_command()
 
-    # Quit early when audio playback is unavailable
+    # Quit if audio playback is unavailable
     check_ready()
 
     # Start the local text model server when it is not already up
@@ -403,6 +416,9 @@ def replay_wanted(text, after_wake):
     if REPLAY_MODE:
         return True
     return REPLAY_WAKE_MODE and (after_wake or has_wake_word(text))
+
+# Compile the wake word pattern once
+WAKE_WORD_PATTERN = re.compile(rf'\b{re.escape(WAKE_WORD)}\b', re.IGNORECASE)
 
 # Return true when the wake word appears as its own word
 def has_wake_word(text):

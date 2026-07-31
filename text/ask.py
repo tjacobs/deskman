@@ -24,7 +24,7 @@ REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
-MAX_HISTORY_MESSAGES = 20
+MAX_HISTORY_MESSAGES = 40
 ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 60
 VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
@@ -265,7 +265,7 @@ def ask_model(prompt):
                     volume_retry_used = True
                     continue
                 if forced:
-                    remember_exchange(prompt, forced)
+                    remember_turn(messages, forced)
                     return forced
 
             # Force get_volume when the model guessed the current volume
@@ -283,23 +283,23 @@ def ask_model(prompt):
                     voice_retry_used = True
                     continue
                 if forced:
-                    remember_exchange(prompt, forced)
+                    remember_turn(messages, forced)
                     return forced
 
             # Prefer the exact list_voices tool text when listing
             if needs_list_voices(prompt) and not needs_set_voice(prompt):
                 if last_list_voices_result:
-                    remember_exchange(prompt, last_list_voices_result)
+                    remember_turn(messages, last_list_voices_result)
                     return last_list_voices_result
                 result = run_list_voices(list_voices_arguments(prompt))
-                remember_exchange(prompt, result)
+                remember_turn(messages, result)
                 return result
 
             # Prefer a clear spoken confirmation after a successful volume set
             if not reply and volume_set_used:
                 if last_volume_percent is not None:
                     reply = f"I have set the volume to {last_volume_percent} percent."
-            remember_exchange(prompt, reply or "Okay.")
+            remember_turn(messages, reply or "Okay.")
             return reply or "Okay."
 
         # Keep the assistant tool call turn, then return each tool result
@@ -330,7 +330,7 @@ def ask_model(prompt):
                 volume_set_used = True
                 continue
             if forced:
-                remember_exchange(prompt, forced)
+                remember_turn(messages, forced)
                 return forced
 
         # If it listed voices instead of setting one, set it in Python now
@@ -340,17 +340,17 @@ def ask_model(prompt):
                 voice_set_used = True
                 continue
             if forced:
-                remember_exchange(prompt, forced)
+                remember_turn(messages, forced)
                 return forced
 
         # Speak the exact voice list from the tool, do not let the model shorten it
         if needs_list_voices(prompt) and last_list_voices_result and not needs_set_voice(prompt):
-            remember_exchange(prompt, last_list_voices_result)
+            remember_turn(messages, last_list_voices_result)
             return last_list_voices_result
 
     # Give up after too many tool rounds
     reply = "I could not finish that request."
-    remember_exchange(prompt, reply)
+    remember_turn(messages, reply)
     return reply
 
 # Return true when the question needs a live clock tool
@@ -536,14 +536,25 @@ def force_set_voice(prompt, messages, message, already_retried):
     print(f"[ask] forced set_voice -> {result}", flush=True)
     return result
 
-# Remember one question and spoken reply for later asks
+# Remember one question and spoken reply when tools were not used
 def remember_exchange(prompt, reply):
     conversation_history.append({"role": "user", "content": prompt})
     conversation_history.append({"role": "assistant", "content": reply})
+    trim_conversation_history()
 
-    # Drop the oldest turns when the history grows too long
+# Keep this ask's messages, including tool calls and results, for later asks
+def remember_turn(messages, reply):
+    global conversation_history
+    conversation_history = list(messages[1:])
+    conversation_history.append({"role": "assistant", "content": reply})
+    trim_conversation_history()
+
+# Drop oldest full turns when history grows too long
+def trim_conversation_history():
     while len(conversation_history) > MAX_HISTORY_MESSAGES:
         conversation_history.pop(0)
+        while conversation_history and conversation_history[0].get("role") != "user":
+            conversation_history.pop(0)
 
 # Load the system prompt from speak/prompt.json
 def load_system_prompt():
