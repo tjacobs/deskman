@@ -9,7 +9,7 @@ Four tools:
 - `listen.py` — live speech to text from the microphone, using [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 - `talk.py` — wake word loop, listens for a command and speaks a reply
 
-Both use CUDA when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
+Both use CUDA when available. Pass `--cpu` to force CPU. Every script takes `--help`.
 
 ```bash
 ./speak.py
@@ -17,6 +17,8 @@ Both use CUDA when available. Pass `--cpu` to force CPU inference. Every script 
 ./say.py
 ./say.py --cpu
 ```
+
+
 
 ## Setup
 
@@ -31,13 +33,13 @@ Pass `--listen` to also install speech to text for `listen.py` and `talk.py`, se
 
 On first run, the model and all voices download into `cache/`.
 
-## speak.py
+## [speak.py](http://speak.py)
 
 Speak a single block of text. Edit the `TEXT` constant in `speak.py` to change what is spoken.
 
 Generated audio files are saved in `audio/` as `001.wav`, `002.wav`, etc.
 
-## say.py
+## [say.py](http://say.py)
 
 Interactive speech tool. Press keys to speak phrases.
 
@@ -45,16 +47,18 @@ Single keypresses work without Enter. Preset phrases are in `say.py` as `PHRASES
 
 ### Controls
 
-| Key | Action |
-|-----|--------|
-| `t` | Type a custom phrase |
-| `r` | Repeat last custom phrase |
-| `c` | Cancel current speech |
-| `x` | Clear queued speech |
-| `+` / `-` | Speed up / down |
-| `v` | Next voice |
-| `h` | Show help |
-| `q` | Quit |
+
+| Key       | Action                    |
+| --------- | ------------------------- |
+| `t`       | Type a custom phrase      |
+| `r`       | Repeat last custom phrase |
+| `c`       | Cancel current speech     |
+| `x`       | Clear queued speech       |
+| `+` / `-` | Speed up / down           |
+| `v`       | Next voice                |
+| `h`       | Show help                 |
+| `q`       | Quit                      |
+
 
 Default speed is 1.5x. Use `+` / `-` to adjust, `v` to change voice.
 
@@ -62,7 +66,7 @@ Generated audio files are saved in `audio/`.
 
 Pass `--test` to speak the first two preset phrases and exit.
 
-## listen.py
+## [listen.py](http://listen.py)
 
 Live transcription from the microphone. Speak and lines print as you talk, CTRL-C to stop.
 
@@ -75,7 +79,7 @@ On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](h
 
 Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the first USB soundcard with a mic on linux, and with sox from the default input device on mac.
 
-## talk.py
+## [talk.py](http://talk.py)
 
 Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Needs the same install as `listen.py`, plus `./install.sh --text`. Starts `./text/server.sh` itself when the model is not already running.
 
@@ -101,7 +105,7 @@ Two flags help check what the mic picked up, and combine with each other and wit
 
 By default it also plays back what was said to it, the utterance with the wake word in it and any command that follows, so you can hear what it caught. Pass `--no-replay-robot` to turn that off. All mute the mic while playing, so it does not hear itself.
 
-## talk service
+## The talk service
 
 Install a systemd service that runs `talk_service.sh` on boot, which starts `~/robot/src/real.py` and `talk.py`, same pattern as `~/robot/install/install_robot_service.sh`:
 
@@ -119,6 +123,8 @@ journalctl -u talk -f
 tail -f ~/speak/log.txt
 ```
 
+
+
 ## Testing
 
 ```bash
@@ -132,7 +138,8 @@ The talk step is skipped when faster-whisper or a microphone is missing.
 
 ## Tools
 
-- `tools-audio.sh` — route audio to any USB soundcard, disable HDMI and APE outputs. Run `./tools-audio.sh --install` once, then `./tools-audio.sh` after plugging in a new adapter
+- `tools-offline.sh` — block internet for offline testing, `./tools-offline.sh --fix` to restore
+- `tools-audio.sh` — route audio to any USB soundcard, disable onboard HDMI audio, on a Raspberry Pi or Jetson.
 - `tools-power.sh` — set Jetson power mode. No args shows status
 
 ```bash
@@ -142,9 +149,8 @@ The talk step is skipped when faster-whisper or a microphone is missing.
 ./tools-power.sh max    # 25W uncapped, full performance, clocks locked high
 ```
 
-- `tools-offline.sh` — block internet for offline testing, `./tools-offline.sh --fix` to restore
-
 ## Notes
 
 - First `say.py` launch downloads all voices and takes longer. Later launches are faster.
 - `min` / `mid` turn off `jetson_clocks` so CPU frequency can drop when idle. `max` turns it back on. `mid` and `max` are both 25W-class; `max` unlocks clocks fully (MAXN_SUPER).
+
