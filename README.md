@@ -106,9 +106,9 @@ By default it also plays back what was said to it, the utterance with the wake w
 Install a systemd service that runs `talk_service.sh` on boot, which starts `~/robot/src/real.py` and `talk.py` with `--no-replay-robot`:
 
 ```bash
-./install_talk.sh
-./install_talk.sh --start
-./install_talk.sh --uninstall
+./install_talk_service.sh
+./install_talk_service.sh --start
+./install_talk_service.sh --uninstall
 ```
 
 ```bash

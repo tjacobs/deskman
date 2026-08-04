@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Install the service that runs talk_service.sh, real.py and talk.py.
-# Usage: ./install_talk.sh             (install, enable)
-#        ./install_talk.sh --start     (install, enable, start now)
-#        ./install_talk.sh --uninstall (uninstall)
+# Usage: ./install_talk_service.sh             (install, enable)
+#        ./install_talk_service.sh --start     (install, enable, start now)
+#        ./install_talk_service.sh --uninstall (uninstall)
 
 # Stop on errors
 set -euo pipefail
