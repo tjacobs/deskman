@@ -9,7 +9,7 @@ Four tools:
 - `listen.py` — live speech to text from the microphone, using [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 - `talk.py` — wake word loop, listens for a command and speaks a reply
 
-Both use CUDA when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
+CUDA is used when available for speak and say. Pass `--cpu` to force CPU inference. Every script takes `--help`.
 
 ```bash
 ./speak.py
@@ -84,11 +84,11 @@ Say the wake word `robot`, then a command, and it speaks a reply from the local 
 ./talk.py
 ```
 
-Say it all in one breath, `robot, what is the time`, and it answers straight away. Say just `robot` and it replies `Yes?`, then waits for the command. Right after `Hi!`, and after each reply, you can keep talking for 20 seconds without saying `robot` again.
+Say it all in one breath, `robot, what is the time`, and it answers straight away. Say just `robot` and it replies `Question for me?`, then waits for the command. Right after `Hi!`, and after each reply, you can keep talking for 20 seconds without saying `robot` again.
 
 The microphone stays open the whole time. A background thread reads it into blocks, the silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. Nothing is missed between turns, and silence is never transcribed. The mic is muted only while it speaks, so it does not hear itself.
 
-Each command is sent to Gemma through `text/ask.py`, and the spoken reply is whatever the model returns. If you ask it to look left or right, it calls the look tool in `~/robot/src/look.py`, default 60 degrees, max 90. Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit. Conversations are appended to `talks/YYYY-MM-DD.txt`, including tool calls and results.
+Each command is sent to Gemma through `text/ask.py`, and the spoken reply is whatever the model returns. Tools cover look left or right via `~/robot/src/look.py`, time and date, math and day counts, volume, and voice. Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit. Conversations are appended to `talks/YYYY-MM-DD.txt`, including tool calls and results.
 
 When it nearly hears its name, a transcription with `rob` or `rub` in it but not `robot`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
 
@@ -111,20 +111,27 @@ Install a systemd service that runs `talk_service.sh` on boot, which starts `~/r
 ./install_talk.sh --uninstall
 ```
 
-Memory samples every 5 minutes go to `monitor.log` via `monitor_memory.sh` cron. After an SSH outage, check that file and run:
-
-```bash
-dmesg -T | rg -i 'oom|killed process'
-journalctl -b -1 -k | rg -i 'oom|killed process'
-last -x | head
-```
-
 ```bash
 sudo service talk start
 sudo service talk stop
 sudo service talk status
 journalctl -u talk -f
 tail -f ~/speak/log.txt
+```
+
+Optional memory sampling every 5 minutes into `monitor.log`:
+
+```bash
+(crontab -l 2>/dev/null | grep -v monitor_memory.sh; echo "*/5 * * * * $HOME/speak/monitor_memory.sh") | crontab -
+```
+
+After an SSH outage, check that file and run:
+
+```bash
+tail -50 ~/speak/monitor.log
+dmesg -T | rg -i 'oom|killed process'
+journalctl -b -1 -k | rg -i 'oom|killed process'
+last -x | head
 ```
 
 ## Testing
