@@ -45,9 +45,9 @@ main() {
     (cd "${ROBOT_SRC}" && exec "${ROBOT_PYTHON}" -u "${REAL_SCRIPT}") &
     real_pid=$!
 
-    # Start talk wake-word loop
+    # Start talk wake-word loop without playing back what was heard
     echo "Starting talk.py..."
-    (cd "${SPEAK_DIR}" && exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}") &
+    (cd "${SPEAK_DIR}" && exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}" --no-replay-robot) &
     talk_pid=$!
 
     # Wait until either exits

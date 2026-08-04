@@ -103,12 +103,20 @@ By default it also plays back what was said to it, the utterance with the wake w
 
 ## talk service
 
-Install a systemd service that runs `talk_service.sh` on boot, which starts `~/robot/src/real.py` and `talk.py`, same pattern as `~/robot/install/install_robot_service.sh`:
+Install a systemd service that runs `talk_service.sh` on boot, which starts `~/robot/src/real.py` and `talk.py` with `--no-replay-robot`:
 
 ```bash
 ./install_talk.sh
 ./install_talk.sh --start
 ./install_talk.sh --uninstall
+```
+
+Memory samples every 5 minutes go to `monitor.log` via `monitor_memory.sh` cron. After an SSH outage, check that file and run:
+
+```bash
+dmesg -T | rg -i 'oom|killed process'
+journalctl -b -1 -k | rg -i 'oom|killed process'
+last -x | head
 ```
 
 ```bash

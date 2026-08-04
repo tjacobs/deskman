@@ -5,4 +5,5 @@ __pycache__/
 .DS_Store
 faster-whisper/
 log.txt
+monitor.log
 talks/
