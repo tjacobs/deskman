@@ -1,0 +1,55 @@
+# Local LLM performance notes
+# Raspberry Pi 5, CPU only, llama-server --threads 2 --threads-batch 4 --ctx-size 4096
+# Measured 2026-08-05
+
+## Models
+
+- e2b: gemma-4-E2B-it-Q4_K_S.gguf (2.82 GiB, 4.65B params), alias gemma-4-e2b
+- 1b:  gemma-3-1b-it-Q4_K_M.gguf (762 MiB, 1.00B params), alias gemma-3-1b
+
+## Raw speed (llama-bench, -t 2 -ngl 0, 3 reps)
+
+| model | test   | t/s        |
+| ----- | ------ | ---------- |
+| 1b    | pp512  | 25.57 ± 0.03 |
+| 1b    | pp1365 | 24.95 ± 0.05 |
+| 1b    | tg64   | 12.35 ± 0.18 |
+| e2b   | pp512  | 16.65 ± 0.01 |
+| e2b   | pp1365 | 15.76 ± 0.02 |
+| e2b   | tg64   |  7.09 ± 0.00 |
+
+1b vs e2b: ~1.6x faster prefill, ~1.7x faster generate.
+
+## Speak-shaped chat API
+
+Same request for both: system prompt + memories merged into one system message,
+14 tools, user "Say hello in one short sentence.", max_tokens=32, temperature=0.7.
+Cold = cache erased first. Warm = repeat same request.
+
+### gemma-3-1b
+
+| round | wall  | prefill                         | generate                    | context      |
+| ----- | ----- | ------------------------------- | --------------------------- | ------------ |
+| cold  | 10.5s | 9.7s (0 cached, 351 new, 36.3 t/s) | 0.8s (11 tok, 13.7 t/s)  | 362/4096 (9%) |
+| warm1 | 1.0s  | 0.2s (346 cached, 5 new)        | 0.8s (11 tok, 13.6 t/s)     | 362/4096 (9%) |
+| warm2 | 1.0s  | 0.2s (346 cached, 5 new)        | 0.8s (11 tok, 13.4 t/s)     | 362/4096 (9%) |
+
+### gemma-4-e2b
+
+| round | wall  | prefill                            | generate                   | context         |
+| ----- | ----- | ---------------------------------- | -------------------------- | --------------- |
+| cold  | 53.3s | 51.5s (0 cached, 1366 new, 26.5 t/s) | 1.8s (12 tok, 6.8 t/s)   | 1378/4096 (34%) |
+| warm1 | 1.6s  | 0.2s (1365 cached, 1 new)          | 1.4s (10 tok, 7.1 t/s)     | 1376/4096 (34%) |
+| warm2 | 1.6s  | 0.2s (1365 cached, 1 new)          | 1.4s (10 tok, 7.1 t/s)     | 1376/4096 (34%) |
+
+### ask.py --clear on e2b (full path, two system messages)
+
+Model: 53.2s  Prefill: 51.7s (0 cached, 1370 new)  Generate: 1.5s  Tokens: 11  Speed: 7.2 tokens/sec  Context: 1381/4096 (34%)
+Total: 53.2s
+
+## Notes
+
+- Cold gap is mostly prompt size: Gemma 4 tool template ~1366 tokens, Gemma 3 ~351 for the same 14 tools.
+- Warm asks are close because KV cache skips the system/tools prefill.
+- ask.py with two system messages fails on gemma-3-1b chat template (roles must alternate); merge system messages or fix before using 1b as default.
+- llama-bench build: 6ea215d (1)

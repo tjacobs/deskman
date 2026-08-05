@@ -8,7 +8,8 @@ Start the server:
 
 ```bash
 cd ~/speak/text
-./server.sh
+./server.sh        # Gemma 4 E2B, better quality
+./server.sh 1b     # Gemma 3 1B, faster on Pi
 ```
 
 In another terminal, ask a question:
@@ -60,7 +61,7 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 
 ## Files
 
-- `server.sh` starts Gemma 4 E2B with GPU acceleration when available and a 4096-token context.
+- `server.sh [e2b|1b]` starts the local model with GPU acceleration when available and a 4096-token context.
 - `ask.py` sends one request and runs the tools the model calls.
 - `move.py` owns the look tool through `~/robot/src/look.py`.
 - `dates.py` owns clock, calendar, and day-count helpers.

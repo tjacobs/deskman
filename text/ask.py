@@ -20,9 +20,11 @@ import volume
 # Config
 API_BASE = "http://127.0.0.1:8080"
 API_URL = f"{API_BASE}/v1/chat/completions"
+MODELS_URL = f"{API_BASE}/v1/models"
 CACHE_URL = f"{API_BASE}/slots"
 API_KEY = "local"
-MODEL = "gemma-4-e2b"
+DEFAULT_MODEL = "gemma-4-e2b"
+DEFAULT_CONTEXT_SIZE = 4096
 
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +51,8 @@ last_tool_log = []
 show_timing = False
 last_completion_tokens = 0
 ask_start = None
+resolved_model = None
+resolved_context_size = None
 
 # Main
 def main():
@@ -63,6 +67,9 @@ def main():
     # Drop the server KV cache so this ask pays full prefill cost
     if clear_cache:
         clear_prompt_cache()
+
+    # Show which model the server is running
+    print(f"Model: {resolve_model_name()}", flush=True)
 
     # Show the system prompt sent to the model when asked
     if print_prompt:
@@ -454,13 +461,50 @@ def system_prompt_with_memories():
         return prompt
     return prompt + "\n\n" + extras
 
+# Read the model alias from the running server, fall back to the default
+def resolve_model_name():
+    global resolved_model
+    if resolved_model:
+        return resolved_model
+    request = urllib.request.Request(MODELS_URL, headers={"Authorization": f"Bearer {API_KEY}"})
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+            payload = json.load(result)
+        models = payload.get("data") or []
+        if models:
+            resolved_model = models[0].get("id") or DEFAULT_MODEL
+            return resolved_model
+    except urllib.error.URLError:
+        pass
+    resolved_model = DEFAULT_MODEL
+    return resolved_model
+
+# Read the context window size from the running server
+def resolve_context_size():
+    global resolved_context_size
+    if resolved_context_size:
+        return resolved_context_size
+    request = urllib.request.Request(f"{API_BASE}/props", headers={"Authorization": f"Bearer {API_KEY}"})
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+            payload = json.load(result)
+        settings = payload.get("default_generation_settings") or {}
+        context_size = settings.get("n_ctx") or (settings.get("params") or {}).get("n_ctx")
+        if context_size:
+            resolved_context_size = int(context_size)
+            return resolved_context_size
+    except (urllib.error.URLError, TypeError, ValueError):
+        pass
+    resolved_context_size = DEFAULT_CONTEXT_SIZE
+    return resolved_context_size
+
 # Send one chat request to server
 def chat_completion(messages):
     global last_completion_tokens, ask_start
 
     # Build request body
     body = {
-        "model": MODEL,
+        "model": resolve_model_name(),
         "messages": messages,
         "tools": TOOLS,
         "tool_choice": "auto",
@@ -484,7 +528,7 @@ def chat_completion(messages):
     # Keep the generated token count and print this round's timing now
     usage = response.get("usage") or {}
     last_completion_tokens = int(usage.get("completion_tokens") or 0)
-    log_model_timing(model_seconds, last_completion_tokens, response.get("timings") or {})
+    log_model_timing(model_seconds, last_completion_tokens, response.get("timings") or {}, usage)
 
     # Return the assistant message
     return response["choices"][0]["message"]
@@ -599,7 +643,7 @@ def parse_tool_arguments(raw_arguments):
         return {}
 
 # Print timing for one finished model call
-def log_model_timing(model_seconds, tokens, timings):
+def log_model_timing(model_seconds, tokens, timings, usage):
     # Skip when not asked to show timing
     if not show_timing:
         return
@@ -619,14 +663,24 @@ def log_model_timing(model_seconds, tokens, timings):
             f"Prefill: {format_seconds(prefill_seconds)} ({cached_tokens} cached, {prefill_tokens} new)  "
             f"Generate: {format_seconds(generate_seconds)}  "
             f"Tokens: {generate_tokens}  "
-            f"Speed: {format_token_speed(speed)}",
+            f"Speed: {format_token_speed(speed)}  "
+            f"Context: {format_context_usage(usage, timings)}",
             flush=True,
         )
         return
 
     # Fall back when the server omits timings
     speed = tokens / model_seconds if model_seconds > 0 else 0
-    print(f"Model: {format_seconds(model_seconds)}  Tokens: {tokens}  Speed: {format_token_speed(speed)}", flush=True)
+    print(f"Model: {format_seconds(model_seconds)}  Tokens: {tokens}  Speed: {format_token_speed(speed)}  Context: {format_context_usage(usage, timings)}", flush=True)
+
+# Format how full the context window is after this round
+def format_context_usage(usage, timings):
+    context_size = resolve_context_size()
+    used_tokens = int(usage.get("total_tokens") or 0)
+    if used_tokens <= 0:
+        used_tokens = int(timings.get("cache_n") or 0) + int(timings.get("prompt_n") or 0) + int(timings.get("predicted_n") or 0)
+    percent = (100.0 * used_tokens / context_size) if context_size > 0 else 0
+    return f"{used_tokens}/{context_size} ({percent:.0f}%)"
 
 # Short preview of the newest text the model is reacting to
 def format_inference_input(messages):
