@@ -1083,7 +1083,11 @@ def trim_conversation_history():
 def load_system_prompt():
     with open(PROMPT_PATH, encoding="utf-8") as prompt_file:
         data = json.load(prompt_file)
-    prompt = str(data.get("system") or "").strip()
+    system = data.get("system")
+    if isinstance(system, list):
+        prompt = "\n\n".join(str(part).strip() for part in system if str(part).strip())
+    else:
+        prompt = str(system or "").strip()
     if not prompt:
         raise ValueError(f"Missing system prompt in {PROMPT_PATH}")
     return prompt
