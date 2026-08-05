@@ -9,7 +9,7 @@ alwaysApply: false
 When building the chat `messages` list for the local LLM:
 
 - First system message is `prompt.json` only via `load_system_prompt()`. That content must stay identical across asks so llama-server can reuse the KV cache prefix.
-- Memories and reminders go in a **second** system message via `messages.append(...)`, using `prompt_extras()`.
+- Memories and reminders go on the **user** message via `prompt_extras()`, prefixed before the question. Do not use a second `system` message: Gemma 3 chat templates only allow one system role, then alternating user/assistant.
 - Never glue extras into the first system string with `+`. That changes the first message object and forces a full prefill.
 
 Prefer this comment style for that block (short, one comment per step):
@@ -18,14 +18,15 @@ Prefer this comment style for that block (short, one comment per step):
 # Start with prompt.json alone so that prefix stays identical across asks for KV cache reuse
 messages = [{"role": "system", "content": load_system_prompt()}]
 
-# Load memories in a second system message so new tokens append after the cached prefix
-extras = prompt_extras()
-if extras:
-    messages.append({"role": "system", "content": extras})
-
 # Load previous turns in conversation history
 messages.extend(conversation_history)
 
+# Put memories and reminders on the user turn, Gemma 3 only allows one system message
+user_content = prompt
+extras = prompt_extras()
+if extras:
+    user_content = extras + "\n\n" + prompt
+
 # Add this question last
-messages.append({"role": "user", "content": prompt})
+messages.append({"role": "user", "content": user_content})
 ```

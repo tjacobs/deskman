@@ -26,6 +26,10 @@ PARALLEL_REQUESTS="1"
 THREADS="2"
 THREADS_BATCH="4"
 
+# Wait for /health after llama-server starts mapping weights
+READY_TIMEOUT_SECONDS="180"
+READY_POLL_SECONDS="0.5"
+
 # Main
 main() {
     # Pick model preset from the first arg
@@ -63,8 +67,61 @@ main() {
     # Load llama.cpp libraries from the current text directory
     export LD_LIBRARY_PATH="${LIBRARY_DIR}:${LD_LIBRARY_PATH:-}"
 
-    # Run local OpenAI compatible server, --slot-save-path is llama.cpp's name for the cache dir
-    exec "${SERVER}" "${server_args[@]}"
+    # Start local OpenAI compatible server, --slot-save-path is llama.cpp's name for the cache dir
+    "${SERVER}" "${server_args[@]}" &
+    server_pid=$!
+
+    # Stop the server when this script exits or is interrupted
+    trap 'stop_server '"${server_pid}" EXIT INT TERM
+
+    # Wait until the model has finished loading
+    wait_until_ready "${server_pid}"
+
+    # Stay in the foreground until the server exits
+    wait "${server_pid}"
+    trap - EXIT INT TERM
+}
+
+# Kill a background llama-server by pid
+stop_server() {
+    local server_pid="$1"
+    if kill -0 "${server_pid}" 2>/dev/null; then
+        kill "${server_pid}" 2>/dev/null || true
+        wait "${server_pid}" 2>/dev/null || true
+    fi
+}
+
+# Poll /health until the model is ready to answer
+wait_until_ready() {
+    local server_pid="$1"
+    local deadline=$((SECONDS + READY_TIMEOUT_SECONDS))
+    local health_code=""
+
+    # Tell the user weights are still being mapped into memory
+    echo "Loading model..."
+
+    # Retry until health is ok, the server dies, or we time out
+    while true; do
+        if ! kill -0 "${server_pid}" 2>/dev/null; then
+            wait "${server_pid}" 2>/dev/null || true
+            echo "Server exited before becoming ready."
+            exit 1
+        fi
+
+        # 200 means the model is loaded, 503 means still loading
+        health_code="$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 1 -H "Authorization: Bearer ${API_KEY}" "http://${HOST}:${PORT}/health" || true)"
+        if [[ "${health_code}" == "200" ]]; then
+            echo "Ready."
+            return 0
+        fi
+
+        if (( SECONDS >= deadline )); then
+            echo "Timed out waiting for the model to load."
+            exit 1
+        fi
+
+        sleep "${READY_POLL_SECONDS}"
+    done
 }
 
 # Print usage help

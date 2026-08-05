@@ -364,16 +364,17 @@ def build_messages(prompt):
     # Start with prompt.json alone so that prefix stays identical across asks for KV cache reuse
     messages = [{"role": "system", "content": load_system_prompt()}]
 
-    # Load memories in a second system message so new tokens append after the cached system prompt
-    extras = prompt_extras()
-    if extras:
-        messages.append({"role": "system", "content": extras})
-
     # Load previous turns in conversation history
     messages.extend(conversation_history)
 
+    # Put memories and reminders on the user turn, Gemma 3 only allows one system message
+    user_content = prompt
+    extras = prompt_extras()
+    if extras:
+        user_content = extras + "\n\n" + prompt
+
     # Add this question last
-    messages.append({"role": "user", "content": prompt})
+    messages.append({"role": "user", "content": user_content})
     return messages
 
 # Handle a forced tool result, True means retry the model, text means return that reply
@@ -442,7 +443,7 @@ def load_system_prompt():
         raise ValueError(f"Missing system prompt in {PROMPT_PATH}")
     return prompt
 
-# Long-term memories and reminders for a second system message, empty when none are saved
+# Long-term memories and reminders for the user turn, empty when none are saved
 def prompt_extras():
     extras = []
     memory_text = memory.format_memories_for_prompt()
@@ -692,6 +693,12 @@ def format_inference_input(messages):
         role = message.get("role", "")
         if role not in ("user", "tool"):
             continue
+
+        # Drop the memories prefix so timing lines show just the question
+        extras = prompt_extras()
+        if role == "user" and extras and content.startswith(extras):
+            content = content[len(extras):].lstrip()
+
         text = " ".join(content.split())
         if len(text) > INFERENCE_INPUT_CHARS:
             text = text[:INFERENCE_INPUT_CHARS - 3] + "..."
