@@ -32,6 +32,8 @@ When you ask it to look left or right, it calls `~/robot/src/look.py` through an
 
 - `server.sh` starts Gemma 4 E2B with GPU acceleration when available and a 4096-token context.
 - `ask.py` sends a short voice-assistant request and can call look, time, date, day, remember, forget, and reminder tools.
+- `dates.py` owns clock, calendar, and day-count helpers.
+- `maths.py` owns the calculate tool and safe expression evaluation.
 - `memory.py` owns long-term remember/forget tools and storage.
 - `reminders.py` owns daily reminder tools, storage, and due checks.
 - `../prompt.json` holds the system prompt read on each ask.
