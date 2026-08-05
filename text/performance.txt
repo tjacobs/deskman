@@ -2,15 +2,20 @@
 # Raspberry Pi 5, CPU only, llama-server --threads 2 --threads-batch 4 --ctx-size 4096
 # Measured 2026-08-05
 
+## Token generation speeds on models
+
+- Model Gemma 3 1b:  12 tokens/sec
+- Model Gemma 4 e2b: 7 tokens/sec
+
 ## Models
 
-- e2b: gemma-4-E2B-it-Q4_K_S.gguf (2.82 GiB, 4.65B params), alias gemma-4-e2b
-- 1b:  gemma-3-1b-it-Q4_K_M.gguf (762 MiB, 1.00B params), alias gemma-3-1b
+- 1b:  gemma-3-1b-it-Q4_K_M.gguf  (762 MiB,  1.00B params), alias gemma-3-1b
+- e2b: gemma-4-E2B-it-Q4_K_S.gguf (2.82 GiB, 4.65B params), alias gemma-4-e2b (default)
 
 ## Raw speed (llama-bench, -t 2 -ngl 0, 3 reps)
 
-| model | test   | t/s        |
-| ----- | ------ | ---------- |
+| model | test   | t/s          |
+| ----- | ------ | ------------ |
 | 1b    | pp512  | 25.57 ± 0.03 |
 | 1b    | pp1365 | 24.95 ± 0.05 |
 | 1b    | tg64   | 12.35 ± 0.18 |
@@ -28,8 +33,8 @@ Cold = cache erased first. Warm = repeat same request.
 
 ### gemma-3-1b
 
-| round | wall  | prefill                         | generate                    | context      |
-| ----- | ----- | ------------------------------- | --------------------------- | ------------ |
+| round | wall  | prefill                         | generate                    | context       |
+| ----- | ----- | ------------------------------- | --------------------------- | ------------- |
 | cold  | 10.5s | 9.7s (0 cached, 351 new, 36.3 t/s) | 0.8s (11 tok, 13.7 t/s)  | 362/4096 (9%) |
 | warm1 | 1.0s  | 0.2s (346 cached, 5 new)        | 0.8s (11 tok, 13.6 t/s)     | 362/4096 (9%) |
 | warm2 | 1.0s  | 0.2s (346 cached, 5 new)        | 0.8s (11 tok, 13.4 t/s)     | 362/4096 (9%) |
@@ -51,5 +56,3 @@ Total: 53.2s
 
 - Cold gap is mostly prompt size: Gemma 4 tool template ~1366 tokens, Gemma 3 ~351 for the same 14 tools.
 - Warm asks are close because KV cache skips the system/tools prefill.
-- ask.py with two system messages fails on gemma-3-1b chat template (roles must alternate); merge system messages or fix before using 1b as default.
-- llama-bench build: 6ea215d (1)
