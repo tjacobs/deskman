@@ -97,9 +97,10 @@ TEXT_SERVER_POLL_SECONDS = 0.5
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
 
-# Import local text model helper
+# Import local text model helper and reminders
 sys.path.insert(0, TEXT_DIR)
 import ask as text_ask
+import reminders
 text_ask.set_talk_module(sys.modules[__name__])
 
 # State
@@ -189,7 +190,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     global LAST_ASK_AT
 
     # Seed dinner and bedtime reminders from memory, then check them in the background
-    text_ask.seed_reminders_from_memory()
+    reminders.seed_reminders_from_memory()
     start_reminder_checker(listener, kokoro_pipeline)
 
     # Greet, then keep the conversation open so the first line needs no wake word
@@ -515,7 +516,7 @@ def reminder_loop(listener, kokoro_pipeline):
 
 # Speak any reminders due in the current minute
 def fire_due_reminders(listener, kokoro_pipeline):
-    due = text_ask.pop_due_reminders()
+    due = reminders.pop_due_reminders()
     for reminder in due:
         message = reminder.get('message') or "Reminder"
         print(f'Reminder: {message}', flush=True)
