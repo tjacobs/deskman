@@ -21,10 +21,14 @@ import volume
 API_URL = "http://127.0.0.1:8080/v1/chat/completions"
 API_KEY = "local"
 MODEL = "gemma-4-e2b"
+
+# Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
 PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
 SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.sh")
+
+# Config values
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
@@ -47,12 +51,18 @@ ask_start = None
 # Main
 def main():
     # Parse prompt
-    prompt = parse_args()
+    prompt, print_prompt = parse_args()
 
     # Print timing when run standalone, talk.py keeps its own output clean
     global show_timing, ask_start
     show_timing = True
     ask_start = None
+
+    # Show the system prompt sent to the model when asked
+    if print_prompt:
+        print("System prompt:")
+        print(system_prompt_with_memories())
+        print()
 
     # Ask local model
     response = ask_model(prompt)
@@ -60,14 +70,28 @@ def main():
 
     # Print total time when the model was called
     if ask_start is not None:
-        log_timing("Ask total", ask_start)
+        log_timing("Total", ask_start)
 
 # Parse prompt from command line
 def parse_args():
-    # Use supplied text or a useful default
-    if len(sys.argv) > 1:
-        return " ".join(sys.argv[1:])
-    return "Say hello."
+    # Pull out flags, then join the remaining words into the user prompt
+    print_prompt = False
+    words = []
+    for argument in sys.argv[1:]:
+        if argument == "--prompt":
+            print_prompt = True
+            continue
+        if argument in ("-h", "--help"):
+            print_usage()
+            sys.exit(0)
+        words.append(argument)
+    return " ".join(words) if words else "Say hello.", print_prompt
+
+# Print usage help
+def print_usage():
+    print("Usage: ./ask.py [--prompt] [question...]")
+    print("  --prompt  print the system prompt at start")
+    print("  (no arg)  say hello.")
 
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
@@ -374,7 +398,7 @@ def trim_conversation_history():
         while conversation_history and conversation_history[0].get("role") != "user":
             conversation_history.pop(0)
 
-# Load the system prompt from speak/prompt.json
+# Load the system prompt from ../prompt.json
 def load_system_prompt():
     with open(PROMPT_PATH, encoding="utf-8") as prompt_file:
         data = json.load(prompt_file)
@@ -401,7 +425,7 @@ def system_prompt_with_memories():
         return prompt
     return prompt + "\n\n" + "\n\n".join(extras)
 
-# Send one chat request to llama-server
+# Send one chat request to server
 def chat_completion(messages):
     global last_completion_tokens, ask_start
 
@@ -443,7 +467,7 @@ def run_tool(tool_call):
     name = function.get("name", "")
     arguments = parse_tool_arguments(function.get("arguments"))
 
-    # Turn the head through robot look.py
+    # Turn the head
     if name == "look":
         result = move.run_look(arguments)
         record_tool(name, arguments, result)
