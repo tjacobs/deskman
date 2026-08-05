@@ -37,7 +37,7 @@ When you ask it to look left or right, it calls `~/robot/src/look.py` through an
 - `memory.py` owns long-term remember/forget tools and storage.
 - `reminders.py` owns daily reminder tools, storage, and due checks.
 - `../prompt.json` holds the system prompt read on each ask.
-- `../memory.json` holds long-term facts saved with `remember`.
+- `../memory.json` holds long-term facts.
 - `../reminders.json` holds daily spoken reminders.
 - Prior questions, tool calls, tool results, and answers stay in process memory for later asks in the same session.
 - `llama.cpp/` contains the native CUDA runtime.
