@@ -127,10 +127,15 @@ def ask_model(prompt):
 
     # Loop until the model replies with spoken text
     for _ in range(MAX_TOOL_ROUNDS):
-        # Time one model call and print its timing as soon as it returns
+        # Call model inference
         message = chat_completion(messages)
+
+        # Get the tool call the model returned
         tool_calls = message.get("tool_calls") or []
+
+        # No tool call
         if not tool_calls:
+            # Get the spoken text the model returned
             reply = (message.get("content") or "").strip()
 
             # Force or apply set_reminder when the model skipped scheduling
@@ -244,8 +249,16 @@ def ask_model(prompt):
             # Prefer a clear spoken confirmation after a successful volume set
             if not reply and "set_volume" in used:
                 reply = volume.confirm_volume_set() or reply
-            remember_turn(messages, reply or "Okay.")
-            return reply or "Okay."
+
+            # Fall back when the model returned no spoken text
+            if not reply:
+                reply = "Okay."
+
+            # Remember the turn
+            remember_turn(messages, reply)
+
+            # Return the spoken text
+            return reply
 
         # Show the tool call JSON the model returned
         if show_timing:
