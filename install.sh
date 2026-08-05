@@ -2,6 +2,9 @@
 # Install dependencies into .venv with uv, works on linux and mac.
 # Usage: ./install.sh [--listen] [--text]
 
+# WiFi connect: 
+# nmcli device wifi connect "NETWORK" password "PASSWORD"
+
 # Exit on error, undefined variables, and pipe failure
 set -euo pipefail
 
