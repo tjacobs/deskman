@@ -395,12 +395,9 @@ def find_usb_card():
 
 # Build playback command for one wav file
 def play_wav_command(wav_path):
-    if PLAYER == 'afplay':
-        return [PLAYER, wav_path]
-    card = find_usb_card()
-    if card is None:
-        return [PLAYER, wav_path]
-    return [PLAYER, '-D', f'plughw:{card},0', wav_path]
+    # Play through the default device, tools-audio.sh points that at the USB soundcard
+    # Naming the card takes it exclusively, which fails whenever pipewire holds it
+    return [PLAYER, wav_path]
 
 # Return true when audio player is available
 def check_audio_player():
