@@ -6,4 +6,5 @@ __pycache__/
 faster-whisper/
 log.txt
 monitor.log
+memory.json
 talks/

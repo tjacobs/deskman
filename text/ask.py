@@ -12,7 +12,7 @@ import time
 import subprocess
 import urllib.error
 import urllib.request
-from datetime import date
+from datetime import date, datetime
 
 # Config
 API_URL = "http://127.0.0.1:8080/v1/chat/completions"
@@ -22,19 +22,22 @@ DEFAULT_PROMPT = "Introduce yourself in one short sentence."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
 PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
+MEMORY_PATH = os.path.join(SPEAK_DIR, "memory.json")
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 40
+MAX_MEMORY_FACTS = 50
 ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 60
 VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
-CLOCK_RETRY_PROMPT = "Do not guess. Call get_time, get_date, or get_day now, then answer using only the tool result."
 MATH_RETRY_PROMPT = "Do not guess. Call calculate with a Python math expression now, then answer using only the tool result."
 DATE_MATH_RETRY_PROMPT = "Do not guess. Call calculate with a date expression using date and today, for example (date(2026, 8, 15) - today()).days, then answer using only the tool result. Never pass a bare number."
 VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested percent, then answer using only the tool result."
 VOICE_RETRY_PROMPT = "Do not guess. Call set_voice with the requested voice name now, then answer using only the tool result."
+MEMORY_RETRY_PROMPT = "Do not guess. Call remember with the fact the user asked you to keep, then answer using only the tool result."
+FORGET_RETRY_PROMPT = "Do not guess. Call forget with the fact the user asked you to drop, then answer using only the tool result."
 MONTH_NAMES = {
     "january": 1, "jan": 1,
     "february": 2, "feb": 2,
@@ -115,7 +118,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_time",
-            "description": "Get the current local time. Required whenever the user asks the time. Never invent the time.",
+            "description": "Get the current local clock time. Use only for the current time of day, not for remembered or scheduled times like dinner.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -123,7 +126,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_date",
-            "description": "Get the current local calendar date. Required whenever the user asks the date or today's date. Never invent a date.",
+            "description": "Get today's local calendar date. Use only for the current date, not for other named dates.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -131,7 +134,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_day",
-            "description": "Get the current day of the week. Required whenever the user asks what day it is. Never invent the weekday.",
+            "description": "Get today's day of the week. Use only for the current weekday.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -210,6 +213,43 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "remember",
+            "description": "Save a long-term fact the user asked you to remember. Survives reboot. Required when the user says remember.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The fact to remember, for example Dinner time is 6:30 PM.",
+                    },
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "forget",
+            "description": "Remove a long-term remembered fact. Required when the user says forget.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text matching the fact to forget.",
+                    },
+                    "id": {
+                        "type": "number",
+                        "description": "Optional fact id to forget.",
+                    },
+                },
+            },
+        },
+    },
 ]
 
 # Conversation history kept across asks in this process
@@ -263,12 +303,10 @@ def ask_model(prompt):
         if reply:
             return reply
 
-    # Start from the system prompt, prior turns, and this question
-    messages = [{"role": "system", "content": load_system_prompt()}]
+    # Start from the system prompt with long-term memories, prior turns, and this question
+    messages = [{"role": "system", "content": system_prompt_with_memories()}]
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": prompt})
-    clock_retry_used = False
-    clock_tool_used = False
     math_retry_used = False
     math_tool_used = False
     date_math_retry_used = False
@@ -279,6 +317,9 @@ def ask_model(prompt):
     volume_get_used = False
     voice_retry_used = False
     voice_set_used = False
+    memory_retry_used = False
+    memory_remember_used = False
+    memory_forget_used = False
     last_list_voices_result = None
 
     # Loop until the model replies with spoken text
@@ -288,13 +329,25 @@ def ask_model(prompt):
         if not tool_calls:
             reply = (message.get("content") or "").strip()
 
-            # Force a clock tool when the model guessed today's time, date, or day
-            if needs_clock_tool(prompt) and not clock_tool_used and not clock_retry_used:
-                clock_retry_used = True
-                print("[ask] missing clock tool, retrying", flush=True)
-                messages.append(message)
-                messages.append({"role": "user", "content": CLOCK_RETRY_PROMPT})
-                continue
+            # Force or apply remember when the model skipped saving a fact
+            if needs_remember(prompt) and not memory_remember_used:
+                forced = force_remember(prompt, messages, message, memory_retry_used)
+                if forced is True:
+                    memory_retry_used = True
+                    continue
+                if forced:
+                    remember_turn(messages, forced)
+                    return forced
+
+            # Force or apply forget when the model skipped dropping a fact
+            if needs_forget(prompt) and not memory_forget_used:
+                forced = force_forget(prompt, messages, message, memory_retry_used)
+                if forced is True:
+                    memory_retry_used = True
+                    continue
+                if forced:
+                    remember_turn(messages, forced)
+                    return forced
 
             # Prefer a date expression already calculated, else force Python date math
             if needs_date_math(prompt):
@@ -371,8 +424,6 @@ def ask_model(prompt):
             inject_list_voices_count(tool_call, prompt)
             result = run_tool(tool_call)
             tool_name = (tool_call.get("function") or {}).get("name")
-            if tool_name in ("get_time", "get_date", "get_day"):
-                clock_tool_used = True
             if tool_name == "calculate":
                 math_tool_used = True
                 arguments = parse_tool_arguments((tool_call.get("function") or {}).get("arguments"))
@@ -386,6 +437,10 @@ def ask_model(prompt):
                 voice_set_used = True
             if tool_name == "list_voices":
                 last_list_voices_result = result
+            if tool_name == "remember":
+                memory_remember_used = True
+            if tool_name == "forget":
+                memory_forget_used = True
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
 
         # Resolve day counts in Python, or keep a valid date expression the model already ran
@@ -398,6 +453,20 @@ def ask_model(prompt):
             if spoken:
                 remember_turn(messages, spoken)
                 return spoken
+
+        # If it talked about remembering but did not call remember, save it in Python now
+        if needs_remember(prompt) and not memory_remember_used:
+            forced = force_remember(prompt, messages, None, True)
+            if forced:
+                remember_turn(messages, forced)
+                return forced
+
+        # If it talked about forgetting but did not call forget, drop it in Python now
+        if needs_forget(prompt) and not memory_forget_used:
+            forced = force_forget(prompt, messages, None, True)
+            if forced:
+                remember_turn(messages, forced)
+                return forced
 
         # If it checked volume instead of setting it, set it in Python now
         if needs_set_volume(prompt) and not volume_set_used:
@@ -429,18 +498,16 @@ def ask_model(prompt):
     remember_turn(messages, reply)
     return reply
 
-# Return true when the question needs today's time, date, or weekday
-def needs_clock_tool(prompt):
+# Return true when the user asked to save a long-term fact
+def needs_remember(prompt):
     text = prompt.lower()
-    if needs_date_math(prompt):
+    if needs_forget(prompt):
         return False
-    if re.search(r"\b(what|what's|whats)\s+time\b|\btime\s+is\s+it\b|\bcurrent time\b", text):
-        return True
-    if re.search(r"\b(what|what's|whats)\s+(is\s+)?(the\s+)?(current\s+)?date\b|\bcurrent date\b|\btoday'?s date\b", text):
-        return True
-    if re.search(r"\b(what|which)\s+day\b|\bday\s+(is it|of the week)\b|\bwhat day is today\b", text):
-        return True
-    return bool(re.search(r"\btoday\b", text) and re.search(r"\b(date|day)\b", text))
+    return bool(re.search(r"\bremember\b", text))
+
+# Return true when the user asked to drop a long-term fact
+def needs_forget(prompt):
+    return bool(re.search(r"\bforget\b", prompt.lower()))
 
 # Return true when the question needs a day-count date calculation
 def needs_date_math(prompt):
@@ -871,6 +938,170 @@ def load_system_prompt():
         raise ValueError(f"Missing system prompt in {PROMPT_PATH}")
     return prompt
 
+# System prompt plus long-term memories when any exist
+def system_prompt_with_memories():
+    prompt = load_system_prompt()
+    memory_text = format_memories_for_prompt()
+    if not memory_text:
+        return prompt
+    return f"{prompt}\n\n{memory_text}"
+
+# Format saved facts for the system prompt
+def format_memories_for_prompt():
+    facts = load_memory_facts()
+    if not facts:
+        return ""
+    lines = [f"- {fact.get('text', '').strip()}" for fact in facts if str(fact.get("text") or "").strip()]
+    if not lines:
+        return ""
+    return "Long-term memories:\n" + "\n".join(lines)
+
+# Load remembered facts from disk
+def load_memory_facts():
+    if not os.path.isfile(MEMORY_PATH):
+        return []
+    try:
+        with open(MEMORY_PATH, encoding="utf-8") as memory_file:
+            data = json.load(memory_file)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return []
+    facts = data.get("facts")
+    if not isinstance(facts, list):
+        return []
+    return [fact for fact in facts if isinstance(fact, dict) and str(fact.get("text") or "").strip()]
+
+# Save remembered facts to disk atomically
+def save_memory_facts(facts):
+    payload = {"facts": facts}
+    temporary_path = MEMORY_PATH + ".tmp"
+    with open(temporary_path, "w", encoding="utf-8") as memory_file:
+        json.dump(payload, memory_file, indent=2)
+        memory_file.write("\n")
+    os.replace(temporary_path, MEMORY_PATH)
+
+# Next numeric id for a new memory fact
+def next_memory_id(facts):
+    if not facts:
+        return 1
+    return max(int(fact.get("id") or 0) for fact in facts) + 1
+
+# Save one long-term fact from tool arguments
+def run_remember(arguments):
+    text = str(arguments.get("text") or "").strip()
+    if not text:
+        return "Remember text is required."
+    facts = load_memory_facts()
+
+    # Replace an existing similar fact, or append a new one
+    lowered = text.lower()
+    for fact in facts:
+        if str(fact.get("text") or "").strip().lower() == lowered:
+            fact["text"] = text
+            fact["saved_at"] = datetime.now().astimezone().isoformat()
+            save_memory_facts(facts)
+            return f"I have remembered that {text}"
+    facts.append({"id": next_memory_id(facts), "text": text, "saved_at": datetime.now().astimezone().isoformat()})
+
+    # Drop the oldest facts when over the cap
+    while len(facts) > MAX_MEMORY_FACTS:
+        facts.pop(0)
+    save_memory_facts(facts)
+    return f"I have remembered that {text}"
+
+# Remove matching long-term facts from tool arguments
+def run_forget(arguments):
+    facts = load_memory_facts()
+    if not facts:
+        return "I do not have any long-term memories saved."
+    fact_id = arguments.get("id")
+    text = str(arguments.get("text") or "").strip().lower()
+    kept = []
+    removed = []
+    for fact in facts:
+        fact_text = str(fact.get("text") or "").strip()
+        if fact_id is not None and int(fact.get("id") or -1) == int(fact_id):
+            removed.append(fact_text)
+            continue
+        if text and text in fact_text.lower():
+            removed.append(fact_text)
+            continue
+        kept.append(fact)
+    if not removed:
+        return "I could not find that memory to forget."
+    save_memory_facts(kept)
+    if len(removed) == 1:
+        return f"I have forgotten that {removed[0]}"
+    return f"I have forgotten {len(removed)} memories."
+
+# Read the fact to remember from the user text
+def parse_remember_text(prompt):
+    text = prompt.strip()
+    text = re.sub(r"[,.]?\s*(okay[,.]?\s*)?remember\s+(it|that|this)\s*[.!]?\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*remember\s+(that|this)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(okay[,.]?\s*)?(please\s+)?(i'?m gonna tell you[,.]?\s*)?", "", text, flags=re.IGNORECASE)
+    text = text.strip(" ,.!")
+    if not text:
+        return None
+    return text[0].upper() + text[1:]
+
+# Read what to forget from the user text
+def parse_forget_text(prompt):
+    text = prompt.strip()
+    match = re.search(r"\bforget\s+(?:that\s+|about\s+)?(.+?)\s*[.!]?\s*$", text, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).strip(" ,.!")
+    return None
+
+# Retry remember once, then save it in Python if still missing
+def force_remember(prompt, messages, message, already_retried):
+    text = parse_remember_text(prompt)
+
+    # First miss, ask the model again with an explicit remember order
+    if not already_retried:
+        print("[ask] missing remember, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        if text is None:
+            retry = MEMORY_RETRY_PROMPT
+        else:
+            retry = f"Do not guess. Call remember with text {text} now, then answer using only the tool result."
+        messages.append({"role": "user", "content": retry})
+        return True
+
+    # Second miss, save it directly in Python
+    if text is None:
+        return None
+    arguments = {"text": text}
+    result = run_remember(arguments)
+    record_tool("remember", arguments, result)
+    print(f"[ask] forced remember -> {result}", flush=True)
+    return result
+
+# Retry forget once, then drop it in Python if still missing
+def force_forget(prompt, messages, message, already_retried):
+    text = parse_forget_text(prompt)
+
+    # First miss, ask the model again with an explicit forget order
+    if not already_retried:
+        print("[ask] missing forget, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        if text is None:
+            retry = FORGET_RETRY_PROMPT
+        else:
+            retry = f"Do not guess. Call forget with text {text} now, then answer using only the tool result."
+        messages.append({"role": "user", "content": retry})
+        return True
+
+    # Second miss, forget it directly in Python
+    if text is None:
+        return None
+    arguments = {"text": text}
+    result = run_forget(arguments)
+    record_tool("forget", arguments, result)
+    print(f"[ask] forced forget -> {result}", flush=True)
+    return result
+
 # Send one chat request to llama-server
 def chat_completion(messages):
     # Build request body
@@ -949,6 +1180,18 @@ def run_tool(tool_call):
     # List speaking voices
     if name == "list_voices":
         result = run_list_voices(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Save a long-term memory fact
+    if name == "remember":
+        result = run_remember(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Drop a long-term memory fact
+    if name == "forget":
+        result = run_forget(arguments)
         record_tool(name, arguments, result)
         return result
 
