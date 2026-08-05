@@ -10,11 +10,12 @@ import threading
 import time
 from datetime import date
 
+import memory
+
 # Config
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
 REMINDERS_PATH = os.path.join(SPEAK_DIR, "reminders.json")
-MEMORY_PATH = os.path.join(SPEAK_DIR, "memory.json")
 MAX_REMINDERS = 20
 REMINDER_RETRY_PROMPT = "Do not guess. Call set_reminder with the name and time now, then answer using only the tool result."
 CANCEL_REMINDER_RETRY_PROMPT = "Do not guess. Call cancel_reminder with the reminder name now, then answer using only the tool result."
@@ -95,7 +96,7 @@ def seed_reminders_from_memory():
             if name in names:
                 continue
             resolved = None
-            for fact in load_memory_facts():
+            for fact in memory.load_memory_facts():
                 text = str(fact.get("text") or "")
                 lowered = text.lower()
                 if name == "dinner" and "dinner" not in lowered:
@@ -357,7 +358,7 @@ def resolve_named_time(name):
     for reminder in load_reminders():
         if reminder.get("name") == key:
             return int(reminder["hour"]), int(reminder["minute"])
-    for fact in load_memory_facts():
+    for fact in memory.load_memory_facts():
         text = str(fact.get("text") or "")
         if key not in text.lower() and key.replace("time", "").strip() not in text.lower():
             if key == "bedtime" and "bed" not in text.lower():
@@ -422,20 +423,6 @@ def next_reminder_id(reminders):
     if not reminders:
         return 1
     return max(int(reminder.get("id") or 0) for reminder in reminders) + 1
-
-# Load memory facts used to resolve named times
-def load_memory_facts():
-    if not os.path.isfile(MEMORY_PATH):
-        return []
-    try:
-        with open(MEMORY_PATH, encoding="utf-8") as memory_file:
-            data = json.load(memory_file)
-    except (OSError, json.JSONDecodeError, TypeError):
-        return []
-    facts = data.get("facts")
-    if not isinstance(facts, list):
-        return []
-    return [fact for fact in facts if isinstance(fact, dict) and str(fact.get("text") or "").strip()]
 
 # Normalize a reminder name to a short key
 def normalize_reminder_name(name):
