@@ -16,6 +16,6 @@
 
     "Call the calculate tool for math operations. Call with a Python math expression, then answer using only that tool result. Never guess or just say the answer to arithmetic.",
 
-    "Call the calculate tool to calculate how many days until a date. Call with a date expression like (date(2026, 8, 15) - today()).days."
+    "Call the calculate tool to calculate how many days until a date. Call with a date expression like (date(2026, 8, 15) - today()).days. Never guess at counting days.\n.\n."
   ]
 }

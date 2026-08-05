@@ -21,6 +21,8 @@ import volume
 API_BASE = "http://127.0.0.1:8080"
 API_URL = f"{API_BASE}/v1/chat/completions"
 MODELS_URL = f"{API_BASE}/v1/models"
+APPLY_TEMPLATE_URL = f"{API_BASE}/apply-template"
+TOKENIZE_URL = f"{API_BASE}/tokenize"
 CACHE_URL = f"{API_BASE}/slots"
 API_KEY = "local"
 DEFAULT_MODEL = "gemma-4-e2b"
@@ -71,11 +73,9 @@ def main():
     # Show which model the server is running
     print(f"Model: {resolve_model_name()}", flush=True)
 
-    # Show the system prompt sent to the model when asked
+    # Show the full request context when asked, messages, tools, and rendered prompt
     if print_prompt:
-        print("System prompt:")
-        print(system_prompt_with_memories())
-        print()
+        print_context(prompt)
 
     # Ask local model
     response = ask_model(prompt)
@@ -107,7 +107,7 @@ def parse_args():
 # Print usage help
 def print_usage():
     print("Usage: ./ask.py [--prompt] [--clear] [question...]")
-    print("  --prompt  print the system prompt at start")
+    print("  --prompt  print the full model context, messages, tools, and rendered prompt")
     print("  --clear   clear the server cache before asking")
     print("  (no arg)  say hello.")
 
@@ -454,13 +454,68 @@ def prompt_extras():
         extras.append(reminder_text)
     return "\n\n".join(extras)
 
-# Full prompt text for --prompt, system plus extras
-def system_prompt_with_memories():
-    prompt = load_system_prompt()
-    extras = prompt_extras()
-    if not extras:
-        return prompt
-    return prompt + "\n\n" + extras
+# Print everything that will go into the model for this ask
+def print_context(prompt):
+    # Build the same messages and request body chat_completion will send
+    messages = build_messages(prompt)
+    body = build_request_body(messages)
+
+    # Show the OpenAI-style request payload, including tools JSON
+    print("Request:")
+    print(json.dumps(body, indent=2))
+    print()
+
+    # Show the chat-template rendered prompt when the server is up
+    rendered = apply_chat_template(messages, body.get("tools") or [])
+    if rendered is None:
+        print("Rendered prompt: unavailable, start the model server to see the final context text.")
+        print()
+        return
+
+    # Count tokens in the rendered prompt when tokenize works
+    token_count = count_tokens(rendered)
+    if token_count is not None:
+        print(f"Rendered prompt ({token_count} tokens):")
+    else:
+        print("Rendered prompt:")
+    print(rendered)
+    print()
+
+# Build the chat-completions JSON body for one model call
+def build_request_body(messages):
+    return {
+        "model": resolve_model_name(),
+        "messages": messages,
+        "tools": TOOLS,
+        "tool_choice": "auto",
+        "max_tokens": MAX_TOKENS,
+        "temperature": TEMPERATURE,
+    }
+
+# Ask the server to render messages and tools through the model chat template
+def apply_chat_template(messages, tools):
+    body = {"messages": messages, "tools": tools}
+    request = urllib.request.Request(APPLY_TEMPLATE_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+            payload = json.load(result)
+    except urllib.error.URLError:
+        return None
+    return payload.get("prompt")
+
+# Count tokens in a rendered prompt string
+def count_tokens(text):
+    body = {"content": text}
+    request = urllib.request.Request(TOKENIZE_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+            payload = json.load(result)
+    except urllib.error.URLError:
+        return None
+    tokens = payload.get("tokens")
+    if tokens is None:
+        return None
+    return len(tokens)
 
 # Read the model alias from the running server, fall back to the default
 def resolve_model_name():
@@ -504,14 +559,7 @@ def chat_completion(messages):
     global last_completion_tokens, ask_start
 
     # Build request body
-    body = {
-        "model": resolve_model_name(),
-        "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
-        "max_tokens": MAX_TOKENS,
-        "temperature": TEMPERATURE,
-    }
+    body = build_request_body(messages)
 
     # Tell the user inference has started when run standalone
     if show_timing:
