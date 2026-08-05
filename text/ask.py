@@ -18,7 +18,9 @@ import voice
 import volume
 
 # Config
-API_URL = "http://127.0.0.1:8080/v1/chat/completions"
+API_BASE = "http://127.0.0.1:8080"
+API_URL = f"{API_BASE}/v1/chat/completions"
+CACHE_URL = f"{API_BASE}/slots"
 API_KEY = "local"
 MODEL = "gemma-4-e2b"
 
@@ -51,12 +53,16 @@ ask_start = None
 # Main
 def main():
     # Parse prompt
-    prompt, print_prompt = parse_args()
+    prompt, print_prompt, clear_cache = parse_args()
 
     # Print timing when run standalone, talk.py keeps its own output clean
     global show_timing, ask_start
     show_timing = True
     ask_start = None
+
+    # Drop the server KV cache so this ask pays full prefill cost
+    if clear_cache:
+        clear_prompt_cache()
 
     # Show the system prompt sent to the model when asked
     if print_prompt:
@@ -76,22 +82,62 @@ def main():
 def parse_args():
     # Pull out flags, then join the remaining words into the user prompt
     print_prompt = False
+    clear_cache = False
     words = []
     for argument in sys.argv[1:]:
         if argument == "--prompt":
             print_prompt = True
             continue
+        if argument == "--clear":
+            clear_cache = True
+            continue
         if argument in ("-h", "--help"):
             print_usage()
             sys.exit(0)
         words.append(argument)
-    return " ".join(words) if words else "Say hello.", print_prompt
+    return " ".join(words) if words else "Say hello.", print_prompt, clear_cache
 
 # Print usage help
 def print_usage():
-    print("Usage: ./ask.py [--prompt] [question...]")
+    print("Usage: ./ask.py [--prompt] [--clear] [question...]")
     print("  --prompt  print the system prompt at start")
+    print("  --clear   clear the server cache before asking")
     print("  (no arg)  say hello.")
+
+# Erase the server prompt cache so the next ask is a cold prefill
+def clear_prompt_cache():
+    # List cache contexts, then erase each one
+    list_request = urllib.request.Request(CACHE_URL, headers={"Authorization": f"Bearer {API_KEY}"})
+    try:
+        with urllib.request.urlopen(list_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+            caches = json.load(result)
+    except urllib.error.URLError as error:
+        print(f"Could not list cache at {CACHE_URL}: {error.reason}")
+        print(f"Start the model server first, run {SERVER_SCRIPT}")
+        sys.exit(1)
+
+    # Erase each cache, empty body avoids a hang on some llama-server builds
+    for cache in caches:
+        cache_id = cache.get("id", 0)
+        erase_url = f"{CACHE_URL}/{cache_id}?action=erase"
+        erase_request = urllib.request.Request(erase_url, data=b"", method="POST", headers={"Authorization": f"Bearer {API_KEY}", "Content-Length": "0"})
+        try:
+            with urllib.request.urlopen(erase_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+                result.read()
+        except urllib.error.HTTPError as error:
+            body = error.read().decode(errors="replace")
+            if error.code == 501:
+                print("Server was started without cache support.")
+                print(f"Restart it with the updated {SERVER_SCRIPT}, then try --clear again.")
+                sys.exit(1)
+            print(f"Could not clear cache: {error.code} {body}")
+            sys.exit(1)
+        except urllib.error.URLError as error:
+            print(f"Could not clear cache: {error.reason}")
+            sys.exit(1)
+
+    # Print success
+    print("Cleared cache.", flush=True)
 
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
@@ -122,8 +168,11 @@ def ask_model(prompt):
         if reply:
             return reply
 
-    # Start from the system prompt with long-term memories, prior turns, and this question
-    messages = [{"role": "system", "content": system_prompt_with_memories()}]
+    # Keep the static system prompt alone so the server can reuse its KV cache, put memories in a second system message
+    messages = [{"role": "system", "content": load_system_prompt()}]
+    extras = prompt_extras()
+    if extras:
+        messages.append({"role": "system", "content": extras})
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": prompt})
     math_retry_used = False
@@ -276,6 +325,10 @@ def ask_model(prompt):
             remember_turn(messages, reply or "Okay.")
             return reply or "Okay."
 
+        # Show the tool call JSON the model returned
+        if show_timing:
+            print(f"Result: {format_tool_calls_json(tool_calls)}", flush=True)
+
         # Keep the assistant tool call turn, then return each tool result
         messages.append(message)
         for tool_call in tool_calls:
@@ -411,9 +464,8 @@ def load_system_prompt():
         raise ValueError(f"Missing system prompt in {PROMPT_PATH}")
     return prompt
 
-# System prompt plus long-term memories and reminders when any exist
-def system_prompt_with_memories():
-    prompt = load_system_prompt()
+# Long-term memories and reminders text, empty when none are saved
+def prompt_extras():
     extras = []
     memory_text = memory.format_memories_for_prompt()
     if memory_text:
@@ -421,9 +473,15 @@ def system_prompt_with_memories():
     reminder_text = reminders.format_reminders_for_prompt()
     if reminder_text:
         extras.append(reminder_text)
+    return "\n\n".join(extras)
+
+# Full prompt text for --prompt, system plus extras
+def system_prompt_with_memories():
+    prompt = load_system_prompt()
+    extras = prompt_extras()
     if not extras:
         return prompt
-    return prompt + "\n\n" + "\n\n".join(extras)
+    return prompt + "\n\n" + extras
 
 # Send one chat request to server
 def chat_completion(messages):
@@ -455,7 +513,7 @@ def chat_completion(messages):
     # Keep the generated token count and print this round's timing now
     usage = response.get("usage") or {}
     last_completion_tokens = int(usage.get("completion_tokens") or 0)
-    log_model_timing(model_seconds, last_completion_tokens)
+    log_model_timing(model_seconds, last_completion_tokens, response.get("timings") or {})
 
     # Return the assistant message
     return response["choices"][0]["message"]
@@ -548,6 +606,16 @@ def record_tool(name, arguments, result):
     last_tool_log.append(line)
     print(line, flush=True)
 
+# One-line JSON for the tool calls the model returned
+def format_tool_calls_json(tool_calls):
+    calls = []
+    for tool_call in tool_calls:
+        function = tool_call.get("function") or {}
+        calls.append({"name": function.get("name", ""), "arguments": parse_tool_arguments(function.get("arguments"))})
+    if len(calls) == 1:
+        return json.dumps(calls[0], separators=(",", ":"))
+    return json.dumps(calls, separators=(",", ":"))
+
 # Parse tool arguments from JSON text or a dict
 def parse_tool_arguments(raw_arguments):
     if isinstance(raw_arguments, dict):
@@ -560,9 +628,31 @@ def parse_tool_arguments(raw_arguments):
         return {}
 
 # Print timing for one finished model call
-def log_model_timing(model_seconds, tokens):
+def log_model_timing(model_seconds, tokens, timings):
     if not show_timing:
         return
+
+    # Prefer server prefill/generate split, a cold system prompt shows up as a long Prefill
+    if timings:
+        prefill_seconds = float(timings.get("prompt_ms") or 0) / 1000
+        generate_seconds = float(timings.get("predicted_ms") or 0) / 1000
+        cached_tokens = int(timings.get("cache_n") or 0)
+        prefill_tokens = int(timings.get("prompt_n") or 0)
+        generate_tokens = int(timings.get("predicted_n") or tokens)
+        speed = float(timings.get("predicted_per_second") or 0)
+        if speed <= 0 and generate_seconds > 0:
+            speed = generate_tokens / generate_seconds
+        print(
+            f"Model: {format_seconds(model_seconds)}  "
+            f"Prefill: {format_seconds(prefill_seconds)} ({cached_tokens} cached, {prefill_tokens} new)  "
+            f"Generate: {format_seconds(generate_seconds)}  "
+            f"Tokens: {generate_tokens}  "
+            f"Speed: {format_token_speed(speed)}",
+            flush=True,
+        )
+        return
+
+    # Fall back when the server omits timings
     speed = tokens / model_seconds if model_seconds > 0 else 0
     print(f"Model: {format_seconds(model_seconds)}  Tokens: {tokens}  Speed: {format_token_speed(speed)}", flush=True)
 
