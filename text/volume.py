@@ -49,16 +49,6 @@ def main():
     # Print the current volume when run with no args
     print(run_get_volume())
 
-# Answer follow-ups about the last volume that was actually set
-def answer_last_volume_set(prompt):
-    if last_volume_percent is None:
-        return None
-    if "voice" in prompt.lower():
-        return None
-    if not re.search(r"\bwhat did you set\b", prompt.lower()):
-        return None
-    return f"I set the volume to {last_volume_percent} percent."
-
 # Spoken confirmation after a successful volume set
 def confirm_volume_set():
     if last_volume_percent is None:
@@ -83,8 +73,6 @@ def needs_set_volume(prompt):
 # Return true when the user only wants the current volume
 def needs_get_volume(prompt):
     text = prompt.lower()
-    if re.search(r"\bwhat did you set\b", text) and "voice" not in text:
-        return True
     if "volume" not in text:
         return False
     if needs_set_volume(prompt):
@@ -114,8 +102,6 @@ def force_set_volume(prompt, messages, message, already_retried, record_tool):
     result = run_set_volume(arguments)
     record_tool("set_volume", arguments, result)
     print(f"[volume] forced set_volume -> {result}", flush=True)
-    if last_volume_percent is not None:
-        return f"I have set the volume to {last_volume_percent} percent."
     return f"I have set the volume to {percent} percent."
 
 # Set speaker volume from tool arguments
@@ -130,20 +116,16 @@ def run_set_volume(arguments):
     percent = max(0, min(100, percent))
     if not set_speaker_volume(percent):
         return "Could not set the volume."
-    actual = read_speaker_volume()
-    if actual is None:
-        last_volume_percent = percent
-        return f"Volume set to {percent} percent."
-    last_volume_percent = actual
-    return f"Volume set to {actual} percent."
+
+    # Remember the requested value, ALSA rounds and should not be spoken back
+    last_volume_percent = percent
+    return f"Volume set to {percent} percent."
 
 # Read speaker volume for the tool
 def run_get_volume(arguments=None):
-    global last_volume_percent
     percent = read_speaker_volume()
     if percent is None:
         return "Could not read the volume."
-    last_volume_percent = percent
     return f"Volume is {percent} percent."
 
 # Read a volume percent from the user text when present

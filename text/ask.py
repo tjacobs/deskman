@@ -104,77 +104,31 @@ def print_usage():
     print("  --clear   clear the server cache before asking")
     print("  (no arg)  say hello.")
 
-# Erase the server prompt cache so the next ask is a cold prefill
-def clear_prompt_cache():
-    # List cache contexts, then erase each one
-    list_request = urllib.request.Request(CACHE_URL, headers={"Authorization": f"Bearer {API_KEY}"})
-    try:
-        with urllib.request.urlopen(list_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
-            caches = json.load(result)
-    except urllib.error.URLError as error:
-        print(f"Could not list cache at {CACHE_URL}: {error.reason}")
-        print(f"Start the model server first, run {SERVER_SCRIPT}")
-        sys.exit(1)
-
-    # Erase each cache, empty body avoids a hang on some llama-server builds
-    for cache in caches:
-        cache_id = cache.get("id", 0)
-        erase_url = f"{CACHE_URL}/{cache_id}?action=erase"
-        erase_request = urllib.request.Request(erase_url, data=b"", method="POST", headers={"Authorization": f"Bearer {API_KEY}", "Content-Length": "0"})
-        try:
-            with urllib.request.urlopen(erase_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
-                result.read()
-        except urllib.error.HTTPError as error:
-            body = error.read().decode(errors="replace")
-            if error.code == 501:
-                print("Server was started without cache support.")
-                print(f"Restart it with the updated {SERVER_SCRIPT}, then try --clear again.")
-                sys.exit(1)
-            print(f"Could not clear cache: {error.code} {body}")
-            sys.exit(1)
-        except urllib.error.URLError as error:
-            print(f"Could not clear cache: {error.reason}")
-            sys.exit(1)
-
-    # Print success
-    print("Cleared cache.", flush=True)
-
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
     # Start a fresh tool log for this ask
     last_tool_log.clear()
 
-    # Answer volume follow-ups from the last actual ALSA value
-    reply = volume.answer_last_volume_set(prompt)
+    # Answer some questions in Python without calling the model
+    reply = skip_inference(prompt)
     if reply:
-        remember_exchange(prompt, reply)
         return reply
 
-    # Answer day counts in Python with the next matching future date
-    if dates.needs_date_math(prompt):
-        reply = dates.answer_date_math(prompt, record_tool, conversation_history, trim_conversation_history)
-        if reply:
-            return reply
-
-    # Answer which year the last date calculation used
-    if dates.needs_prior_calculate_year(prompt):
-        reply = dates.answer_prior_calculate_year(prompt, conversation_history, remember_exchange, parse_tool_arguments)
-        if reply:
-            return reply
-
-    # Answer with the last day-count number from history
-    if dates.needs_prior_calculate_result(prompt):
-        reply = dates.answer_prior_calculate_result(prompt, conversation_history, remember_exchange)
-        if reply:
-            return reply
-
-    # Keep the static system prompt alone so the server can reuse its KV cache, put memories in a second system message
+    # Start with prompt.json alone so that prefix stays identical across asks for KV cache reuse
     messages = [{"role": "system", "content": load_system_prompt()}]
+
+    # Load memories in a second system message so new tokens append after the cached system prompt
     extras = prompt_extras()
     if extras:
         messages.append({"role": "system", "content": extras})
+
+    # Load previous turns in conversation history
     messages.extend(conversation_history)
+
+    # Add this question last
     messages.append({"role": "user", "content": prompt})
+
+    # Initialize tool retry flags
     math_retry_used = False
     math_tool_used = False
     date_math_retry_used = False
@@ -431,6 +385,29 @@ def ask_model(prompt):
     remember_turn(messages, reply)
     return reply
 
+# Answer date questions in Python when the model would only guess
+def skip_inference(prompt):
+    # Answer day counts with the next matching future date
+    if dates.needs_date_math(prompt):
+        reply = dates.answer_date_math(prompt, record_tool, conversation_history, trim_conversation_history)
+        if reply:
+            return reply
+
+    # Answer which year the last date calculation used
+    if dates.needs_prior_calculate_year(prompt):
+        reply = dates.answer_prior_calculate_year(prompt, conversation_history, remember_exchange, parse_tool_arguments)
+        if reply:
+            return reply
+
+    # Answer with the last day-count number from history
+    if dates.needs_prior_calculate_result(prompt):
+        reply = dates.answer_prior_calculate_result(prompt, conversation_history, remember_exchange)
+        if reply:
+            return reply
+
+    # Inference needed
+    return None
+
 # Remember one question and spoken reply when tools were not used
 def remember_exchange(prompt, reply):
     conversation_history.append({"role": "user", "content": prompt})
@@ -464,7 +441,7 @@ def load_system_prompt():
         raise ValueError(f"Missing system prompt in {PROMPT_PATH}")
     return prompt
 
-# Long-term memories and reminders text, empty when none are saved
+# Long-term memories and reminders for a second system message, empty when none are saved
 def prompt_extras():
     extras = []
     memory_text = memory.format_memories_for_prompt()
@@ -629,6 +606,7 @@ def parse_tool_arguments(raw_arguments):
 
 # Print timing for one finished model call
 def log_model_timing(model_seconds, tokens, timings):
+    # Skip when not asked to show timing
     if not show_timing:
         return
 
@@ -658,6 +636,7 @@ def log_model_timing(model_seconds, tokens, timings):
 
 # Short preview of the newest text the model is reacting to
 def format_inference_input(messages):
+    # Show the newest text the model is reacting to
     for message in reversed(messages):
         content = (message.get("content") or "").strip()
         if not content:
@@ -684,6 +663,41 @@ def format_seconds(seconds):
 # Format generated tokens per second
 def format_token_speed(speed):
     return f"{speed:.1f} tokens/sec"
+
+# Erase the server prompt cache so the next ask is a cold prefill
+def clear_prompt_cache():
+    # List cache contexts, then erase each one
+    list_request = urllib.request.Request(CACHE_URL, headers={"Authorization": f"Bearer {API_KEY}"})
+    try:
+        with urllib.request.urlopen(list_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+            caches = json.load(result)
+    except urllib.error.URLError as error:
+        print(f"Could not list cache at {CACHE_URL}: {error.reason}")
+        print(f"Start the model server first, run {SERVER_SCRIPT}")
+        sys.exit(1)
+
+    # Erase each cache, empty body avoids a hang on some llama-server builds
+    for cache in caches:
+        cache_id = cache.get("id", 0)
+        erase_url = f"{CACHE_URL}/{cache_id}?action=erase"
+        erase_request = urllib.request.Request(erase_url, data=b"", method="POST", headers={"Authorization": f"Bearer {API_KEY}", "Content-Length": "0"})
+        try:
+            with urllib.request.urlopen(erase_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+                result.read()
+        except urllib.error.HTTPError as error:
+            body = error.read().decode(errors="replace")
+            if error.code == 501:
+                print("Server was started without cache support.")
+                print(f"Restart it with the updated {SERVER_SCRIPT}, then try --clear again.")
+                sys.exit(1)
+            print(f"Could not clear cache: {error.code} {body}")
+            sys.exit(1)
+        except urllib.error.URLError as error:
+            print(f"Could not clear cache: {error.reason}")
+            sys.exit(1)
+
+    # Print success
+    print("Cleared cache.", flush=True)
 
 # Let talk.py register itself when running as __main__
 def set_talk_module(module):
