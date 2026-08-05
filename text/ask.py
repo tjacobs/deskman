@@ -114,38 +114,14 @@ def ask_model(prompt):
     if reply:
         return reply
 
-    # Start with prompt.json alone so that prefix stays identical across asks for KV cache reuse
-    messages = [{"role": "system", "content": load_system_prompt()}]
+    # Build the chat messages for this ask
+    messages = build_messages(prompt)
 
-    # Load memories in a second system message so new tokens append after the cached system prompt
-    extras = prompt_extras()
-    if extras:
-        messages.append({"role": "system", "content": extras})
-
-    # Load previous turns in conversation history
-    messages.extend(conversation_history)
-
-    # Add this question last
-    messages.append({"role": "user", "content": prompt})
-
-    # Initialize tool retry flags
-    math_retry_used = False
-    math_tool_used = False
-    date_math_retry_used = False
+    # Track which tools ran and which domains already got one model retry
+    used = set()
+    retried = set()
     last_calculate_expression = None
     last_calculate_result = None
-    volume_retry_used = False
-    volume_set_used = False
-    volume_get_used = False
-    voice_retry_used = False
-    voice_set_used = False
-    memory_retry_used = False
-    memory_remember_used = False
-    memory_forget_used = False
-    reminder_retry_used = False
-    reminder_set_used = False
-    reminder_cancel_used = False
-    reminder_list_used = False
     last_list_voices_result = None
     last_list_reminders_result = None
 
@@ -158,58 +134,53 @@ def ask_model(prompt):
             reply = (message.get("content") or "").strip()
 
             # Force or apply set_reminder when the model skipped scheduling
-            if reminders.needs_set_reminder(prompt) and not reminder_set_used:
-                forced = reminders.force_set_reminder(prompt, messages, message, reminder_retry_used, record_tool)
-                if forced is True:
-                    reminder_retry_used = True
+            if reminders.needs_set_reminder(prompt) and "set_reminder" not in used:
+                forced = reminders.force_set_reminder(prompt, messages, message, "reminder" in retried, record_tool)
+                action = apply_forced(forced, messages, "reminder", retried)
+                if action == "retry":
                     continue
-                if forced:
-                    remember_turn(messages, forced)
-                    return forced
+                if action:
+                    return action
 
             # Force or apply cancel_reminder when the model skipped canceling
-            if reminders.needs_cancel_reminder(prompt) and not reminder_cancel_used:
-                forced = reminders.force_cancel_reminder(prompt, messages, message, reminder_retry_used, record_tool)
-                if forced is True:
-                    reminder_retry_used = True
+            if reminders.needs_cancel_reminder(prompt) and "cancel_reminder" not in used:
+                forced = reminders.force_cancel_reminder(prompt, messages, message, "reminder" in retried, record_tool)
+                action = apply_forced(forced, messages, "reminder", retried)
+                if action == "retry":
                     continue
-                if forced:
-                    remember_turn(messages, forced)
-                    return forced
+                if action:
+                    return action
 
             # Prefer the exact list_reminders tool text when listing
             if reminders.needs_list_reminders(prompt) and not reminders.needs_set_reminder(prompt) and not reminders.needs_cancel_reminder(prompt):
                 if last_list_reminders_result:
                     remember_turn(messages, last_list_reminders_result)
                     return last_list_reminders_result
-                if not reminder_list_used:
-                    forced = reminders.force_list_reminders(prompt, messages, message, reminder_retry_used, record_tool)
-                    if forced is True:
-                        reminder_retry_used = True
+                if "list_reminders" not in used:
+                    forced = reminders.force_list_reminders(prompt, messages, message, "reminder" in retried, record_tool)
+                    action = apply_forced(forced, messages, "reminder", retried)
+                    if action == "retry":
                         continue
-                    if forced:
-                        remember_turn(messages, forced)
-                        return forced
+                    if action:
+                        return action
 
             # Force or apply remember when the model skipped saving a fact
-            if memory.needs_remember(prompt) and not reminders.needs_set_reminder(prompt) and not memory_remember_used:
-                forced = memory.force_remember(prompt, messages, message, memory_retry_used, record_tool)
-                if forced is True:
-                    memory_retry_used = True
+            if memory.needs_remember(prompt) and not reminders.needs_set_reminder(prompt) and "remember" not in used:
+                forced = memory.force_remember(prompt, messages, message, "memory" in retried, record_tool)
+                action = apply_forced(forced, messages, "memory", retried)
+                if action == "retry":
                     continue
-                if forced:
-                    remember_turn(messages, forced)
-                    return forced
+                if action:
+                    return action
 
             # Force or apply forget when the model skipped dropping a fact
-            if memory.needs_forget(prompt) and not reminders.needs_cancel_reminder(prompt) and not memory_forget_used:
-                forced = memory.force_forget(prompt, messages, message, memory_retry_used, record_tool)
-                if forced is True:
-                    memory_retry_used = True
+            if memory.needs_forget(prompt) and not reminders.needs_cancel_reminder(prompt) and "forget" not in used:
+                forced = memory.force_forget(prompt, messages, message, "memory" in retried, record_tool)
+                action = apply_forced(forced, messages, "memory", retried)
+                if action == "retry":
                     continue
-                if forced:
-                    remember_turn(messages, forced)
-                    return forced
+                if action:
+                    return action
 
             # Prefer a date expression already calculated, else force Python date math
             if dates.needs_date_math(prompt):
@@ -217,50 +188,47 @@ def ask_model(prompt):
                 if spoken:
                     remember_turn(messages, spoken)
                     return spoken
-                forced = dates.force_date_calculate(prompt, messages, message, date_math_retry_used, record_tool)
-                if forced is True:
-                    date_math_retry_used = True
+                forced = dates.force_date_calculate(prompt, messages, message, "date" in retried, record_tool)
+                action = apply_forced(forced, messages, "date", retried)
+                if action == "retry":
                     continue
-                if forced:
-                    remember_turn(messages, forced)
-                    return forced
+                if action:
+                    return action
 
             # Force calculate when the model guessed arithmetic
-            if maths.needs_math_tool(prompt) and not dates.needs_date_math(prompt) and not math_tool_used and not math_retry_used:
-                math_retry_used = True
+            if maths.needs_math_tool(prompt) and not dates.needs_date_math(prompt) and "calculate" not in used and "math" not in retried:
+                retried.add("math")
                 print(f'Result: "{reply or ""}"', flush=True)
-                print(f'Missing math tool, retrying, why: {maths.math_tool_reason(prompt)}, but it answered without calling calculate', flush=True)
+                print(f'Missing math tool, retrying, why: {maths.math_tool_reason(prompt)}, but it answered without calling calculate.', flush=True)
                 messages.append(message)
                 messages.append({"role": "user", "content": maths.MATH_RETRY_PROMPT})
                 continue
 
             # Force or apply set_volume when the model skipped a volume change
-            if volume.needs_set_volume(prompt) and not volume_set_used:
-                forced = volume.force_set_volume(prompt, messages, message, volume_retry_used, record_tool)
-                if forced is True:
-                    volume_retry_used = True
+            if volume.needs_set_volume(prompt) and "set_volume" not in used:
+                forced = volume.force_set_volume(prompt, messages, message, "volume" in retried, record_tool)
+                action = apply_forced(forced, messages, "volume", retried)
+                if action == "retry":
                     continue
-                if forced:
-                    remember_turn(messages, forced)
-                    return forced
+                if action:
+                    return action
 
             # Force get_volume when the model guessed the current volume
-            if volume.needs_get_volume(prompt) and not volume_get_used and not volume_retry_used:
-                volume_retry_used = True
+            if volume.needs_get_volume(prompt) and "get_volume" not in used and "volume" not in retried:
+                retried.add("volume")
                 print("[ask] missing get_volume, retrying", flush=True)
                 messages.append(message)
                 messages.append({"role": "user", "content": volume.GET_VOLUME_RETRY_PROMPT})
                 continue
 
             # Force or apply set_voice when the model skipped a voice change
-            if voice.needs_set_voice(prompt) and not voice_set_used:
-                forced = voice.force_set_voice(prompt, messages, message, voice_retry_used, record_tool)
-                if forced is True:
-                    voice_retry_used = True
+            if voice.needs_set_voice(prompt) and "set_voice" not in used:
+                forced = voice.force_set_voice(prompt, messages, message, "voice" in retried, record_tool)
+                action = apply_forced(forced, messages, "voice", retried)
+                if action == "retry":
                     continue
-                if forced:
-                    remember_turn(messages, forced)
-                    return forced
+                if action:
+                    return action
 
             # Prefer the exact list_voices tool text when listing
             if voice.needs_list_voices(prompt) and not voice.needs_set_voice(prompt):
@@ -274,7 +242,7 @@ def ask_model(prompt):
                 return result
 
             # Prefer a clear spoken confirmation after a successful volume set
-            if not reply and volume_set_used:
+            if not reply and "set_volume" in used:
                 reply = volume.confirm_volume_set() or reply
             remember_turn(messages, reply or "Okay.")
             return reply or "Okay."
@@ -289,91 +257,77 @@ def ask_model(prompt):
             voice.inject_list_voices_count(tool_call, prompt)
             result = run_tool(tool_call)
             tool_name = (tool_call.get("function") or {}).get("name")
+            if tool_name:
+                used.add(tool_name)
             if tool_name == "calculate":
-                math_tool_used = True
                 arguments = parse_tool_arguments((tool_call.get("function") or {}).get("arguments"))
                 last_calculate_expression = arguments.get("expression", "")
                 last_calculate_result = result
-            if tool_name == "set_volume":
-                volume_set_used = True
-            if tool_name == "get_volume":
-                volume_get_used = True
-            if tool_name == "set_voice":
-                voice_set_used = True
             if tool_name == "list_voices":
                 last_list_voices_result = result
-            if tool_name == "remember":
-                memory_remember_used = True
-            if tool_name == "forget":
-                memory_forget_used = True
-            if tool_name == "set_reminder":
-                reminder_set_used = True
-            if tool_name == "cancel_reminder":
-                reminder_cancel_used = True
             if tool_name == "list_reminders":
-                reminder_list_used = True
                 last_list_reminders_result = result
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
 
         # Resolve day counts in Python, or keep a valid date expression the model already ran
         if dates.needs_date_math(prompt):
             forced = dates.force_date_calculate(prompt, messages, None, True, record_tool)
-            if forced:
-                remember_turn(messages, forced)
-                return forced
+            action = apply_forced(forced, messages, "date", retried)
+            if action and action != "retry":
+                return action
             spoken = dates.speak_model_date_calculate(last_calculate_expression, last_calculate_result)
             if spoken:
                 remember_turn(messages, spoken)
                 return spoken
 
         # If it talked about reminders but skipped the tool, apply it in Python now
-        if reminders.needs_set_reminder(prompt) and not reminder_set_used:
+        if reminders.needs_set_reminder(prompt) and "set_reminder" not in used:
             forced = reminders.force_set_reminder(prompt, messages, None, True, record_tool)
-            if forced:
-                remember_turn(messages, forced)
-                return forced
-        if reminders.needs_cancel_reminder(prompt) and not reminder_cancel_used:
+            action = apply_forced(forced, messages, "reminder", retried)
+            if action and action != "retry":
+                return action
+        if reminders.needs_cancel_reminder(prompt) and "cancel_reminder" not in used:
             forced = reminders.force_cancel_reminder(prompt, messages, None, True, record_tool)
-            if forced:
-                remember_turn(messages, forced)
-                return forced
+            action = apply_forced(forced, messages, "reminder", retried)
+            if action and action != "retry":
+                return action
         if reminders.needs_list_reminders(prompt) and last_list_reminders_result and not reminders.needs_set_reminder(prompt) and not reminders.needs_cancel_reminder(prompt):
             remember_turn(messages, last_list_reminders_result)
             return last_list_reminders_result
 
         # If it talked about remembering but did not call remember, save it in Python now
-        if memory.needs_remember(prompt) and not reminders.needs_set_reminder(prompt) and not memory_remember_used:
+        if memory.needs_remember(prompt) and not reminders.needs_set_reminder(prompt) and "remember" not in used:
             forced = memory.force_remember(prompt, messages, None, True, record_tool)
-            if forced:
-                remember_turn(messages, forced)
-                return forced
+            action = apply_forced(forced, messages, "memory", retried)
+            if action and action != "retry":
+                return action
 
         # If it talked about forgetting but did not call forget, drop it in Python now
-        if memory.needs_forget(prompt) and not reminders.needs_cancel_reminder(prompt) and not memory_forget_used:
+        if memory.needs_forget(prompt) and not reminders.needs_cancel_reminder(prompt) and "forget" not in used:
             forced = memory.force_forget(prompt, messages, None, True, record_tool)
-            if forced:
-                remember_turn(messages, forced)
-                return forced
+            action = apply_forced(forced, messages, "memory", retried)
+            if action and action != "retry":
+                return action
 
         # If it checked volume instead of setting it, set it in Python now
-        if volume.needs_set_volume(prompt) and not volume_set_used:
+        if volume.needs_set_volume(prompt) and "set_volume" not in used:
             forced = volume.force_set_volume(prompt, messages, None, True, record_tool)
-            if forced is True:
-                volume_set_used = True
+            action = apply_forced(forced, messages, "volume", retried)
+            if action == "retry":
+                used.add("set_volume")
                 continue
-            if forced:
-                remember_turn(messages, forced)
-                return forced
+            if action:
+                return action
 
         # If it listed voices instead of setting one, set it in Python now
-        if voice.needs_set_voice(prompt) and not voice_set_used:
+        if voice.needs_set_voice(prompt) and "set_voice" not in used:
             forced = voice.force_set_voice(prompt, messages, None, True, record_tool)
-            if forced is True:
-                voice_set_used = True
+            action = apply_forced(forced, messages, "voice", retried)
+            if action == "retry":
+                used.add("set_voice")
                 continue
-            if forced:
-                remember_turn(messages, forced)
-                return forced
+            if action:
+                return action
 
         # Speak the exact voice list from the tool, do not let the model shorten it
         if voice.needs_list_voices(prompt) and last_list_voices_result and not voice.needs_set_voice(prompt):
@@ -384,6 +338,33 @@ def ask_model(prompt):
     reply = "I could not finish that request."
     remember_turn(messages, reply)
     return reply
+
+# Build the chat messages for one ask
+def build_messages(prompt):
+    # Start with prompt.json alone so that prefix stays identical across asks for KV cache reuse
+    messages = [{"role": "system", "content": load_system_prompt()}]
+
+    # Load memories in a second system message so new tokens append after the cached system prompt
+    extras = prompt_extras()
+    if extras:
+        messages.append({"role": "system", "content": extras})
+
+    # Load previous turns in conversation history
+    messages.extend(conversation_history)
+
+    # Add this question last
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+# Handle a forced tool result, True means retry the model, text means return that reply
+def apply_forced(forced, messages, domain, retried):
+    if forced is True:
+        retried.add(domain)
+        return "retry"
+    if forced:
+        remember_turn(messages, forced)
+        return forced
+    return None
 
 # Answer date questions in Python when the model would only guess
 def skip_inference(prompt):
