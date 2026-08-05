@@ -82,18 +82,25 @@ def main():
 
 # Return true when the question needs the Python math tool
 def needs_math_tool(prompt):
+    return math_tool_reason(prompt) is not None
+
+# Return why the prompt needs calculate, or None when it does not
+def math_tool_reason(prompt):
     text = prompt.lower()
     if "volume" in text:
-        return False
+        return None
     if "square root" in text:
-        return True
-    if re.search(r"\b(plus|minus|times|divided|multiply|calculate)\b", text):
-        return True
+        return 'prompt looks like arithmetic ("square root")'
+    match = re.search(r"\b(plus|minus|times|divided|multiply|calculate)\b", text)
+    if match:
+        return f'prompt looks like arithmetic ("{match.group(1)}")'
     if re.search(r"\d+\s*percent\s+of\b", text):
-        return True
+        return 'prompt looks like arithmetic ("percent of")'
     if re.search(r"\d+\s*[\+\-\*\/x×÷]\s*\d+", text):
-        return True
-    return bool(re.search(r"\b(what is|what's)\s+\d", text))
+        return "prompt looks like arithmetic (numeric operator)"
+    if re.search(r"\b(what is|what's)\s+\d", text):
+        return 'prompt looks like arithmetic ("what is" plus a number)'
+    return None
 
 # Evaluate a safe Python math expression
 def run_calculate(expression):

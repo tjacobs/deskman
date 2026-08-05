@@ -8,9 +8,6 @@ import time
 import urllib.error
 import urllib.request
 
-# Start the clock here, the ask modules load next so their cost is counted
-STARTUP_START = time.perf_counter()
-
 # Import ask modules
 import dates
 import maths
@@ -19,9 +16,6 @@ import move
 import reminders
 import voice
 import volume
-
-# Record how long the ask modules took to import
-IMPORT_SECONDS = time.perf_counter() - STARTUP_START
 
 # Config
 API_URL = "http://127.0.0.1:8080/v1/chat/completions"
@@ -36,6 +30,7 @@ MAX_TOKENS = 100
 TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 40
+INFERENCE_INPUT_CHARS = 200
 
 # Tools the local model can call
 TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + voice.TOOLS + volume.TOOLS
@@ -46,9 +41,8 @@ last_tool_log = []
 
 # Timing for the last ask, only printed when run standalone
 show_timing = False
-last_round_timings = []
-last_prompt_seconds = 0
 last_completion_tokens = 0
+ask_start = None
 
 # Main
 def main():
@@ -56,16 +50,17 @@ def main():
     prompt = parse_args()
 
     # Print timing when run standalone, talk.py keeps its own output clean
-    global show_timing
+    global show_timing, ask_start
     show_timing = True
+    ask_start = None
 
     # Ask local model
-    ask_start = time.perf_counter()
     response = ask_model(prompt)
     print(response)
 
-    # Print where the time went
-    print_timing(ask_start)
+    # Print total time when the model was called
+    if ask_start is not None:
+        log_timing("Ask total", ask_start)
 
 # Parse prompt from command line
 def parse_args():
@@ -76,9 +71,8 @@ def parse_args():
 
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
-    # Start a fresh tool log and timing record for this ask
+    # Start a fresh tool log for this ask
     last_tool_log.clear()
-    last_round_timings.clear()
 
     # Answer volume follow-ups from the last actual ALSA value
     reply = volume.answer_last_volume_set(prompt)
@@ -105,11 +99,7 @@ def ask_model(prompt):
             return reply
 
     # Start from the system prompt with long-term memories, prior turns, and this question
-    global last_prompt_seconds
-    prompt_start = time.perf_counter()
-    system_message = system_prompt_with_memories()
-    last_prompt_seconds = time.perf_counter() - prompt_start
-    messages = [{"role": "system", "content": system_message}]
+    messages = [{"role": "system", "content": system_prompt_with_memories()}]
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": prompt})
     math_retry_used = False
@@ -134,10 +124,8 @@ def ask_model(prompt):
 
     # Loop until the model replies with spoken text
     for _ in range(MAX_TOOL_ROUNDS):
-        # Time the model call and start a new row in the timing table
-        model_start = time.perf_counter()
+        # Time one model call and print its timing as soon as it returns
         message = chat_completion(messages)
-        record_round(time.perf_counter() - model_start, last_completion_tokens)
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
             reply = (message.get("content") or "").strip()
@@ -213,7 +201,8 @@ def ask_model(prompt):
             # Force calculate when the model guessed arithmetic
             if maths.needs_math_tool(prompt) and not dates.needs_date_math(prompt) and not math_tool_used and not math_retry_used:
                 math_retry_used = True
-                print("[ask] missing math tool, retrying", flush=True)
+                print(f'Result: "{reply or ""}"', flush=True)
+                print(f'Missing math tool, retrying, why: {maths.math_tool_reason(prompt)}, but it answered without calling calculate', flush=True)
                 messages.append(message)
                 messages.append({"role": "user", "content": maths.MATH_RETRY_PROMPT})
                 continue
@@ -264,9 +253,7 @@ def ask_model(prompt):
             return reply or "Okay."
 
         # Keep the assistant tool call turn, then return each tool result
-        print(f"[ask] tools: {[call.get('function', {}).get('name') for call in tool_calls]}", flush=True)
         messages.append(message)
-        tools_start = time.perf_counter()
         for tool_call in tool_calls:
             voice.inject_list_voices_count(tool_call, prompt)
             result = run_tool(tool_call)
@@ -296,9 +283,6 @@ def ask_model(prompt):
                 reminder_list_used = True
                 last_list_reminders_result = result
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
-
-        # Add the tool time to the row for this round
-        record_round_tools(time.perf_counter() - tools_start)
 
         # Resolve day counts in Python, or keep a valid date expression the model already ran
         if dates.needs_date_math(prompt):
@@ -419,7 +403,7 @@ def system_prompt_with_memories():
 
 # Send one chat request to llama-server
 def chat_completion(messages):
-    global last_completion_tokens
+    global last_completion_tokens, ask_start
 
     # Build request body
     body = {
@@ -431,14 +415,23 @@ def chat_completion(messages):
         "temperature": TEMPERATURE,
     }
 
+    # Tell the user inference has started when run standalone
+    if show_timing:
+        print(f'Inferencing: "{format_inference_input(messages)}"', flush=True)
+        if ask_start is None:
+            ask_start = time.perf_counter()
+
     # Send request
+    model_start = time.perf_counter()
     request = urllib.request.Request(API_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
         response = json.load(result)
+    model_seconds = time.perf_counter() - model_start
 
-    # Keep the generated token count so the timing table can show tokens per second
+    # Keep the generated token count and print this round's timing now
     usage = response.get("usage") or {}
     last_completion_tokens = int(usage.get("completion_tokens") or 0)
+    log_model_timing(model_seconds, last_completion_tokens)
 
     # Return the assistant message
     return response["choices"][0]["message"]
@@ -527,12 +520,9 @@ def run_tool(tool_call):
 
 # Print a tool call and keep it for the talks log
 def record_tool(name, arguments, result):
-    call_line = f"[tool] {name} {arguments}"
-    result_line = f"[tool] {name} -> {result}"
-    last_tool_log.append(call_line)
-    last_tool_log.append(result_line)
-    print(call_line, flush=True)
-    print(result_line, flush=True)
+    line = f"[Tool] {name} {arguments} -> {result}"
+    last_tool_log.append(line)
+    print(line, flush=True)
 
 # Parse tool arguments from JSON text or a dict
 def parse_tool_arguments(raw_arguments):
@@ -545,53 +535,33 @@ def parse_tool_arguments(raw_arguments):
     except json.JSONDecodeError:
         return {}
 
-# Record one model round for the timing table
-def record_round(model_seconds, tokens):
-    last_round_timings.append({"model": model_seconds, "tokens": tokens, "tools": 0})
-
-# Add the tool time to the round just recorded
-def record_round_tools(tools_seconds):
-    if last_round_timings:
-        last_round_timings[-1]["tools"] = tools_seconds
-
-# Print where this ask spent its time
-def print_timing(ask_start):
+# Print timing for one finished model call
+def log_model_timing(model_seconds, tokens):
     if not show_timing:
         return
-
-    # Show startup costs paid before the model was called
-    log_elapsed("Import modules", IMPORT_SECONDS)
-    log_elapsed("Load prompt", last_prompt_seconds)
-
-    # Show one row per model round, some asks are answered in Python with no rounds
-    if last_round_timings:
-        print_round_header()
-        for index, round_timing in enumerate(last_round_timings, start=1):
-            log_round_timing(index, round_timing)
-
-    # Show totals
-    log_timing("Ask total", ask_start)
-    log_timing("Script total", STARTUP_START)
-
-# Print the round timing header
-def print_round_header():
-    print(f"{'Round':>5}  {'Model':>8}  {'Tokens':>7}  {'Speed':>9}  {'Tools':>8}")
-
-# Print one round with model time, tokens generated, and tool time
-def log_round_timing(index, round_timing):
-    model_seconds = round_timing["model"]
-    tokens = round_timing["tokens"]
-    tools_seconds = round_timing["tools"]
     speed = tokens / model_seconds if model_seconds > 0 else 0
-    print(f"{index:>5}  {format_seconds(model_seconds):>8}  {tokens:>7}  {format_token_speed(speed):>9}  {format_seconds(tools_seconds):>8}")
+    print(f"Model: {format_seconds(model_seconds)}  Tokens: {tokens}  Speed: {format_token_speed(speed)}", flush=True)
+
+# Short preview of the newest text the model is reacting to
+def format_inference_input(messages):
+    for message in reversed(messages):
+        content = (message.get("content") or "").strip()
+        if not content:
+            continue
+        role = message.get("role", "")
+        if role not in ("user", "tool"):
+            continue
+        text = " ".join(content.split())
+        if len(text) > INFERENCE_INPUT_CHARS:
+            text = text[:INFERENCE_INPUT_CHARS - 3] + "..."
+        if role == "tool":
+            return f"[tool] {text}"
+        return text
+    return "(no input)"
 
 # Print elapsed seconds for a timed step
 def log_timing(label, start_time):
-    print(f"{label}: {format_seconds(time.perf_counter() - start_time)}")
-
-# Print elapsed seconds for a stored duration
-def log_elapsed(label, seconds):
-    print(f"{label}: {format_seconds(seconds)}")
+    print(f"{label}: {format_seconds(time.perf_counter() - start_time)}", flush=True)
 
 # Format seconds for timing output
 def format_seconds(seconds):
@@ -599,7 +569,7 @@ def format_seconds(seconds):
 
 # Format generated tokens per second
 def format_token_speed(speed):
-    return f"{speed:.1f}/s"
+    return f"{speed:.1f} tokens/sec"
 
 # Let talk.py register itself when running as __main__
 def set_talk_module(module):
