@@ -692,6 +692,7 @@ def check_ready():
 def start_text_server():
     # Reuse a server that is already healthy
     if text_server_healthy():
+        print(f'Model: {text_ask.resolve_model_name()}', flush=True)
         return None
 
     # Quit when the install is incomplete
@@ -710,7 +711,7 @@ def start_text_server():
             print('Text server failed to start. Run ./text/server.sh to see the error.')
             sys.exit(1)
         if text_server_healthy():
-            print('Text model server ready.', flush=True)
+            print(f'Text model server ready. Model: {text_ask.resolve_model_name()}', flush=True)
             return process
         time.sleep(TEXT_SERVER_POLL_SECONDS)
 

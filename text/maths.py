@@ -102,6 +102,34 @@ def math_tool_reason(prompt):
         return 'prompt looks like arithmetic ("what is" plus a number)'
     return None
 
+# Build a simple calculate expression from spoken arithmetic, or None
+def expression_from_prompt(prompt):
+    text = prompt.lower()
+    word_ops = {
+        "plus": "+",
+        "minus": "-",
+        "times": "*",
+        "multiplied": "*",
+        "multiply": "*",
+        "divided": "/",
+        "over": "/",
+    }
+    match = re.search(r"(\d+(?:\.\d+)?)\s+(plus|minus|times|multiplied|multiply|divided|over)\s+(?:by\s+)?(\d+(?:\.\d+)?)", text)
+    if match:
+        return f"{match.group(1)} {word_ops[match.group(2)]} {match.group(3)}"
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([+\-*/x×÷])\s*(\d+(?:\.\d+)?)", text)
+    if match:
+        operator = match.group(2)
+        if operator in ("x", "×"):
+            operator = "*"
+        elif operator == "÷":
+            operator = "/"
+        return f"{match.group(1)} {operator} {match.group(3)}"
+    match = re.search(r"square root of\s+(\d+(?:\.\d+)?)", text)
+    if match:
+        return f"sqrt({match.group(1)})"
+    return None
+
 # Evaluate a safe Python math expression
 def run_calculate(expression):
     expression = str(expression or "").strip()

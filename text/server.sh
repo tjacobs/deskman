@@ -12,13 +12,9 @@ CACHE_PATH="${TEXT_DIR}/cache"
 MODELS_DIR="${TEXT_DIR}/models"
 GROW_REQUEST_PATH="${CACHE_PATH}/grow_to"
 
-# Default model preset, 1b on Raspberry Pi, e2b elsewhere, override with ./server.sh 1b or ./server.sh e2b
-DEVICE_TREE_MODEL="/proc/device-tree/model"
-if [[ -r "${DEVICE_TREE_MODEL}" ]] && tr -d '\0' < "${DEVICE_TREE_MODEL}" | grep -q "Raspberry Pi"; then
-    DEFAULT_PRESET="1b"
-else
-    DEFAULT_PRESET="e2b"
-fi
+# Default model preset, override with ./server.sh 1b or ./server.sh e2b
+# e2b is default because Gemma 3 1b has no native tool calling in llama-server
+DEFAULT_PRESET="e2b"
 
 # Server config, CONTEXT_SIZE can grow when client.py writes cache/grow_to
 HOST="127.0.0.1"
@@ -190,8 +186,8 @@ read_grow_request() {
 # Print usage help
 print_usage() {
     echo "Usage: ./server.sh [e2b|1b]"
-    echo "  1b   Gemma 3 1B Q4_K_M, default on Raspberry Pi, faster"
-    echo "  e2b  Gemma 4 E2B Q4_K_S, default elsewhere, better quality"
+    echo "  e2b  Gemma 4 E2B Q4_K_S, default, tool calling works"
+    echo "  1b   Gemma 3 1B Q4_K_M, faster, but no native tool calling"
     echo "Context starts at CONTEXT_SIZE, default 4096, and grows when client.py requests it."
 }
 

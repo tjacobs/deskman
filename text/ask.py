@@ -3,6 +3,7 @@
 # Imports
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -24,6 +25,11 @@ SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
 PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
 SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.sh")
 
+# Config model
+DEFAULT_MODEL = client.DEFAULT_MODEL
+DEFAULT_CONTEXT_SIZE = client.DEFAULT_CONTEXT_SIZE
+MAX_TOKENS = client.MAX_TOKENS
+
 # Config values
 TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
@@ -32,6 +38,8 @@ INFERENCE_INPUT_CHARS = 200
 
 # Tools the local model can call
 TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + voice.TOOLS + volume.TOOLS
+TOOL_NAMES = [tool["function"]["name"] for tool in TOOLS]
+TOOL_NAME_SET = set(TOOL_NAMES)
 
 # Conversation history kept across asks in this process
 conversation_history = []
@@ -125,8 +133,14 @@ def ask_model(prompt):
         # Call model inference
         message = chat_completion(messages)
 
-        # Get the tool call the model returned
+        # Get native tool calls, or JSON tool calls from content on 1b
         tool_calls = message.get("tool_calls") or []
+        if not tool_calls:
+            tool_calls = parse_tool_calls_from_content(message.get("content") or "")
+            if tool_calls:
+                message = dict(message)
+                message["tool_calls"] = tool_calls
+                message["content"] = ""
 
         # No tool call
         if not tool_calls:
@@ -259,10 +273,20 @@ def ask_model(prompt):
         if show_timing:
             print(f"Result: {format_tool_calls_json(tool_calls)}", flush=True)
 
-        # Keep the assistant tool call turn, then return each tool result
-        messages.append(message)
+        # Run each tool, then feed results back in a form this model accepts
+        content_tools = uses_content_tools()
+        if content_tools:
+            messages.append({"role": "assistant", "content": format_tool_calls_json(tool_calls)})
+        else:
+            messages.append(message)
+        tool_result_lines = []
         for tool_call in tool_calls:
             voice.inject_list_voices_count(tool_call, prompt)
+
+            # 1b often omits calculate.expression, fill a simple one from the user prompt
+            if content_tools:
+                fill_content_calculate_expression(tool_call, prompt)
+
             result = run_tool(tool_call)
             tool_name = (tool_call.get("function") or {}).get("name")
             if tool_name:
@@ -275,7 +299,14 @@ def ask_model(prompt):
                 last_list_voices_result = result
             if tool_name == "list_reminders":
                 last_list_reminders_result = result
-            messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
+            if content_tools:
+                tool_result_lines.append(f"{tool_name}: {result}")
+            else:
+                messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
+
+        # Gemma 3 has no tool role, so return results as the next user turn
+        if content_tools:
+            messages.append({"role": "user", "content": "Tool results:\n" + "\n".join(tool_result_lines) + "\nAnswer using only these results in one or two short sentences."})
 
         # Resolve day counts in Python, or keep a valid date expression the model already ran
         if dates.needs_date_math(prompt):
@@ -350,7 +381,13 @@ def ask_model(prompt):
 # Build the chat messages for one ask
 def build_messages(prompt):
     # Start with prompt.json alone so that prefix stays identical across asks for KV cache reuse
-    messages = [{"role": "system", "content": load_system_prompt()}]
+    system_prompt = load_system_prompt()
+
+    # Teach 1b to emit tool JSON in content, its chat template has no tool path
+    if uses_content_tools():
+        system_prompt = system_prompt + "\n\n" + client.content_tools_instruction(TOOL_NAMES)
+
+    messages = [{"role": "system", "content": system_prompt}]
 
     # Load previous turns in conversation history
     messages.extend(conversation_history)
@@ -471,14 +508,22 @@ def print_context(prompt):
 
 # Build the chat-completions JSON body for one model call
 def build_request_body(messages):
-    return {
+    body = {
         "model": resolve_model_name(),
         "messages": messages,
-        "tools": TOOLS,
-        "tool_choice": "auto",
-        "max_tokens": client.MAX_TOKENS,
+        "max_tokens": MAX_TOKENS,
         "temperature": TEMPERATURE,
     }
+
+    # Native tools only for models whose chat template supports them
+    if not uses_content_tools():
+        body["tools"] = TOOLS
+        body["tool_choice"] = "auto"
+    return body
+
+# True when the running model has no native tool_calls channel
+def uses_content_tools():
+    return resolve_model_name() == client.CONTENT_TOOLS_MODEL
 
 # Ask the server to render messages and tools through the model chat template
 def apply_chat_template(messages, tools):
@@ -516,11 +561,11 @@ def resolve_model_name():
             payload = json.load(result)
         models = payload.get("data") or []
         if models:
-            resolved_model = models[0].get("id") or client.DEFAULT_MODEL
+            resolved_model = models[0].get("id") or DEFAULT_MODEL
             return resolved_model
     except urllib.error.URLError:
         pass
-    resolved_model = client.DEFAULT_MODEL
+    resolved_model = DEFAULT_MODEL
     return resolved_model
 
 # Read the context window size from the running server
@@ -539,7 +584,7 @@ def resolve_context_size():
             return resolved_context_size
     except (urllib.error.URLError, TypeError, ValueError):
         pass
-    resolved_context_size = client.DEFAULT_CONTEXT_SIZE
+    resolved_context_size = DEFAULT_CONTEXT_SIZE
     return resolved_context_size
 
 # Send one chat request to server
@@ -678,6 +723,108 @@ def parse_tool_arguments(raw_arguments):
         return json.loads(raw_arguments)
     except json.JSONDecodeError:
         return {}
+
+# Turn JSON in assistant content into OpenAI-style tool_calls, or empty
+def parse_tool_calls_from_content(content):
+    data = extract_json_object(content)
+    if data is None:
+        return []
+
+    # Shape B, {"name":"get_time","arguments":{}}
+    if isinstance(data.get("name"), str):
+        tool_call = make_content_tool_call(data.get("name"), data.get("arguments"), 0)
+        return [tool_call] if tool_call else []
+
+    # Shape C, {"tool_calls":[{"function":{"name":"...","arguments":"{}"}}]}
+    raw_calls = data.get("tool_calls")
+    if not isinstance(raw_calls, list):
+        return []
+    tool_calls = []
+    for index, raw_call in enumerate(raw_calls):
+        if not isinstance(raw_call, dict):
+            continue
+        function = raw_call.get("function") or raw_call
+        if not isinstance(function, dict):
+            continue
+        tool_call = make_content_tool_call(function.get("name"), function.get("arguments"), index)
+        if tool_call:
+            tool_calls.append(tool_call)
+    return tool_calls
+
+# Build one synthetic tool_call dict when the name is a known tool
+def make_content_tool_call(name, arguments, index):
+    if name not in TOOL_NAME_SET:
+        return None
+    parsed_arguments = parse_tool_arguments(arguments)
+    return {
+        "id": f"content_call_{index}",
+        "type": "function",
+        "function": {
+            "name": name,
+            "arguments": json.dumps(parsed_arguments),
+        },
+    }
+
+# Fill calculate.expression when 1b returned the tool with empty arguments
+def fill_content_calculate_expression(tool_call, prompt):
+    function = tool_call.get("function") or {}
+    if function.get("name") != "calculate":
+        return
+    arguments = parse_tool_arguments(function.get("arguments"))
+    if str(arguments.get("expression") or "").strip():
+        return
+    expression = maths.expression_from_prompt(prompt)
+    if not expression:
+        return
+    arguments["expression"] = expression
+    function["arguments"] = json.dumps(arguments)
+    tool_call["function"] = function
+
+# Pull the first JSON object from model text, stripping markdown fences
+def extract_json_object(content):
+    text = strip_content_fences(content)
+    if not text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return recover_tool_json(text)
+    try:
+        data = json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return recover_tool_json(text)
+    if not isinstance(data, dict):
+        return None
+    return data
+
+# Strip markdown code fences around JSON
+def strip_content_fences(content):
+    text = (content or "").strip()
+    if not text:
+        return ""
+    if "```" not in text:
+        return text
+    fenced = text.split("```")[1]
+    if fenced.startswith("json"):
+        fenced = fenced[4:]
+    return fenced.strip()
+
+# Recover {"name","arguments"} when the model emits broken JSON
+def recover_tool_json(text):
+    name_match = re.search(r'"name"\s*:\s*"([a-z_]+)"', text)
+    if not name_match:
+        return None
+    name = name_match.group(1)
+    if name not in TOOL_NAME_SET:
+        return None
+    arguments = {}
+    arguments_match = re.search(r'"arguments"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})', text)
+    if arguments_match:
+        try:
+            arguments = json.loads(arguments_match.group(1))
+        except json.JSONDecodeError:
+            arguments = {}
+    return {"name": name, "arguments": arguments}
 
 # Print timing for one finished model call
 def log_model_timing(model_seconds, tokens, timings, usage):

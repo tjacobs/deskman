@@ -9,8 +9,13 @@
 
 ## Models
 
-- 1b:  gemma-3-1b-it-Q4_K_M.gguf  (762 MiB,  1.00B params), alias gemma-3-1b (default on Pi)
-- e2b: gemma-4-E2B-it-Q4_K_S.gguf (2.82 GiB, 4.65B params), alias gemma-4-e2b
+- e2b: gemma-4-E2B-it-Q4_K_S.gguf (2.82 GiB, 4.65B params), alias gemma-4-e2b (default)
+- 1b:  gemma-3-1b-it-Q4_K_M.gguf  (762 MiB,  1.00B params), alias gemma-3-1b
+
+## Important: tool calling
+
+- Gemma 4 e2b supports native OpenAI-style tool calls via its chat template (tools JSON is injected; replies can include tool_calls). Default for that reason.
+- Gemma 3 1b has no native tool_calls channel. ask.py omits the tools API field for 1b, appends a compact JSON-tool instruction, and parses {"name","arguments"} (or OpenAI-shaped) JSON from message content into synthetic tool_calls. Tool results are fed back as a user turn because Gemma 3 rejects role=tool.
 
 ## Raw speed (llama-bench, -t 2 -ngl 0, 3 reps)
 

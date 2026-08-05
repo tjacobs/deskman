@@ -11,6 +11,9 @@ import urllib.error
 import urllib.request
 
 # Config
+DEFAULT_MODEL = "gemma-4-e2b"
+DEFAULT_CONTEXT_SIZE = 4096
+MAX_TOKENS = 100
 API_BASE = "http://127.0.0.1:8080"
 API_KEY = "local"
 API_URL = f"{API_BASE}/v1/chat/completions"
@@ -20,10 +23,7 @@ HEALTH_URL = f"{API_BASE}/health"
 APPLY_TEMPLATE_URL = f"{API_BASE}/apply-template"
 TOKENIZE_URL = f"{API_BASE}/tokenize"
 CACHE_URL = f"{API_BASE}/slots"
-DEFAULT_MODEL = "gemma-3-1b"
-DEFAULT_CONTEXT_SIZE = 4096
 MAX_CONTEXT_SIZE = 16384
-MAX_TOKENS = 100
 REQUEST_TIMEOUT_SECONDS = 300
 GROW_HEADROOM = 256
 GROW_ATTEMPTS = 2
@@ -125,3 +125,23 @@ def read_live_context_size():
     if not context_size:
         return None
     return int(context_size)
+
+# Model alias that uses JSON tool calls in content instead of native tool_calls
+CONTENT_TOOLS_MODEL = "gemma-3-1b"
+
+# System add-on that teaches that model to emit tool JSON in content
+def content_tools_instruction(tool_names):
+    names = ", ".join(tool_names)
+    return (
+        "When you need a tool, reply with ONLY valid JSON and nothing else, "
+        'for example {"name":"get_time","arguments":{}}. '
+        f"Allowed names: {names}. "
+        "arguments must be a JSON object. "
+        'For calculate use {"name":"calculate","arguments":{"expression":"7 + 8"}}. '
+        'For look use {"direction":"left"|"right"|"center"}. '
+        'For set_volume use {"percent":N}. '
+        'For set_voice use {"voice":"..."}. '
+        'For remember or forget use {"text":"..."}. '
+        'For set_reminder use {"name":"...","time":"HH:MM"}. '
+        'For cancel_reminder use {"name":"..."}.'
+    )
