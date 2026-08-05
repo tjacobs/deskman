@@ -4,8 +4,12 @@
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
+
+# Start the clock here, the ask modules load next so their cost is counted
+STARTUP_START = time.perf_counter()
 
 # Import ask modules
 import dates
@@ -16,6 +20,9 @@ import reminders
 import voice
 import volume
 
+# Record how long the ask modules took to import
+IMPORT_SECONDS = time.perf_counter() - STARTUP_START
+
 # Config
 API_URL = "http://127.0.0.1:8080/v1/chat/completions"
 API_KEY = "local"
@@ -23,6 +30,7 @@ MODEL = "gemma-4-e2b"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
 PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
+SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.sh")
 REQUEST_TIMEOUT_SECONDS = 120
 MAX_TOKENS = 100
 TEMPERATURE = 0.7
@@ -36,14 +44,28 @@ TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS 
 conversation_history = []
 last_tool_log = []
 
+# Timing for the last ask, only printed when run standalone
+show_timing = False
+last_round_timings = []
+last_prompt_seconds = 0
+last_completion_tokens = 0
+
 # Main
 def main():
     # Parse prompt
     prompt = parse_args()
 
+    # Print timing when run standalone, talk.py keeps its own output clean
+    global show_timing
+    show_timing = True
+
     # Ask local model
+    ask_start = time.perf_counter()
     response = ask_model(prompt)
     print(response)
+
+    # Print where the time went
+    print_timing(ask_start)
 
 # Parse prompt from command line
 def parse_args():
@@ -54,8 +76,9 @@ def parse_args():
 
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
-    # Start a fresh tool log for this ask
+    # Start a fresh tool log and timing record for this ask
     last_tool_log.clear()
+    last_round_timings.clear()
 
     # Answer volume follow-ups from the last actual ALSA value
     reply = volume.answer_last_volume_set(prompt)
@@ -82,7 +105,11 @@ def ask_model(prompt):
             return reply
 
     # Start from the system prompt with long-term memories, prior turns, and this question
-    messages = [{"role": "system", "content": system_prompt_with_memories()}]
+    global last_prompt_seconds
+    prompt_start = time.perf_counter()
+    system_message = system_prompt_with_memories()
+    last_prompt_seconds = time.perf_counter() - prompt_start
+    messages = [{"role": "system", "content": system_message}]
     messages.extend(conversation_history)
     messages.append({"role": "user", "content": prompt})
     math_retry_used = False
@@ -107,7 +134,10 @@ def ask_model(prompt):
 
     # Loop until the model replies with spoken text
     for _ in range(MAX_TOOL_ROUNDS):
+        # Time the model call and start a new row in the timing table
+        model_start = time.perf_counter()
         message = chat_completion(messages)
+        record_round(time.perf_counter() - model_start, last_completion_tokens)
         tool_calls = message.get("tool_calls") or []
         if not tool_calls:
             reply = (message.get("content") or "").strip()
@@ -236,6 +266,7 @@ def ask_model(prompt):
         # Keep the assistant tool call turn, then return each tool result
         print(f"[ask] tools: {[call.get('function', {}).get('name') for call in tool_calls]}", flush=True)
         messages.append(message)
+        tools_start = time.perf_counter()
         for tool_call in tool_calls:
             voice.inject_list_voices_count(tool_call, prompt)
             result = run_tool(tool_call)
@@ -265,6 +296,9 @@ def ask_model(prompt):
                 reminder_list_used = True
                 last_list_reminders_result = result
             messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
+
+        # Add the tool time to the row for this round
+        record_round_tools(time.perf_counter() - tools_start)
 
         # Resolve day counts in Python, or keep a valid date expression the model already ran
         if dates.needs_date_math(prompt):
@@ -385,6 +419,8 @@ def system_prompt_with_memories():
 
 # Send one chat request to llama-server
 def chat_completion(messages):
+    global last_completion_tokens
+
     # Build request body
     body = {
         "model": MODEL,
@@ -399,6 +435,10 @@ def chat_completion(messages):
     request = urllib.request.Request(API_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
     with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
         response = json.load(result)
+
+    # Keep the generated token count so the timing table can show tokens per second
+    usage = response.get("usage") or {}
+    last_completion_tokens = int(usage.get("completion_tokens") or 0)
 
     # Return the assistant message
     return response["choices"][0]["message"]
@@ -505,6 +545,62 @@ def parse_tool_arguments(raw_arguments):
     except json.JSONDecodeError:
         return {}
 
+# Record one model round for the timing table
+def record_round(model_seconds, tokens):
+    last_round_timings.append({"model": model_seconds, "tokens": tokens, "tools": 0})
+
+# Add the tool time to the round just recorded
+def record_round_tools(tools_seconds):
+    if last_round_timings:
+        last_round_timings[-1]["tools"] = tools_seconds
+
+# Print where this ask spent its time
+def print_timing(ask_start):
+    if not show_timing:
+        return
+
+    # Show startup costs paid before the model was called
+    log_elapsed("Import modules", IMPORT_SECONDS)
+    log_elapsed("Load prompt", last_prompt_seconds)
+
+    # Show one row per model round, some asks are answered in Python with no rounds
+    if last_round_timings:
+        print_round_header()
+        for index, round_timing in enumerate(last_round_timings, start=1):
+            log_round_timing(index, round_timing)
+
+    # Show totals
+    log_timing("Ask total", ask_start)
+    log_timing("Script total", STARTUP_START)
+
+# Print the round timing header
+def print_round_header():
+    print(f"{'Round':>5}  {'Model':>8}  {'Tokens':>7}  {'Speed':>9}  {'Tools':>8}")
+
+# Print one round with model time, tokens generated, and tool time
+def log_round_timing(index, round_timing):
+    model_seconds = round_timing["model"]
+    tokens = round_timing["tokens"]
+    tools_seconds = round_timing["tools"]
+    speed = tokens / model_seconds if model_seconds > 0 else 0
+    print(f"{index:>5}  {format_seconds(model_seconds):>8}  {tokens:>7}  {format_token_speed(speed):>9}  {format_seconds(tools_seconds):>8}")
+
+# Print elapsed seconds for a timed step
+def log_timing(label, start_time):
+    print(f"{label}: {format_seconds(time.perf_counter() - start_time)}")
+
+# Print elapsed seconds for a stored duration
+def log_elapsed(label, seconds):
+    print(f"{label}: {format_seconds(seconds)}")
+
+# Format seconds for timing output
+def format_seconds(seconds):
+    return f"{seconds:.1f}s"
+
+# Format generated tokens per second
+def format_token_speed(speed):
+    return f"{speed:.1f}/s"
+
 # Let talk.py register itself when running as __main__
 def set_talk_module(module):
     voice.set_talk_module(module)
@@ -515,4 +611,5 @@ if __name__ == "__main__":
         main()
     except urllib.error.URLError as error:
         print(f"LLM unavailable at {API_URL}: {error.reason}")
+        print(f"Start the model server first, run {SERVER_SCRIPT}")
         sys.exit(1)

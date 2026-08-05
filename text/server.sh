@@ -15,9 +15,12 @@ HOST="127.0.0.1"
 PORT="8080"
 API_KEY="local"
 CONTEXT_SIZE="4096"
-THREADS="6"
 GPU_LAYERS="all"
 PARALLEL_REQUESTS="1"
+
+# Generating is memory bound so extra threads only add contention, reading the prompt is compute bound so it wants every core
+THREADS="2"
+THREADS_BATCH="4"
 
 # Main
 main() {
@@ -41,7 +44,7 @@ main() {
     export LD_LIBRARY_PATH="${LIBRARY_DIR}:${LD_LIBRARY_PATH:-}"
 
     # Run local OpenAI compatible server
-    exec "${SERVER}" --model "${MODEL}" --alias "${MODEL_ALIAS}" --host "${HOST}" --port "${PORT}" --api-key "${API_KEY}" --ctx-size "${CONTEXT_SIZE}" --threads "${THREADS}" --gpu-layers "${GPU_LAYERS}" --parallel "${PARALLEL_REQUESTS}" --reasoning off --reasoning-format none --verbosity 1
+    exec "${SERVER}" --model "${MODEL}" --alias "${MODEL_ALIAS}" --host "${HOST}" --port "${PORT}" --api-key "${API_KEY}" --ctx-size "${CONTEXT_SIZE}" --threads "${THREADS}" --threads-batch "${THREADS_BATCH}" --gpu-layers "${GPU_LAYERS}" --parallel "${PARALLEL_REQUESTS}" --reasoning off --reasoning-format none --verbosity 1
 }
 
 # Run
