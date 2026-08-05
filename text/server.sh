@@ -10,6 +10,7 @@ LIBRARY_DIR="${TEXT_DIR}/llama.cpp/build/bin"
 CUDA_LIBRARY="${LIBRARY_DIR}/libggml-cuda.so"
 CACHE_PATH="${TEXT_DIR}/cache"
 MODELS_DIR="${TEXT_DIR}/models"
+GROW_REQUEST_PATH="${CACHE_PATH}/grow_to"
 
 # Default model preset, 1b on Raspberry Pi, e2b elsewhere, override with ./server.sh 1b or ./server.sh e2b
 DEVICE_TREE_MODEL="/proc/device-tree/model"
@@ -19,11 +20,12 @@ else
     DEFAULT_PRESET="e2b"
 fi
 
-# Server config
+# Server config, CONTEXT_SIZE can grow when client.py writes cache/grow_to
 HOST="127.0.0.1"
 PORT="8080"
 API_KEY="local"
-CONTEXT_SIZE="4096"
+CONTEXT_SIZE="${CONTEXT_SIZE:-4096}"
+MAX_CONTEXT_SIZE="${MAX_CONTEXT_SIZE:-16384}"
 GPU_LAYERS="all"
 PARALLEL_REQUESTS="1"
 
@@ -34,6 +36,7 @@ THREADS_BATCH="4"
 # Wait for /health after llama-server starts mapping weights
 READY_TIMEOUT_SECONDS="180"
 READY_POLL_SECONDS="0.5"
+GROW_POLL_SECONDS="0.5"
 
 # Main
 main() {
@@ -54,9 +57,29 @@ main() {
     # Download the selected model when missing
     ensure_model
 
+    # Keep a cache dir so ask.py --clear can erase the prompt cache and client.py can request grows
+    mkdir -p "${CACHE_PATH}"
+    rm -f "${GROW_REQUEST_PATH}"
+
+    # Load llama.cpp libraries from the current text directory
+    export LD_LIBRARY_PATH="${LIBRARY_DIR}:${LD_LIBRARY_PATH:-}"
+
+    # Restart with a larger context when client.py requests a grow
+    while true; do
+        run_server_instance
+    done
+}
+
+# Start one llama-server instance and wait until it exits or a grow is requested
+run_server_instance() {
+    local server_pid=""
+    local server_args=()
+    local grow_size=""
+
     # Show server address and whether this build can use a GPU
     echo "Model: ${MODEL_ALIAS}"
     echo "File: ${MODEL_PATH}"
+    echo "Context: ${CONTEXT_SIZE}"
     echo "API: http://${HOST}:${PORT}/v1"
     server_args=(--model "${MODEL_PATH}" --alias "${MODEL_ALIAS}" --host "${HOST}" --port "${PORT}" --api-key "${API_KEY}" --ctx-size "${CONTEXT_SIZE}" --threads "${THREADS}" --threads-batch "${THREADS_BATCH}" --parallel "${PARALLEL_REQUESTS}" --slot-save-path "${CACHE_PATH}" --reasoning off --reasoning-format none --verbosity 1)
     if [[ -e "${CUDA_LIBRARY}" ]]; then
@@ -65,12 +88,6 @@ main() {
     else
         echo "Device: CPU"
     fi
-
-    # Keep a cache dir so ask.py --clear can erase the prompt cache
-    mkdir -p "${CACHE_PATH}"
-
-    # Load llama.cpp libraries from the current text directory
-    export LD_LIBRARY_PATH="${LIBRARY_DIR}:${LD_LIBRARY_PATH:-}"
 
     # Start local OpenAI compatible server, --slot-save-path is llama.cpp's name for the cache dir
     "${SERVER}" "${server_args[@]}" &
@@ -82,9 +99,25 @@ main() {
     # Wait until the model has finished loading
     wait_until_ready "${server_pid}"
 
-    # Stay in the foreground until the server exits
-    wait "${server_pid}"
+    # Stay up until the process dies or client.py requests a larger context
+    while kill -0 "${server_pid}" 2>/dev/null; do
+        grow_size="$(read_grow_request)"
+        if [[ -n "${grow_size}" ]]; then
+            echo "Growing context ${CONTEXT_SIZE} -> ${grow_size}..."
+            CONTEXT_SIZE="${grow_size}"
+            rm -f "${GROW_REQUEST_PATH}"
+            stop_server "${server_pid}"
+            trap - EXIT INT TERM
+            return 0
+        fi
+        sleep "${GROW_POLL_SECONDS}"
+    done
+
+    # Server exited on its own
+    wait "${server_pid}" 2>/dev/null || true
     trap - EXIT INT TERM
+    echo "Server exited."
+    exit 1
 }
 
 # Kill a background llama-server by pid
@@ -129,11 +162,37 @@ wait_until_ready() {
     done
 }
 
+# Read a larger context size requested by client.py, empty when none or invalid
+read_grow_request() {
+    local grow_size=""
+    if [[ ! -f "${GROW_REQUEST_PATH}" ]]; then
+        return 0
+    fi
+    grow_size="$(tr -d '[:space:]' < "${GROW_REQUEST_PATH}" || true)"
+    if [[ ! "${grow_size}" =~ ^[0-9]+$ ]]; then
+        rm -f "${GROW_REQUEST_PATH}"
+        return 0
+    fi
+    if (( grow_size <= CONTEXT_SIZE )); then
+        rm -f "${GROW_REQUEST_PATH}"
+        return 0
+    fi
+    if (( grow_size > MAX_CONTEXT_SIZE )); then
+        grow_size="${MAX_CONTEXT_SIZE}"
+    fi
+    if (( grow_size <= CONTEXT_SIZE )); then
+        rm -f "${GROW_REQUEST_PATH}"
+        return 0
+    fi
+    echo "${grow_size}"
+}
+
 # Print usage help
 print_usage() {
     echo "Usage: ./server.sh [e2b|1b]"
     echo "  1b   Gemma 3 1B Q4_K_M, default on Raspberry Pi, faster"
     echo "  e2b  Gemma 4 E2B Q4_K_S, default elsewhere, better quality"
+    echo "Context starts at CONTEXT_SIZE, default 4096, and grows when client.py requests it."
 }
 
 # Set MODEL_PATH, MODEL_ALIAS, and MODEL_URL for a preset name

@@ -62,8 +62,9 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 
 ## Files
 
-- `server.sh [e2b|1b]` starts the local model with GPU acceleration when available and a 4096-token context.
+- `server.sh [e2b|1b]` starts the local model with a 4096-token context by default. Set `CONTEXT_SIZE` to override. If `cache/grow_to` is written, it restarts with that larger context.
 - `ask.py` sends one request and runs the tools the model calls.
+- `client.py` is the LLM server interface and shared API config. It also grows context on overflow and retries.
 - `move.py` owns the look tool through `~/robot/src/look.py`.
 - `dates.py` owns clock, calendar, and day-count helpers.
 - `maths.py` owns the calculate tool and safe expression evaluation.

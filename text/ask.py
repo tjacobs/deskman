@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 
 # Import ask modules
+import client
 import dates
 import maths
 import memory
@@ -17,17 +18,6 @@ import reminders
 import voice
 import volume
 
-# Config
-API_BASE = "http://127.0.0.1:8080"
-API_URL = f"{API_BASE}/v1/chat/completions"
-MODELS_URL = f"{API_BASE}/v1/models"
-APPLY_TEMPLATE_URL = f"{API_BASE}/apply-template"
-TOKENIZE_URL = f"{API_BASE}/tokenize"
-CACHE_URL = f"{API_BASE}/slots"
-API_KEY = "local"
-DEFAULT_MODEL = "gemma-3-1b"
-DEFAULT_CONTEXT_SIZE = 4096
-
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
@@ -35,8 +25,6 @@ PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
 SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.sh")
 
 # Config values
-REQUEST_TIMEOUT_SECONDS = 120
-MAX_TOKENS = 100
 TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 40
@@ -488,16 +476,16 @@ def build_request_body(messages):
         "messages": messages,
         "tools": TOOLS,
         "tool_choice": "auto",
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": client.MAX_TOKENS,
         "temperature": TEMPERATURE,
     }
 
 # Ask the server to render messages and tools through the model chat template
 def apply_chat_template(messages, tools):
     body = {"messages": messages, "tools": tools}
-    request = urllib.request.Request(APPLY_TEMPLATE_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
+    request = urllib.request.Request(client.APPLY_TEMPLATE_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {client.API_KEY}"})
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+        with urllib.request.urlopen(request, timeout=client.REQUEST_TIMEOUT_SECONDS) as result:
             payload = json.load(result)
     except urllib.error.URLError:
         return None
@@ -506,9 +494,9 @@ def apply_chat_template(messages, tools):
 # Count tokens in a rendered prompt string
 def count_tokens(text):
     body = {"content": text}
-    request = urllib.request.Request(TOKENIZE_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
+    request = urllib.request.Request(client.TOKENIZE_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {client.API_KEY}"})
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+        with urllib.request.urlopen(request, timeout=client.REQUEST_TIMEOUT_SECONDS) as result:
             payload = json.load(result)
     except urllib.error.URLError:
         return None
@@ -522,17 +510,17 @@ def resolve_model_name():
     global resolved_model
     if resolved_model:
         return resolved_model
-    request = urllib.request.Request(MODELS_URL, headers={"Authorization": f"Bearer {API_KEY}"})
+    request = urllib.request.Request(client.MODELS_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+        with urllib.request.urlopen(request, timeout=client.REQUEST_TIMEOUT_SECONDS) as result:
             payload = json.load(result)
         models = payload.get("data") or []
         if models:
-            resolved_model = models[0].get("id") or DEFAULT_MODEL
+            resolved_model = models[0].get("id") or client.DEFAULT_MODEL
             return resolved_model
     except urllib.error.URLError:
         pass
-    resolved_model = DEFAULT_MODEL
+    resolved_model = client.DEFAULT_MODEL
     return resolved_model
 
 # Read the context window size from the running server
@@ -540,9 +528,9 @@ def resolve_context_size():
     global resolved_context_size
     if resolved_context_size:
         return resolved_context_size
-    request = urllib.request.Request(f"{API_BASE}/props", headers={"Authorization": f"Bearer {API_KEY}"})
+    request = urllib.request.Request(client.PROPS_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
     try:
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+        with urllib.request.urlopen(request, timeout=client.REQUEST_TIMEOUT_SECONDS) as result:
             payload = json.load(result)
         settings = payload.get("default_generation_settings") or {}
         context_size = settings.get("n_ctx") or (settings.get("params") or {}).get("n_ctx")
@@ -551,12 +539,12 @@ def resolve_context_size():
             return resolved_context_size
     except (urllib.error.URLError, TypeError, ValueError):
         pass
-    resolved_context_size = DEFAULT_CONTEXT_SIZE
+    resolved_context_size = client.DEFAULT_CONTEXT_SIZE
     return resolved_context_size
 
 # Send one chat request to server
 def chat_completion(messages):
-    global last_completion_tokens, ask_start
+    global last_completion_tokens, ask_start, resolved_model, resolved_context_size
 
     # Build request body
     body = build_request_body(messages)
@@ -567,12 +555,12 @@ def chat_completion(messages):
         if ask_start is None:
             ask_start = time.perf_counter()
 
-    # Send request
+    # Send request, client.py asks server.sh to enlarge context when the window is full
     model_start = time.perf_counter()
-    request = urllib.request.Request(API_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"})
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
-        response = json.load(result)
+    response = client.request_chat(body, client.API_KEY, client.REQUEST_TIMEOUT_SECONDS)
     model_seconds = time.perf_counter() - model_start
+    resolved_model = None
+    resolved_context_size = None
 
     # Keep the generated token count and print this round's timing now
     usage = response.get("usage") or {}
@@ -770,22 +758,22 @@ def format_token_speed(speed):
 # Erase the server prompt cache so the next ask is a cold prefill
 def clear_prompt_cache():
     # List cache contexts, then erase each one
-    list_request = urllib.request.Request(CACHE_URL, headers={"Authorization": f"Bearer {API_KEY}"})
+    list_request = urllib.request.Request(client.CACHE_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
     try:
-        with urllib.request.urlopen(list_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+        with urllib.request.urlopen(list_request, timeout=client.REQUEST_TIMEOUT_SECONDS) as result:
             caches = json.load(result)
     except urllib.error.URLError as error:
-        print(f"Could not list cache at {CACHE_URL}: {error.reason}")
+        print(f"Could not list cache at {client.CACHE_URL}: {error.reason}")
         print(f"Start the model server first, run {SERVER_SCRIPT}")
         sys.exit(1)
 
     # Erase each cache, empty body avoids a hang on some llama-server builds
     for cache in caches:
         cache_id = cache.get("id", 0)
-        erase_url = f"{CACHE_URL}/{cache_id}?action=erase"
-        erase_request = urllib.request.Request(erase_url, data=b"", method="POST", headers={"Authorization": f"Bearer {API_KEY}", "Content-Length": "0"})
+        erase_url = f"{client.CACHE_URL}/{cache_id}?action=erase"
+        erase_request = urllib.request.Request(erase_url, data=b"", method="POST", headers={"Authorization": f"Bearer {client.API_KEY}", "Content-Length": "0"})
         try:
-            with urllib.request.urlopen(erase_request, timeout=REQUEST_TIMEOUT_SECONDS) as result:
+            with urllib.request.urlopen(erase_request, timeout=client.REQUEST_TIMEOUT_SECONDS) as result:
                 result.read()
         except urllib.error.HTTPError as error:
             body = error.read().decode(errors="replace")
@@ -811,6 +799,6 @@ if __name__ == "__main__":
     try:
         main()
     except urllib.error.URLError as error:
-        print(f"LLM unavailable at {API_URL}: {error.reason}")
+        print(f"LLM unavailable at {client.API_URL}: {error.reason}")
         print(f"Start the model server first, run {SERVER_SCRIPT}")
         sys.exit(1)

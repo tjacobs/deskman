@@ -90,7 +90,6 @@ SPOKEN_WAV = 'talk.wav'
 HEARD_WAV = 'heard.wav'
 TEXT_DIR = os.path.join(SCRIPT_DIR, 'text')
 TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
-TEXT_HEALTH_URL = 'http://127.0.0.1:8080/health'
 TEXT_UNAVAILABLE = 'The language model is not running.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
@@ -100,6 +99,7 @@ os.environ['HF_HUB_VERBOSITY'] = 'error'
 # Import local text model helper and reminders
 sys.path.insert(0, TEXT_DIR)
 import ask as text_ask
+import client as text_client
 import reminders
 text_ask.set_talk_module(sys.modules[__name__])
 
@@ -722,7 +722,7 @@ def start_text_server():
 # Return true when the local text model health endpoint answers
 def text_server_healthy():
     try:
-        request = urllib.request.Request(TEXT_HEALTH_URL, headers={'Authorization': f'Bearer {text_ask.API_KEY}'})
+        request = urllib.request.Request(text_client.HEALTH_URL, headers={'Authorization': f'Bearer {text_client.API_KEY}'})
         urllib.request.urlopen(request, timeout=2)
         return True
     except urllib.error.URLError:
