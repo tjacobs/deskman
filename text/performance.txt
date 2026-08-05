@@ -9,8 +9,8 @@
 
 ## Models
 
-- 1b:  gemma-3-1b-it-Q4_K_M.gguf  (762 MiB,  1.00B params), alias gemma-3-1b
-- e2b: gemma-4-E2B-it-Q4_K_S.gguf (2.82 GiB, 4.65B params), alias gemma-4-e2b (default)
+- 1b:  gemma-3-1b-it-Q4_K_M.gguf  (762 MiB,  1.00B params), alias gemma-3-1b (default on Pi)
+- e2b: gemma-4-E2B-it-Q4_K_S.gguf (2.82 GiB, 4.65B params), alias gemma-4-e2b
 
 ## Raw speed (llama-bench, -t 2 -ngl 0, 3 reps)
 

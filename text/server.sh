@@ -11,8 +11,13 @@ CUDA_LIBRARY="${LIBRARY_DIR}/libggml-cuda.so"
 CACHE_PATH="${TEXT_DIR}/cache"
 MODELS_DIR="${TEXT_DIR}/models"
 
-# Default model preset, override with ./server.sh 1b or ./server.sh e2b
-DEFAULT_PRESET="e2b"
+# Default model preset, 1b on Raspberry Pi, e2b elsewhere, override with ./server.sh 1b or ./server.sh e2b
+DEVICE_TREE_MODEL="/proc/device-tree/model"
+if [[ -r "${DEVICE_TREE_MODEL}" ]] && tr -d '\0' < "${DEVICE_TREE_MODEL}" | grep -q "Raspberry Pi"; then
+    DEFAULT_PRESET="1b"
+else
+    DEFAULT_PRESET="e2b"
+fi
 
 # Server config
 HOST="127.0.0.1"
@@ -127,8 +132,8 @@ wait_until_ready() {
 # Print usage help
 print_usage() {
     echo "Usage: ./server.sh [e2b|1b]"
-    echo "  e2b  Gemma 4 E2B Q4_K_S, default, better quality"
-    echo "  1b   Gemma 3 1B Q4_K_M, smaller and faster on Pi"
+    echo "  1b   Gemma 3 1B Q4_K_M, default on Raspberry Pi, faster"
+    echo "  e2b  Gemma 4 E2B Q4_K_S, default elsewhere, better quality"
 }
 
 # Set MODEL_PATH, MODEL_ALIAS, and MODEL_URL for a preset name

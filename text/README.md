@@ -1,6 +1,6 @@
 # Local LLM
 
-Runs Gemma 4 E2B locally through the OpenAI-compatible `llama.cpp` server.
+Runs a local Gemma model through the OpenAI-compatible `llama.cpp` server. On a Raspberry Pi the default is Gemma 3 1B; elsewhere it is Gemma 4 E2B.
 
 ## Run
 
@@ -8,7 +8,8 @@ Start the server:
 
 ```bash
 cd ~/speak/text
-./server.sh        # Gemma 4 E2B, better quality
+./server.sh        # Gemma 3 1B on Pi, Gemma 4 E2B elsewhere
+./server.sh e2b    # Gemma 4 E2B, better quality
 ./server.sh 1b     # Gemma 3 1B, faster on Pi
 ```
 

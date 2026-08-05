@@ -25,7 +25,7 @@ APPLY_TEMPLATE_URL = f"{API_BASE}/apply-template"
 TOKENIZE_URL = f"{API_BASE}/tokenize"
 CACHE_URL = f"{API_BASE}/slots"
 API_KEY = "local"
-DEFAULT_MODEL = "gemma-4-e2b"
+DEFAULT_MODEL = "gemma-3-1b"
 DEFAULT_CONTEXT_SIZE = 4096
 
 # Config paths
