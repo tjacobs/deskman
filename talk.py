@@ -39,6 +39,9 @@ QUIT_WORDS = ('quit', 'exit')
 # Config follow-up window
 FOLLOW_UP_SECONDS = 20.0
 
+# Config daily reminders
+REMINDER_CHECK_SECONDS = 20.0
+
 # Config replay flags
 REPLAY_WAKE_FLAG = f'--replay-{WAKE_WORD}'
 NO_REPLAY_WAKE_FLAG = f'--no-replay-{WAKE_WORD}'
@@ -107,6 +110,7 @@ REPLAY_WAKE_MODE = True
 LAST_ASK_AT = 0.0
 kokoro_model = None
 kokoro_pipelines = {}
+speak_lock = threading.Lock()
 
 # Main
 def main():
@@ -183,6 +187,10 @@ def run_talk(record):
 # Listen for the wake word, then a command, then reply
 def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     global LAST_ASK_AT
+
+    # Seed dinner and bedtime reminders from memory, then check them in the background
+    text_ask.seed_reminders_from_memory()
+    start_reminder_checker(listener, kokoro_pipeline)
 
     # Greet, then keep the conversation open so the first line needs no wake word
     speak_muted(listener, kokoro_pipeline, GREETING)
@@ -476,9 +484,10 @@ def talk_log_time():
 
 # Speak with the mic muted so it does not hear itself
 def speak_muted(listener, kokoro_pipeline, text):
-    listener.mute()
-    speak(kokoro_pipeline, text)
-    listener.unmute()
+    with speak_lock:
+        listener.mute()
+        speak(kokoro_pipeline, text)
+        listener.unmute()
 
 # Generate speech and play it on the usb speaker
 def speak(kokoro_pipeline, text):
@@ -489,6 +498,28 @@ def speak(kokoro_pipeline, text):
         wav_path = os.path.join(AUDIO_DIR, SPOKEN_WAV)
         soundfile.write(wav_path, audio, 24000)
         play_wav(wav_path)
+
+# Start a background thread that speaks due daily reminders
+def start_reminder_checker(listener, kokoro_pipeline):
+    thread = threading.Thread(target=reminder_loop, args=(listener, kokoro_pipeline), daemon=True)
+    thread.start()
+
+# Poll for due reminders and speak each one once per day
+def reminder_loop(listener, kokoro_pipeline):
+    while True:
+        try:
+            fire_due_reminders(listener, kokoro_pipeline)
+        except Exception as error:
+            print(f'Reminder check failed: {error}', flush=True)
+        time.sleep(REMINDER_CHECK_SECONDS)
+
+# Speak any reminders due in the current minute
+def fire_due_reminders(listener, kokoro_pipeline):
+    due = text_ask.pop_due_reminders()
+    for reminder in due:
+        message = reminder.get('message') or "Reminder"
+        print(f'Reminder: {message}', flush=True)
+        speak_muted(listener, kokoro_pipeline, message)
 
 # Play back the recording, mic muted so it does not hear it
 def replay(listener, audio):
