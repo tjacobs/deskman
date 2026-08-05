@@ -3,11 +3,11 @@
 # Imports
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.request
 
+# Import ask modules
 import dates
 import maths
 import memory
@@ -20,7 +20,6 @@ import volume
 API_URL = "http://127.0.0.1:8080/v1/chat/completions"
 API_KEY = "local"
 MODEL = "gemma-4-e2b"
-DEFAULT_PROMPT = "Introduce yourself in one short sentence."
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
 PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
@@ -51,7 +50,7 @@ def parse_args():
     # Use supplied text or a useful default
     if len(sys.argv) > 1:
         return " ".join(sys.argv[1:])
-    return DEFAULT_PROMPT
+    return "Say hello."
 
 # Ask the model, running any tool calls it requests
 def ask_model(prompt):
