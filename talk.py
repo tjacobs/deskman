@@ -647,13 +647,32 @@ def linux_record_command():
         sys.exit(1)
     return [LINUX_RECORDER, '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
 
-# Return card index for the first device with capture support
+# Return card index for the USB microphone
 def find_capture_card():
+    # Collect every USB card that can record
     result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
+    usb_cards = []
     for line in result.stdout.splitlines():
         if line.startswith('card') and 'USB' in line:
-            return int(line.split(':')[0].split()[1])
+            usb_cards.append(int(line.split(':')[0].split()[1]))
+
+    # Prefer the mic-only card, a speaker card records through a poor fallback mic
+    for card_index in usb_cards:
+        if not card_has_playback(card_index):
+            return card_index
+
+    # Otherwise take the first one
+    if usb_cards:
+        return usb_cards[0]
     return None
+
+# Return true when a card has a playback stream
+def card_has_playback(card_index):
+    stream_path = f'/proc/asound/card{card_index}/stream0'
+    if not os.path.isfile(stream_path):
+        return False
+    with open(stream_path) as stream_file:
+        return 'Playback:' in stream_file.read()
 
 # Start the recorder streaming raw audio to stdout
 def start_recorder(command):
