@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Head look control through robot look.py
+# Head look control through robot look.py, or deskman socket fallback
 
 # Imports
 import os
@@ -41,20 +41,26 @@ def main():
     # Look center by default
     print(run_look({"direction": "center"}))
 
-# Call robot look.py to turn the head
+# Call robot look.py, or deskman robot_move, to turn the head
 def run_look(arguments):
-    # Import look from the robot source tree
-    look = load_robot_look()
-    if look is None:
-        return "Look is unavailable."
-
     # Read direction and optional degrees
     direction = arguments.get("direction", "left")
     degrees = arguments.get("degrees", LOOK_DEFAULT_DEGREES)
+
+    # Prefer ~/robot/src/look.py when present
+    look = load_robot_look()
+    if look is not None:
+        try:
+            return look.look(direction, degrees)
+        except Exception as error:
+            return f"Look failed: {error}"
+
+    # Fall back to deskman Unix socket client
     try:
-        return look.look(direction, degrees)
-    except Exception as error:
-        return f"Look failed: {error}"
+        from robot_move import look as socket_look
+        return socket_look(direction, degrees)
+    except Exception:
+        return "Look is unavailable."
 
 # Import ~/robot/src/look.py once
 def load_robot_look():
