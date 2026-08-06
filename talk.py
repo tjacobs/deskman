@@ -88,6 +88,7 @@ AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 TALKS_DIR = os.path.join(SCRIPT_DIR, 'talks')
 SPOKEN_WAV = 'talk.wav'
 HEARD_WAV = 'heard.wav'
+WAKE_WAV = 'wake.wav'
 TEXT_DIR = os.path.join(SCRIPT_DIR, 'text')
 TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
 TEXT_UNAVAILABLE = 'The language model is not running.'
@@ -95,6 +96,13 @@ TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
+
+# Config wake tone
+WAKE_TONE_RATE = 24000
+WAKE_TONE_NOTES = ((880.0, 0.12), (1174.7, 0.18))
+WAKE_TONE_GAP_SECONDS = 0.04
+WAKE_TONE_FADE_SECONDS = 0.015
+WAKE_TONE_AMPLITUDE = 0.0625
 
 # Import local text model helper and reminders
 sys.path.insert(0, TEXT_DIR)
@@ -363,6 +371,7 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
             if not text:
                 continue
             if has_wake_word(text):
+                play_wake_tone(listener)
                 command = text_after_wake(text)
                 return command if command else text
             return text
@@ -371,11 +380,11 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
         if not has_wake_word(text):
             continue
 
-        # Use the rest of the utterance, or acknowledge and wait for more
+        # Tone on wake, then use the rest of the utterance or listen for more
+        play_wake_tone(listener)
         command = text_after_wake(text)
         if command:
             return command
-        speak_muted(listener, kokoro_pipeline, ACKNOWLEDGEMENT)
         return hear_command(whisper_model, kokoro_pipeline, listener, '')
 
 # Return true when a recent ask still allows wake-free follow-ups
@@ -530,6 +539,36 @@ def replay(listener, audio):
     soundfile.write(wav_path, audio, SAMPLE_RATE)
     play_wav(wav_path)
     listener.unmute()
+
+# Play the wake acknowledgment tone, mic muted so it does not hear it
+def play_wake_tone(listener):
+    listener.mute()
+    play_wav(ensure_wake_tone())
+    listener.unmute()
+
+# Build audio/wake.wav once, a soft two-note blip
+def ensure_wake_tone():
+    import soundfile
+    wav_path = os.path.join(AUDIO_DIR, WAKE_WAV)
+    if os.path.isfile(wav_path):
+        return wav_path
+
+    # Build each note with a short fade, then a small gap
+    os.makedirs(AUDIO_DIR, exist_ok=True)
+    parts = []
+    fade = int(WAKE_TONE_RATE * WAKE_TONE_FADE_SECONDS)
+    gap = np.zeros(int(WAKE_TONE_RATE * WAKE_TONE_GAP_SECONDS), dtype=np.float32)
+    for frequency, duration in WAKE_TONE_NOTES:
+        samples = int(WAKE_TONE_RATE * duration)
+        times = np.arange(samples, dtype=np.float32) / WAKE_TONE_RATE
+        wave = (WAKE_TONE_AMPLITUDE * np.sin(2.0 * np.pi * frequency * times)).astype(np.float32)
+        if fade > 0 and samples > 2 * fade:
+            wave[:fade] *= np.linspace(0.0, 1.0, fade, dtype=np.float32)
+            wave[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
+        parts.append(wave)
+        parts.append(gap)
+    soundfile.write(wav_path, np.concatenate(parts), WAKE_TONE_RATE)
+    return wav_path
 
 # Play one wav file on the speaker
 def play_wav(wav_path):
