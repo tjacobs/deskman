@@ -212,39 +212,6 @@ def ask_model(prompt):
                 if action:
                     return action
 
-            # Force get_time when the model skipped the clock
-            if dates.needs_get_time(prompt) and "get_time" not in used:
-                forced = dates.force_get_time(prompt, messages, message, "time" in retried, record_tool)
-                if forced is True:
-                    retried.add("time")
-                    continue
-                if forced:
-                    used.add("get_time")
-                    messages.append({"role": "user", "content": f"Tool results:\nget_time: {forced}\nAnswer using only these results in one or two short sentences."})
-                    continue
-
-            # Force get_date when the model skipped today's date
-            if dates.needs_get_date(prompt) and "get_date" not in used:
-                forced = dates.force_get_date(prompt, messages, message, "date_tool" in retried, record_tool)
-                if forced is True:
-                    retried.add("date_tool")
-                    continue
-                if forced:
-                    used.add("get_date")
-                    messages.append({"role": "user", "content": f"Tool results:\nget_date: {forced}\nAnswer using only these results in one or two short sentences."})
-                    continue
-
-            # Force get_day when the model skipped the weekday
-            if dates.needs_get_day(prompt) and "get_day" not in used:
-                forced = dates.force_get_day(prompt, messages, message, "day" in retried, record_tool)
-                if forced is True:
-                    retried.add("day")
-                    continue
-                if forced:
-                    used.add("get_day")
-                    messages.append({"role": "user", "content": f"Tool results:\nget_day: {forced}\nAnswer using only these results in one or two short sentences."})
-                    continue
-
             # Prefer a date expression already calculated, else force Python date math
             if dates.needs_date_math(prompt):
                 spoken = dates.speak_model_date_calculate(last_calculate_expression, last_calculate_result)
