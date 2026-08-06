@@ -143,5 +143,7 @@ def content_tools_instruction(tool_names):
         'For set_voice use {"voice":"..."}. '
         'For remember or forget use {"text":"..."}. '
         'For set_reminder use {"name":"...","time":"HH:MM"}. '
-        'For cancel_reminder use {"name":"..."}.'
+        'For cancel_reminder use {"name":"..."}. '
+        'For load_talk_log use {"date":"today"|"yesterday"|"YYYY-MM-DD"}. '
+        'For get_system_info use {"name":"get_system_info","arguments":{}}.'
     )

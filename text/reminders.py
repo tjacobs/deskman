@@ -164,6 +164,19 @@ def needs_set_reminder(prompt):
         return True
     return bool(re.search(r"\b(set|add|create)\b.*\breminder\b", text))
 
+# Return true when the reminder named in the prompt is already saved
+def wanted_reminder_is_set(prompt):
+    arguments = parse_set_reminder(prompt)
+    if arguments is None:
+        return False
+    name = normalize_reminder_name(arguments.get("name"))
+    if not name:
+        return False
+    for reminder in load_reminders():
+        if reminder.get("name") == name:
+            return True
+    return False
+
 # Return true when the user asked to cancel a daily reminder
 def needs_cancel_reminder(prompt):
     text = prompt.lower()

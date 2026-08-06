@@ -16,6 +16,8 @@ import maths
 import memory
 import move
 import reminders
+import system
+import talks
 import voice
 import volume
 
@@ -37,7 +39,7 @@ MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
 
 # Tools the local model can call
-TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + voice.TOOLS + volume.TOOLS
+TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS
 TOOL_NAMES = [tool["function"]["name"] for tool in TOOLS]
 TOOL_NAME_SET = set(TOOL_NAMES)
 
@@ -55,7 +57,12 @@ resolved_context_size = None
 # Main
 def main():
     # Parse prompt
-    prompt, print_prompt, clear_cache = parse_args()
+    prompt, print_prompt, clear_cache, run_tests = parse_args()
+
+    # Run the tool suite and exit with its status
+    if run_tests:
+        import tests
+        sys.exit(0 if tests.run_tool_tests() else 1)
 
     # Print timing when run standalone, talk.py keeps its own output clean
     global show_timing, ask_start
@@ -86,6 +93,7 @@ def parse_args():
     # Pull out flags, then join the remaining words into the user prompt
     print_prompt = False
     clear_cache = False
+    run_tests = False
     words = []
     for argument in sys.argv[1:]:
         if argument == "--prompt":
@@ -94,17 +102,21 @@ def parse_args():
         if argument == "--clear":
             clear_cache = True
             continue
+        if argument == "--test":
+            run_tests = True
+            continue
         if argument in ("-h", "--help"):
             print_usage()
             sys.exit(0)
         words.append(argument)
-    return " ".join(words) if words else "Say hello.", print_prompt, clear_cache
+    return " ".join(words) if words else "Say hello.", print_prompt, clear_cache, run_tests
 
 # Print usage help
 def print_usage():
-    print("Usage: ./ask.py [--prompt] [--clear] [question...]")
+    print("Usage: ./ask.py [--prompt] [--clear] [--test] [question...]")
     print("  --prompt  print the full model context, messages, tools, and rendered prompt")
     print("  --clear   clear the server cache before asking")
+    print("  --test    run tests.py, one ask per tool")
     print("  (no arg)  say hello.")
 
 # Ask the model, running any tool calls it requests
@@ -127,6 +139,8 @@ def ask_model(prompt):
     last_calculate_result = None
     last_list_voices_result = None
     last_list_reminders_result = None
+    last_talk_log_result = None
+    last_system_info_result = None
 
     # Loop until the model replies with spoken text
     for _ in range(MAX_TOOL_ROUNDS):
@@ -147,8 +161,8 @@ def ask_model(prompt):
             # Get the spoken text the model returned
             reply = (message.get("content") or "").strip()
 
-            # Force or apply set_reminder when the model skipped scheduling
-            if reminders.needs_set_reminder(prompt) and "set_reminder" not in used:
+            # Force or apply set_reminder when the model skipped or set the wrong one
+            if reminders.needs_set_reminder(prompt) and not reminders.wanted_reminder_is_set(prompt):
                 forced = reminders.force_set_reminder(prompt, messages, message, "reminder" in retried, record_tool)
                 action = apply_forced(forced, messages, "reminder", retried)
                 if action == "retry":
@@ -255,6 +269,30 @@ def ask_model(prompt):
                 remember_turn(messages, result)
                 return result
 
+            # Force load_talk_log when the model skipped loading a day log
+            if talks.needs_load_talk_log(prompt) and "load_talk_log" not in used:
+                forced = talks.force_load_talk_log(prompt, messages, message, "talks" in retried, record_tool)
+                if forced is True:
+                    retried.add("talks")
+                    continue
+                if forced:
+                    last_talk_log_result = forced
+                    used.add("load_talk_log")
+                    messages.append({"role": "user", "content": f"Tool results:\nload_talk_log: {forced}\nAnswer using only these results in one or two short sentences."})
+                    continue
+
+            # Force get_system_info when the model skipped hardware or model info
+            if system.needs_system_info(prompt) and "get_system_info" not in used:
+                forced = system.force_get_system_info(prompt, messages, message, "system" in retried, record_tool)
+                if forced is True:
+                    retried.add("system")
+                    continue
+                if forced:
+                    last_system_info_result = forced
+                    used.add("get_system_info")
+                    messages.append({"role": "user", "content": f"Tool results:\nget_system_info: {forced}\nAnswer using only these results in one or two short sentences."})
+                    continue
+
             # Prefer a clear spoken confirmation after a successful volume set
             if not reply and "set_volume" in used:
                 reply = volume.confirm_volume_set() or reply
@@ -299,6 +337,10 @@ def ask_model(prompt):
                 last_list_voices_result = result
             if tool_name == "list_reminders":
                 last_list_reminders_result = result
+            if tool_name == "load_talk_log":
+                last_talk_log_result = result
+            if tool_name == "get_system_info":
+                last_system_info_result = result
             if content_tools:
                 tool_result_lines.append(f"{tool_name}: {result}")
             else:
@@ -319,8 +361,8 @@ def ask_model(prompt):
                 remember_turn(messages, spoken)
                 return spoken
 
-        # If it talked about reminders but skipped the tool, apply it in Python now
-        if reminders.needs_set_reminder(prompt) and "set_reminder" not in used:
+        # If it skipped or set the wrong reminder, apply the wanted one in Python now
+        if reminders.needs_set_reminder(prompt) and not reminders.wanted_reminder_is_set(prompt):
             forced = reminders.force_set_reminder(prompt, messages, None, True, record_tool)
             action = apply_forced(forced, messages, "reminder", retried)
             if action and action != "retry":
@@ -333,6 +375,24 @@ def ask_model(prompt):
         if reminders.needs_list_reminders(prompt) and last_list_reminders_result and not reminders.needs_set_reminder(prompt) and not reminders.needs_cancel_reminder(prompt):
             remember_turn(messages, last_list_reminders_result)
             return last_list_reminders_result
+
+        # If it asked for a talk log but skipped the tool, load it in Python now
+        if talks.needs_load_talk_log(prompt) and "load_talk_log" not in used:
+            forced = talks.force_load_talk_log(prompt, messages, None, True, record_tool)
+            if forced:
+                last_talk_log_result = forced
+                used.add("load_talk_log")
+                messages.append({"role": "user", "content": f"Tool results:\nload_talk_log: {forced}\nAnswer using only these results in one or two short sentences."})
+                continue
+
+        # If it asked for system info but skipped the tool, read it in Python now
+        if system.needs_system_info(prompt) and "get_system_info" not in used:
+            forced = system.force_get_system_info(prompt, messages, None, True, record_tool)
+            if forced:
+                last_system_info_result = forced
+                used.add("get_system_info")
+                messages.append({"role": "user", "content": f"Tool results:\nget_system_info: {forced}\nAnswer using only these results in one or two short sentences."})
+                continue
 
         # If it talked about remembering but did not call remember, save it in Python now
         if memory.needs_remember(prompt) and not reminders.needs_set_reminder(prompt) and "remember" not in used:
@@ -689,6 +749,18 @@ def run_tool(tool_call):
         return result
     if name == "list_reminders":
         result = reminders.run_list_reminders(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Load a day's talk conversation log
+    if name == "load_talk_log":
+        result = talks.run_load_talk_log(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Read computer and model info
+    if name == "get_system_info":
+        result = system.run_get_system_info(arguments)
         record_tool(name, arguments, result)
         return result
 

@@ -14,8 +14,12 @@
 
     "Call the set_reminder tool when the user asks to be reminded. Call the cancel_reminder tool when the user asks to cancel a reminder. Call the list_reminders tool when the user asks what reminders are set.",
 
+    "Call the load_talk_log tool to read a day's talk conversation log, for example yesterday or a date. Answer from the tool result. Never claim you cannot access prior talk logs without calling the tool.",
+
+    "Call the get_system_info tool for the computer, hardware, uname, Jetson or Pi, which LLM model is running, parameter count, quantization, context size, or model file date. Never guess those facts.",
+
     "Call the calculate tool for math operations. Call with a Python math expression, then answer using only that tool result. Never guess or just say the answer to arithmetic.",
 
-    "Call the calculate tool to calculate how many days until a date. Call with a date expression like (date(2026, 8, 15) - today()).days. Never guess at counting days.\n.\n."
+    "Call the calculate tool to calculate how many days until a date. Call with a date expression like (date(2026, 8, 15) - today()).days. Never guess at counting days."
   ]
 }

@@ -18,7 +18,11 @@ In another terminal, ask a question:
 ```bash
 cd ~/speak/text
 ./ask.py "What time is it?"
+./ask.py --test
+./tests.py
 ```
+
+`./ask.py --test` and `./tests.py` run the tool suite in `tests.py`, one ask per tool.
 
 The API is available only on the local machine:
 
@@ -60,16 +64,27 @@ Facts you ask it to remember use `remember` and `forget`, saved in `../memory.js
 
 Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminders`, saved in `../reminders.json`.
 
+### Talk logs
+
+`load_talk_log` reads `../talks/YYYY-MM-DD.txt` into context for today, yesterday, or a date, so the model can answer questions about prior conversations.
+
+### System
+
+`get_system_info` reports `uname`, hardware like Jetson or Raspberry Pi, memory, and live LLM model stats from the local server.
+
 ## Files
 
 - `server.sh [e2b|1b]` starts the local model with a 4096-token context by default. Set `CONTEXT_SIZE` to override. If `cache/grow_to` is written, it restarts with that larger context.
 - `ask.py` sends one request and runs the tools the model calls.
+- `tests.py` runs one ask per tool and checks each expected tool ran.
 - `client.py` is the LLM server interface and shared API config. It also grows context on overflow and retries.
 - `move.py` owns the look tool through `~/robot/src/look.py`.
 - `dates.py` owns clock, calendar, and day-count helpers.
 - `maths.py` owns the calculate tool and safe expression evaluation.
 - `memory.py` owns long-term remember/forget tools and storage.
 - `reminders.py` owns daily reminder tools, storage, and due checks.
+- `talks.py` owns loading a day's talk log into context.
+- `system.py` owns computer and LLM model info.
 - `voice.py` owns speaking voice tools through talk.py.
 - `volume.py` owns speaker volume tools and amixer control.
 - `../prompt.json` holds the system prompt read on each ask.
