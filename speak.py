@@ -36,6 +36,7 @@ STARTUP_START = time.perf_counter()
 KOKORO_SECONDS = 0
 DEVICE = 'cpu'
 FORCE_CPU = False
+SPEAK_TEXT = TEXT
 
 def main():
     # Check offline cache
@@ -60,7 +61,7 @@ def main():
         print("Voice: " + voice)
 
         # Generate audio and play it
-        generate_and_play(voice, TEXT)
+        generate_and_play(voice, SPEAK_TEXT)
 
         # Print total time
         log_timing("Run total", run_start)
@@ -74,30 +75,31 @@ def main():
 # Parse command line arguments
 def parse_args():
     force_cpu = False
+    words = []
     for argument in sys.argv[1:]:
         if argument == '--cpu':
             force_cpu = True
-        elif argument in ('-h', '--help'):
+            continue
+        if argument in ('-h', '--help'):
             print_usage()
             sys.exit(0)
-        else:
-            print(f"Unknown argument: {argument}")
-            print_usage()
-            sys.exit(1)
-    return force_cpu
+        words.append(argument)
+    text = " ".join(words) if words else TEXT
+    return force_cpu, text
 
 # Print usage help
 def print_usage():
-    print('Usage: ./speak.py [--cpu]')
+    print('Usage: ./speak.py [--cpu] [text...]')
     print('  --cpu     force CPU inference instead of CUDA')
+    print('  text      optional words to speak instead of the TEXT constant')
     print('  (no arg)  speak the TEXT constant once, with timing stats')
 
 # Import kokoro and configure runtime
 def init():
-    global FORCE_CPU, DEVICE, KOKORO_SECONDS
+    global FORCE_CPU, DEVICE, KOKORO_SECONDS, SPEAK_TEXT
 
     # Parse args and configure device flags
-    FORCE_CPU = parse_args()
+    FORCE_CPU, SPEAK_TEXT = parse_args()
     if FORCE_CPU:
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
 

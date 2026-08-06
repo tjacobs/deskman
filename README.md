@@ -4,7 +4,7 @@ Offline text to speech generation, using the [Kokoro-82M](https://huggingface.co
 
 Four tools:
 
-- `speak.py` — speak a fixed phrase once, with timing stats
+- `speak.py` — speak a phrase once, with timing stats
 - `say.py` — interactive keyboard control over SSH, with preset phrases, voice and speed control
 - `listen.py` — live speech to text from the microphone, using [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 - `talk.py` — wake word loop, listens for a command and speaks a reply
@@ -13,6 +13,7 @@ CUDA is used when available for speak and say. Pass `--cpu` to force CPU inferen
 
 ```bash
 ./speak.py
+./speak.py Hello there
 ./speak.py --cpu
 ./say.py
 ./say.py --cpu
@@ -33,7 +34,7 @@ On first run, the model and all voices download into `cache/`.
 
 ## speak.py
 
-Speak a single block of text. Edit the `TEXT` constant in `speak.py` to change what is spoken.
+Speak a single block of text. Pass optional words to speak them instead of the `TEXT` constant in `speak.py`.
 
 Generated audio files are saved in `audio/` as `001.wav`, `002.wav`, etc.
 

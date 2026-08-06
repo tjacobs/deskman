@@ -109,7 +109,7 @@ def read_hardware_name():
         with open(model_path, "rb") as model_file:
             text = model_file.read().decode("utf-8", errors="ignore").strip("\x00").strip()
             if text:
-                return text
+                return short_hardware_name(text)
 
     # Jetson L4T release file
     tegra_path = "/etc/nv_tegra_release"
@@ -125,6 +125,17 @@ def read_hardware_name():
                 return "Raspberry Pi"
 
     return platform.node() or "unknown"
+
+# Shorten long board names to a short spoken label
+def short_hardware_name(text):
+    lowered = text.lower()
+    if "orin nano" in lowered:
+        return "NVIDIA Jetson Orin Nano"
+    if "jetson" in lowered:
+        return "NVIDIA Jetson"
+    if "raspberry pi" in lowered:
+        return "Raspberry Pi"
+    return text
 
 # Summarize total and available memory
 def read_memory_summary():
