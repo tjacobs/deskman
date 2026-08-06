@@ -10,6 +10,7 @@ import sys
 import ask
 import memory
 import reminders
+import system
 
 # Config
 TEST_MEMORY_TEXT = "ask test marker is purple elephants"
@@ -27,7 +28,7 @@ TOOL_TESTS = [
     {"name": "get_day", "prompt": "What day of the week is it?", "tools": ["get_day"]},
     {"name": "calculate", "prompt": "What is 17 times 43?", "tools": ["calculate"], "contains": ["731"]},
     {"name": "date_math", "prompt": "How many days until August 15?", "tools": ["calculate"]},
-    {"name": "get_system_info", "prompt": "Do you know what computer you're running on?", "tools": ["get_system_info"], "contains": ["NVIDIA Jetson Orin Nano"]},
+    {"name": "get_system_info", "prompt": "Do you know what computer you're running on?", "tools": ["get_system_info"], "contains": [system.read_hardware_name()]},
     {"name": "get_model_name", "prompt": "What's your model?", "tools": ["get_system_info"], "contains": ["gemma"]},
     {"name": "get_model_size", "prompt": "Are you a 1B or 2B model?", "tools": ["get_system_info"], "contains": ["billion"]},
     {"name": "load_talk_log", "prompt": "Load yesterday's talk log.", "tools": ["load_talk_log"]},
