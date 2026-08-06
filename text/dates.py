@@ -13,6 +13,9 @@ import maths
 
 # Config
 DATE_MATH_RETRY_PROMPT = "Do not guess. Call calculate with a date expression using date and today, for example (date(2026, 8, 15) - today()).days, then answer using only the tool result. Never pass a bare number."
+TIME_RETRY_PROMPT = "Do not guess. Call get_time now, then answer using only the tool result."
+DATE_RETRY_PROMPT = "Do not guess. Call get_date now, then answer using only the tool result."
+DAY_RETRY_PROMPT = "Do not guess. Call get_day now, then answer using only the tool result."
 MONTH_NAMES = {
     "january": 1, "jan": 1,
     "february": 2, "feb": 2,
@@ -78,6 +81,66 @@ def calendar_date():
 # Format the weekday name
 def calendar_day():
     return time.strftime("%A", time.localtime())
+
+# Return true when the user asks for the current clock time
+def needs_get_time(prompt):
+    text = prompt.lower()
+    return bool(re.search(r"\bwhat time\b|\bthe time\b|\bcurrent time\b|\btime is it\b", text))
+
+# Return true when the user asks for today's calendar date
+def needs_get_date(prompt):
+    text = prompt.lower()
+    if needs_get_time(prompt):
+        return False
+    if needs_date_math(prompt):
+        return False
+    return bool(re.search(r"\b(what'?s|what is)\s+(the\s+)?date\b|\btoday'?s\s+date\b|\bdate today\b", text))
+
+# Return true when the user asks for the weekday
+def needs_get_day(prompt):
+    text = prompt.lower()
+    if needs_get_time(prompt) or needs_get_date(prompt):
+        return False
+    return bool(re.search(r"\bday of the week\b|\bwhat day\b|\bwhich day\b|\bweekday\b", text))
+
+# Retry get_time once, then read the clock in Python if still missing
+def force_get_time(prompt, messages, message, already_retried, record_tool):
+    if not already_retried:
+        print("[dates] missing get_time, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        messages.append({"role": "user", "content": TIME_RETRY_PROMPT})
+        return True
+    result = clock_time()
+    record_tool("get_time", {}, result)
+    print(f"[dates] forced get_time -> {result}", flush=True)
+    return result
+
+# Retry get_date once, then read the calendar in Python if still missing
+def force_get_date(prompt, messages, message, already_retried, record_tool):
+    if not already_retried:
+        print("[dates] missing get_date, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        messages.append({"role": "user", "content": DATE_RETRY_PROMPT})
+        return True
+    result = calendar_date()
+    record_tool("get_date", {}, result)
+    print(f"[dates] forced get_date -> {result}", flush=True)
+    return result
+
+# Retry get_day once, then read the weekday in Python if still missing
+def force_get_day(prompt, messages, message, already_retried, record_tool):
+    if not already_retried:
+        print("[dates] missing get_day, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        messages.append({"role": "user", "content": DAY_RETRY_PROMPT})
+        return True
+    result = calendar_day()
+    record_tool("get_day", {}, result)
+    print(f"[dates] forced get_day -> {result}", flush=True)
+    return result
 
 # Return true when the question needs a day-count date calculation
 def needs_date_math(prompt):
