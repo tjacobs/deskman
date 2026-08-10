@@ -293,18 +293,18 @@ def load_kokoro_pipeline():
 
 # Run one hello ask so the system prompt is prefilled into the LLM cache
 def warm_llm():
-    print('Warming llm...', flush=True)
+    print('Loading text model...', flush=True)
     load_start = time.perf_counter()
     try:
         text_ask.ask_model(WARMUP_PROMPT)
     except urllib.error.URLError:
-        print(f'Warm failed: {TEXT_UNAVAILABLE}')
+        print(f'Load failed: {TEXT_UNAVAILABLE}')
         return
 
     # Drop the warm-up turn so the first spoken ask starts a fresh conversation
     text_ask.conversation_history.clear()
     text_ask.last_tool_log.clear()
-    print(f'Warmed in {time.perf_counter() - load_start:.1f} sec, model {text_ask.resolve_model_name()}')
+    print(f'Loaded in {time.perf_counter() - load_start:.1f} sec, model: {text_ask.resolve_model_name()}')
 
 # Return a kokoro pipeline for one language code
 def get_kokoro_pipeline(lang_code):
