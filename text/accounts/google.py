@@ -228,12 +228,33 @@ def format_event_line(event):
     summary = str(event.get("summary") or "Untitled").strip()
     start = event.get("start") or {}
     if start.get("dateTime"):
-        when = datetime.fromisoformat(start["dateTime"]).astimezone().strftime("%I:%M %p").lstrip("0")
-    elif start.get("date"):
-        when = "all day"
-    else:
-        when = "unknown time"
-    return f"{summary} at {when}"
+        when = datetime.fromisoformat(start["dateTime"]).astimezone()
+        return f"{summary} {format_event_when(when, False)}"
+    if start.get("date"):
+        local_tz = datetime.now().astimezone().tzinfo
+        when = datetime.strptime(start["date"], "%Y-%m-%d").replace(tzinfo=local_tz)
+        return f"{summary} {format_event_when(when, True)}"
+    return f"{summary} at unknown time"
+
+# Format event day and time for speech
+def format_event_when(when, all_day):
+    day = format_event_day(when)
+    if all_day:
+        return f"all day {day}"
+    time_text = when.strftime("%I:%M %p").lstrip("0")
+    return f"{day} at {time_text}"
+
+# Format today, tomorrow, or weekday for speech
+def format_event_day(when):
+    local_now = datetime.now().astimezone()
+    start_today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_event = when.astimezone(local_now.tzinfo).replace(hour=0, minute=0, second=0, microsecond=0)
+    days = (start_event - start_today).days
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "tomorrow"
+    return "on " + when.strftime("%A")
 
 # Interactive paste-code OAuth setup
 def add_google_account(options):
