@@ -37,6 +37,7 @@ KOKORO_SECONDS = 0
 DEVICE = 'cpu'
 FORCE_CPU = False
 SPEAK_TEXT = TEXT
+PLAYBACK_AVAILABLE = True
 
 def main():
     # Check offline cache
@@ -50,7 +51,7 @@ def main():
     perf_set = set_cpu_mode('performance')
     print_system_info(perf_set)
 
-    # Quit early when audio playback is unavailable
+    # Warn when audio playback is unavailable, generation still runs
     check_ready()
 
     # Run
@@ -152,11 +153,12 @@ def generate_and_play(voice, text):
         wav_path = os.path.join(AUDIO_DIR, wav_name)
         soundfile.write(wav_path, audio, 24000)
 
-        # Play wav file
+        # Play the wav when playback is available, else skip it
         play_start = time.perf_counter()
-        play_result = subprocess.run(play_wav_command(wav_path), capture_output=True)
-        if play_result.returncode != 0:
-            exit_error(f'Audio playback failed, {audio_player()} returned exit code {play_result.returncode}.')
+        if PLAYBACK_AVAILABLE:
+            play_result = subprocess.run(play_wav_command(wav_path), capture_output=True)
+            if play_result.returncode != 0:
+                exit_error(f'Audio playback failed, {audio_player()} returned exit code {play_result.returncode}.')
         play_seconds = time.perf_counter() - play_start
         log_chunk_timing(index, generate_seconds, play_seconds, audio_seconds)
 
@@ -216,11 +218,13 @@ def print_system_info(perf_set):
         print("GPU: not available")
     print(f"Device: {DEVICE}")
 
-# Quit when audio playback is unavailable
+# Warn when audio playback is unavailable, generation still runs
 def check_ready():
+    global PLAYBACK_AVAILABLE
     player_ok, player_error = check_audio_player()
     if not player_ok:
-        exit_error(f'Audio playback unavailable: {player_error}')
+        PLAYBACK_AVAILABLE = False
+        print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
 # Print chunk timing column headers
 def print_chunk_timing_header():

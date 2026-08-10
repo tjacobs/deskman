@@ -34,3 +34,17 @@ Naming:
 - Use full variable and function names
 - Prefer arg names load and save
 
+## Cursor Cloud specific instructions
+
+This is an offline text to speech project. Setup is `./install.sh`, which installs `uv` into `~/.local/bin`, apt packages `espeak-ng` and `alsa-utils`, creates `.venv` on Python 3.12, and installs kokoro, torch (CPU here, no GPU), soundfile, soco. See `README.md` and `install.sh` for the full command set.
+
+Run everything from the repo root. The script shebangs are relative, `#!.venv/bin/python`, so `./speak.py` only resolves from `/workspace`. Otherwise use `./.venv/bin/python speak.py`.
+
+The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Kernel modules and `/dev/snd` are absent and `/proc/asound` cannot be created, so no real or dummy ALSA card can be loaded.
+
+- `speak.py` and `say.py` detect the missing soundcard, print `Audio playback unavailable: ..., generating without playback.`, and keep running, so they still write WAVs to `audio/` and `./test.py` passes here. Only speaker playback is skipped, generation is unaffected.
+
+The Kokoro model and voices download into `cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
+
+`listen.py` and `talk.py` need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --text`, where `--text` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `text/tests.py` needs that server running. Stop `llama-server` when done, see `.cursor/rules/stop-llm-server.mdc`.
+
