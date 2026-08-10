@@ -80,8 +80,7 @@ def print_usage():
 # Run interactive or flagged LAN setup
 def run_lan_setup(options):
     print("Sonos LAN setup")
-    print("Use the same WiFi as your Sonos speakers. No Sonos cloud account is needed.")
-    print(f"This will write {options['accounts_path']}.")
+    print("Use the same WiFi as your Sonos speakers.")
     ensure_soco_installed()
     if not options["speakers"]:
         speakers = discover_or_enter_speakers()
@@ -157,7 +156,7 @@ def enter_speakers_manually():
 
 # Print a numbered speaker table
 def print_speaker_table(speakers):
-    print("#  Name                 IP")
+    print("   Name                 IP")
     for index, speaker in enumerate(speakers, start=1):
         print(f"{index:<3}{speaker['name']:<21}{speaker['ip']}")
 
