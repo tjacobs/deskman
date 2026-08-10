@@ -78,8 +78,9 @@ VOICE = DEFAULT_VOICE
 MAC_PLAYER = 'afplay'
 LINUX_PLAYER = 'aplay'
 
-# Config test question
+# Config test question and llm warm-up
 TEST_QUESTION = 'What is the time?'
+WARMUP_PROMPT = 'Say hello.'
 
 # Config dirs and env
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -133,9 +134,10 @@ def main():
     # Quit if audio playback is unavailable
     check_ready()
 
-    # Start the local text model server when it is not already up
+    # Start the local text model server, warm inference, then load speech models
     text_server = start_text_server()
     try:
+        warm_llm()
         run_talk(record)
     finally:
         stop_text_server(text_server)
@@ -181,7 +183,7 @@ def run_talk(record):
     # Silence onnxruntime GPU discovery warning from the VAD
     import_onnxruntime_quietly()
 
-    # Load models
+    # Load speech models
     whisper_model = load_whisper_model()
     vad_model = load_vad_model()
     kokoro_pipeline = load_kokoro_pipeline()
@@ -729,9 +731,12 @@ def check_ready():
 
 # Start the local text model server when needed, return the process we started
 def start_text_server():
+    print('Loading text model server...', flush=True)
+    load_start = time.perf_counter()
+
     # Reuse a server that is already healthy
     if text_server_healthy():
-        print(f'Model: {text_ask.resolve_model_name()}', flush=True)
+        print(f'Text model server started in {time.perf_counter() - load_start:.1f} sec. Model: {text_ask.resolve_model_name()}', flush=True)
         return None
 
     # Quit when the install is incomplete
@@ -740,7 +745,6 @@ def start_text_server():
         sys.exit(1)
 
     # Start server.sh in the background
-    print('Starting text model server...', flush=True)
     process = subprocess.Popen([TEXT_SERVER_SCRIPT], cwd=TEXT_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # Wait until the health endpoint answers
@@ -750,7 +754,7 @@ def start_text_server():
             print('Text server failed to start. Run ./text/server.sh to see the error.')
             sys.exit(1)
         if text_server_healthy():
-            print(f'Text model server ready. Model: {text_ask.resolve_model_name()}', flush=True)
+            print(f'Text model server started in {time.perf_counter() - load_start:.1f} sec. Model: {text_ask.resolve_model_name()}', flush=True)
             return process
         time.sleep(TEXT_SERVER_POLL_SECONDS)
 
@@ -778,6 +782,21 @@ def stop_text_server(process):
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+# Run one hello ask so the system prompt is prefilled into the LLM cache
+def warm_llm():
+    print('Starting text model inference...', flush=True)
+    load_start = time.perf_counter()
+    try:
+        text_ask.ask_model(WARMUP_PROMPT)
+    except urllib.error.URLError:
+        print(f'Start failed: {TEXT_UNAVAILABLE}')
+        return
+
+    # Drop the warm-up turn so the first spoken ask starts a fresh conversation
+    text_ask.conversation_history.clear()
+    text_ask.last_tool_log.clear()
+    print(f'Started in {time.perf_counter() - load_start:.1f} sec')
 
 # Return true when a card has a capture stream
 def card_has_capture(card_index):
