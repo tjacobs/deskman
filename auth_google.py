@@ -9,7 +9,6 @@ import sys
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 TEXT_DIR = os.path.join(SCRIPT_DIR, "text")
-REDIRECT_URI = "http://127.0.0.1:8765/callback"
 
 # Main
 def main():
