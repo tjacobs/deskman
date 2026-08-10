@@ -40,10 +40,9 @@ This is an offline text to speech project. Setup is `./install.sh`, which instal
 
 Run everything from the repo root. The script shebangs are relative, `#!.venv/bin/python`, so `./speak.py` only resolves from `/workspace`. Otherwise use `./.venv/bin/python speak.py`.
 
-The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Kernel modules and `/dev/snd` are absent and `/proc/asound` cannot be created, so a real or dummy ALSA card cannot be loaded. Non-obvious consequence:
+The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Kernel modules and `/dev/snd` are absent and `/proc/asound` cannot be created, so no real or dummy ALSA card can be loaded.
 
-- `speak.py` and `say.py` check for a USB soundcard up front and exit with `Audio playback unavailable: no USB audio device found`, so `./test.py` fails every speak/say step. The model still loads and generation still works, only playback is blocked.
-- Run `./tools-fake-soundcard.sh` to work around this. It builds an `LD_PRELOAD` shim that points `/proc/asound/cards` at a fake USB-Audio entry and writes a null ALSA default so playback goes nowhere. Then run tools with the shim, for example `LD_PRELOAD=cache/fake_soundcard.so ./test.py` or `./tools-fake-soundcard.sh --test`. The shim and its files live in `cache/` which is gitignored, so rerun the tool after a fresh VM.
+- `speak.py` and `say.py` detect the missing soundcard, print `Audio playback unavailable: ..., generating without playback.`, and keep running, so they still write WAVs to `audio/` and `./test.py` passes here. Only speaker playback is skipped, generation is unaffected.
 
 The Kokoro model and voices download into `cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
 

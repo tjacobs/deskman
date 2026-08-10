@@ -69,6 +69,7 @@ FORCE_CPU = False
 KOKORO_SECONDS = 0
 TEST_MODE = False
 OUTPUT_LOCK = threading.Lock()
+PLAYBACK_AVAILABLE = True
 
 # Main
 def main():
@@ -83,11 +84,8 @@ def main():
     perf_set = set_cpu_mode('performance')
     print_system_info(perf_set)
 
-    # Quit early when audio playback is unavailable
-    player_ok, player_error = check_audio_player()
-    if not player_ok:
-        print(f'Audio playback unavailable: {player_error}')
-        sys.exit(1)
+    # Warn when audio playback is unavailable, generation still runs
+    check_playback()
 
     # Start the speech engine
     engine = SpeechEngine()
@@ -410,6 +408,14 @@ def check_audio_player():
         if find_usb_card() is None:
             return False, 'no USB audio device found, plug one in and run ./tools-audio.sh'
     return True, None
+
+# Set the playback flag, warn when no audio device is available
+def check_playback():
+    global PLAYBACK_AVAILABLE
+    player_ok, player_error = check_audio_player()
+    if not player_ok:
+        PLAYBACK_AVAILABLE = False
+        print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
 # Format exception text for status lines
 def format_error(error):
@@ -755,6 +761,9 @@ class SpeechEngine:
 
     # Play wav file and allow cancellation
     def play_wav(self, wav_path):
+        # Skip playback when no audio device is available
+        if not PLAYBACK_AVAILABLE:
+            return
         self.stop_player()
         self.player_process = subprocess.Popen(play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while True:
