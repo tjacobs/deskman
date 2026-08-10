@@ -146,8 +146,8 @@ def content_tools_instruction(tool_names):
         'For cancel_reminder use {"name":"..."}. '
         'For load_talk_log use {"date":"today"|"yesterday"|"YYYY-MM-DD"}. '
         'For get_system_info use {"name":"get_system_info","arguments":{}}. '
-        'For list_sonos_speakers, play_sonos, pause_sonos use {"room":"..."}. '
-        'For set_sonos_volume use {"percent":N,"room":"..."}. '
+        'For play_sonos or pause_sonos use {} or {"room":"all"}. '
+        'For set_sonos_volume use {"percent":N} or {"percent":N,"room":"all"}. '
         'For list_calendar_events use {"day":"today"|"tomorrow"|"YYYY-MM-DD"}. '
         'For get_next_calendar_event use {"name":"get_next_calendar_event","arguments":{}}.'
     )

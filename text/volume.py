@@ -62,6 +62,10 @@ def needs_volume_tool(prompt):
 # Return true when the user wants the volume changed
 def needs_set_volume(prompt):
     text = prompt.lower()
+
+    # Sonos volume uses set_sonos_volume, not the desk speaker
+    if re.search(r"\b(sonos|sono'?s|sonar)\b", text):
+        return False
     if re.search(r"\b(louder|quieter|mute|unmute)\b", text):
         return True
     if "volume" not in text:
@@ -73,6 +77,10 @@ def needs_set_volume(prompt):
 # Return true when the user only wants the current volume
 def needs_get_volume(prompt):
     text = prompt.lower()
+
+    # Sonos volume uses Sonos tools, not the desk speaker
+    if re.search(r"\b(sonos|sono'?s|sonar)\b", text):
+        return False
     if "volume" not in text:
         return False
     if needs_set_volume(prompt):

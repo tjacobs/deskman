@@ -267,6 +267,33 @@ def ask_model(prompt):
                 messages.append({"role": "user", "content": maths.MATH_RETRY_PROMPT})
                 continue
 
+            # Force or apply set_sonos_volume when the model skipped a Sonos volume change
+            if accounts.sonos.needs_set_sonos_volume(prompt) and "set_sonos_volume" not in used:
+                forced = accounts.sonos.force_set_sonos_volume(prompt, messages, message, "sonos" in retried, record_tool)
+                action = apply_forced(forced, messages, "sonos", retried)
+                if action == "retry":
+                    continue
+                if action:
+                    return action
+
+            # Force or apply pause_sonos when the model skipped a Sonos pause
+            if accounts.sonos.needs_pause_sonos(prompt) and "pause_sonos" not in used:
+                forced = accounts.sonos.force_pause_sonos(prompt, messages, message, "sonos" in retried, record_tool)
+                action = apply_forced(forced, messages, "sonos", retried)
+                if action == "retry":
+                    continue
+                if action:
+                    return action
+
+            # Force or apply play_sonos when the model skipped a Sonos play
+            if accounts.sonos.needs_play_sonos(prompt) and "play_sonos" not in used:
+                forced = accounts.sonos.force_play_sonos(prompt, messages, message, "sonos" in retried, record_tool)
+                action = apply_forced(forced, messages, "sonos", retried)
+                if action == "retry":
+                    continue
+                if action:
+                    return action
+
             # Force or apply set_volume when the model skipped a volume change
             if volume.needs_set_volume(prompt) and "set_volume" not in used:
                 forced = volume.force_set_volume(prompt, messages, message, "volume" in retried, record_tool)
@@ -440,6 +467,27 @@ def ask_model(prompt):
         if memory.needs_forget(prompt) and not reminders.needs_cancel_reminder(prompt) and "forget" not in used:
             forced = memory.force_forget(prompt, messages, None, True, record_tool)
             action = apply_forced(forced, messages, "memory", retried)
+            if action and action != "retry":
+                return action
+
+        # If it skipped Sonos volume, set it in Python now
+        if accounts.sonos.needs_set_sonos_volume(prompt) and "set_sonos_volume" not in used:
+            forced = accounts.sonos.force_set_sonos_volume(prompt, messages, None, True, record_tool)
+            action = apply_forced(forced, messages, "sonos", retried)
+            if action and action != "retry":
+                return action
+
+        # If it skipped Sonos pause, pause it in Python now
+        if accounts.sonos.needs_pause_sonos(prompt) and "pause_sonos" not in used:
+            forced = accounts.sonos.force_pause_sonos(prompt, messages, None, True, record_tool)
+            action = apply_forced(forced, messages, "sonos", retried)
+            if action and action != "retry":
+                return action
+
+        # If it skipped Sonos play, play it in Python now
+        if accounts.sonos.needs_play_sonos(prompt) and "play_sonos" not in used:
+            forced = accounts.sonos.force_play_sonos(prompt, messages, None, True, record_tool)
+            action = apply_forced(forced, messages, "sonos", retried)
             if action and action != "retry":
                 return action
 
