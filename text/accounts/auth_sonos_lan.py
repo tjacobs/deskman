@@ -117,9 +117,9 @@ def ensure_soco_installed():
     python_path = os.path.join(speak_dir, ".venv", "bin", "python")
     if not os.path.isfile(python_path):
         python_path = sys.executable
-    print("Installing soco...")
-    result = os.system(f'uv pip install --python "{python_path}" soco')
-    if result != 0:
+    print("Installing soco with: uv pip install soco")
+    result = subprocess.run(["uv", "pip", "install", "--python", python_path, "soco"], check=False)
+    if result.returncode != 0:
         print("Could not install soco. Run: uv pip install soco")
         return
     try:
@@ -209,11 +209,6 @@ def run_smoke_test(account, default_speaker):
         return f"Smoke test ok: {device.player_name} volume is {device.volume}."
     except (ValueError, OSError, ImportError) as error:
         return f"Smoke test failed: {error}"
-
-# Prompt with a default value
-def prompt_value(label, default):
-    value = input(f"{label} [{default}]: ").strip()
-    return value or default
 
 # Main
 if __name__ == "__main__":
