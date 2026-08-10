@@ -87,10 +87,10 @@ def needs_get_volume(prompt):
         return False
     return bool(re.search(r"\b(what|how|current|check|get|tell)\b", text))
 
-# Return true when volume is aimed at Sonos by name or room
+# Return true when volume is aimed at Sonos, music, song, or a Sonos room
 def is_sonos_volume_request(prompt):
     import accounts.sonos as sonos_account
-    return sonos_account.wants_sonos_control(prompt) and "volume" in prompt.lower()
+    return sonos_account.needs_set_sonos_volume(prompt)
 
 # Retry set_volume once, then apply it in Python if still missing
 def force_set_volume(prompt, messages, message, already_retried, record_tool):

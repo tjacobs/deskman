@@ -294,8 +294,8 @@ def ask_model(prompt):
                 if action:
                     return action
 
-            # Force or apply set_volume when the model skipped a volume change
-            if volume.needs_set_volume(prompt) and "set_volume" not in used:
+            # Force or apply set_volume when the model skipped a desk volume change
+            if volume.needs_set_volume(prompt) and "set_volume" not in used and "set_sonos_volume" not in used:
                 forced = volume.force_set_volume(prompt, messages, message, "volume" in retried, record_tool)
                 action = apply_forced(forced, messages, "volume", retried)
                 if action == "retry":
@@ -372,6 +372,9 @@ def ask_model(prompt):
         # Show the tool call JSON the model returned
         if show_timing:
             print(f"Result: {format_tool_calls_json(tool_calls)}", flush=True)
+
+        # Drop desk set_volume when this ask is for Sonos or music volume
+        tool_calls = drop_conflicting_volume_tools(tool_calls, prompt)
 
         # Run each tool, then feed results back in a form this model accepts
         content_tools = uses_content_tools()
@@ -491,8 +494,8 @@ def ask_model(prompt):
             if action and action != "retry":
                 return action
 
-        # If it checked volume instead of setting it, set it in Python now
-        if volume.needs_set_volume(prompt) and "set_volume" not in used:
+        # If it checked desk volume instead of setting it, set it in Python now
+        if volume.needs_set_volume(prompt) and "set_volume" not in used and "set_sonos_volume" not in used:
             forced = volume.force_set_volume(prompt, messages, None, True, record_tool)
             action = apply_forced(forced, messages, "volume", retried)
             if action == "retry":

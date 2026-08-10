@@ -303,11 +303,21 @@ def run_set_sonos_volume(arguments):
 def mentions_sonos(prompt):
     return bool(re.search(SONOS_MENTION, prompt.lower()))
 
-# Return true when the prompt targets Sonos by name or a configured room
+# Return true when the prompt targets Sonos by name, room, or music/song
 def wants_sonos_control(prompt):
     if mentions_sonos(prompt):
         return True
-    return bool(matched_sonos_room(prompt))
+    if matched_sonos_room(prompt):
+        return True
+    if not sonos_is_configured():
+        return False
+    return bool(re.search(r"\b(music|song|songs)\b", prompt.lower()))
+
+# Return true when any Sonos account is configured
+def sonos_is_configured():
+    if accounts_store.get_account("sonos", mode="local") is not None:
+        return True
+    return accounts_store.get_account("sonos", mode="cloud") is not None
 
 # Return true when the user wants Sonos volume changed
 def needs_set_sonos_volume(prompt):
