@@ -4,7 +4,6 @@
 
 # Imports
 import os
-import subprocess
 import sys
 
 import accounts as accounts_store
@@ -81,7 +80,10 @@ def print_usage():
 def run_lan_setup(options):
     print("Sonos LAN setup")
     print("Use the same WiFi as your Sonos speakers.")
-    ensure_soco_installed()
+    try:
+        sonos_account.ensure_soco_installed()
+    except ImportError as error:
+        print(str(error))
     if not options["speakers"]:
         speakers = discover_or_enter_speakers()
     else:
@@ -104,28 +106,6 @@ def run_lan_setup(options):
     if should_smoke(options):
         lines.append(run_smoke_test(account, default_speaker))
     return "\n".join(lines)
-
-# Install soco into the speak venv when missing
-def ensure_soco_installed():
-    try:
-        import soco
-        return
-    except ImportError:
-        pass
-    speak_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    python_path = os.path.join(speak_dir, ".venv", "bin", "python")
-    if not os.path.isfile(python_path):
-        python_path = sys.executable
-    print("Installing soco with: uv pip install soco")
-    result = subprocess.run(["uv", "pip", "install", "--python", python_path, "soco"], check=False)
-    if result.returncode != 0:
-        print("Could not install soco. Run: uv pip install soco")
-        return
-    try:
-        import soco
-    except ImportError:
-        print("soco installed, but this process still cannot import it. Re-run ./auth_sonos.py.")
-        sys.exit(1)
 
 # Discover speakers, or fall back to manual IP entry
 def discover_or_enter_speakers():

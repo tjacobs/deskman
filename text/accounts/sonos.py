@@ -5,6 +5,8 @@
 # Imports
 import json
 import os
+import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
@@ -24,6 +26,10 @@ SONOS_CONTROL_BASE = "https://api.ws.sonos.com/control/api/v1"
 SONOS_SCOPE = "playback-control-all"
 REDIRECT_URI_PASTE = "http://localhost"
 MAX_VOLUME = 100
+SONOS_MENTION = r"\b(sonos|sono'?s|sonar)\b"
+PAUSE_SONOS_RETRY_PROMPT = "Do not guess. Call pause_sonos now. Omit room to use the default speaker, or pass room all for every room, then answer using only the tool result."
+PLAY_SONOS_RETRY_PROMPT = "Do not guess. Call play_sonos now. Omit room to use the default speaker, then answer using only the tool result."
+SET_SONOS_VOLUME_RETRY_PROMPT = "Do not guess. Call set_sonos_volume now with the requested percent. Omit room to use the default speaker, then answer using only the tool result."
 
 # Tools the local model can call for Sonos
 TOOLS = [
@@ -47,13 +53,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "play_sonos",
-            "description": "Play or resume Sonos on a room or group. Optional URI to play. Never claim music started without this tool.",
+            "description": "Play or resume Sonos. Omit room to use the default speaker. Pass room all for every room. Optional URI to play.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "room": {
                         "type": "string",
-                        "description": "Speaker room name or group name.",
+                        "description": "Optional speaker room, group name, or all.",
                     },
                     "uri": {
                         "type": "string",
@@ -71,13 +77,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "pause_sonos",
-            "description": "Pause Sonos on a room or group. Never claim music paused without this tool.",
+            "description": "Pause Sonos. Omit room to use the default speaker. Pass room all for every room.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "room": {
                         "type": "string",
-                        "description": "Speaker room name or group name.",
+                        "description": "Optional speaker room, group name, or all.",
                     },
                     "account_id": {
                         "type": "string",
@@ -91,7 +97,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_sonos_volume",
-            "description": "Set Sonos volume on a room or group to a percent from 0 to 100.",
+            "description": "Set Sonos volume to a percent from 0 to 100. Omit room to use the default speaker. Pass room all for every room.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -101,7 +107,7 @@ TOOLS = [
                     },
                     "room": {
                         "type": "string",
-                        "description": "Speaker room name or group name.",
+                        "description": "Optional speaker room, group name, or all.",
                     },
                     "account_id": {
                         "type": "string",
@@ -293,6 +299,148 @@ def run_set_sonos_volume(arguments):
     except (ValueError, urllib.error.URLError, OSError, ImportError) as error:
         return f"Could not set Sonos volume: {error}"
 
+# Return true when the prompt mentions Sonos, including common mishearings
+def mentions_sonos(prompt):
+    return bool(re.search(SONOS_MENTION, prompt.lower()))
+
+# Return true when the prompt targets Sonos by name, room, or music/song
+def wants_sonos_control(prompt):
+    if mentions_sonos(prompt):
+        return True
+    if matched_sonos_room(prompt):
+        return True
+    if not sonos_is_configured():
+        return False
+    return bool(re.search(r"\b(music|song|songs)\b", prompt.lower()))
+
+# Return true when any Sonos account is configured
+def sonos_is_configured():
+    if accounts_store.get_account("sonos", mode="local") is not None:
+        return True
+    return accounts_store.get_account("sonos", mode="cloud") is not None
+
+# Return true when the user wants Sonos volume changed
+def needs_set_sonos_volume(prompt):
+    text = prompt.lower()
+    if not wants_sonos_control(prompt):
+        return False
+    if "volume" not in text:
+        return False
+    if re.search(r"\d+\s*%", text):
+        return True
+    return bool(re.search(r"\b(set|change|make|turn|raise|lower)\b", text))
+
+# Return true when the user wants Sonos paused
+def needs_pause_sonos(prompt):
+    text = prompt.lower()
+    if not wants_sonos_control(prompt):
+        return False
+    return bool(re.search(r"\b(pause|stop)\b", text))
+
+# Return true when the user wants Sonos to play
+def needs_play_sonos(prompt):
+    text = prompt.lower()
+    if not wants_sonos_control(prompt):
+        return False
+    if needs_pause_sonos(prompt) or needs_set_sonos_volume(prompt):
+        return False
+    return bool(re.search(r"\b(play|resume|unpause)\b", text))
+
+# Retry or apply set_sonos_volume when the model skipped it
+def force_set_sonos_volume(prompt, messages, message, already_retried, record_tool):
+    percent = parse_sonos_volume_percent(prompt)
+    room = parse_sonos_room(prompt)
+    if not already_retried:
+        print("[sonos] missing set_sonos_volume, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        if percent is None:
+            retry = SET_SONOS_VOLUME_RETRY_PROMPT
+        else:
+            retry = f"Do not guess. Call set_sonos_volume with percent {percent} now. Omit room to use the default speaker, then answer using only the tool result."
+        messages.append({"role": "user", "content": retry})
+        return True
+    if percent is None:
+        return None
+    arguments = {"percent": percent}
+    if room:
+        arguments["room"] = room
+    result = run_set_sonos_volume(arguments)
+    record_tool("set_sonos_volume", arguments, result)
+    print(f"[sonos] forced set_sonos_volume -> {result}", flush=True)
+    return result
+
+# Retry or apply pause_sonos when the model skipped it
+def force_pause_sonos(prompt, messages, message, already_retried, record_tool):
+    room = parse_sonos_room(prompt)
+    if not already_retried:
+        print("[sonos] missing pause_sonos, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        messages.append({"role": "user", "content": PAUSE_SONOS_RETRY_PROMPT})
+        return True
+    arguments = {}
+    if room:
+        arguments["room"] = room
+    result = run_pause_sonos(arguments)
+    record_tool("pause_sonos", arguments, result)
+    print(f"[sonos] forced pause_sonos -> {result}", flush=True)
+    return result
+
+# Retry or apply play_sonos when the model skipped it
+def force_play_sonos(prompt, messages, message, already_retried, record_tool):
+    room = parse_sonos_room(prompt)
+    if not already_retried:
+        print("[sonos] missing play_sonos, retrying", flush=True)
+        if message is not None:
+            messages.append(message)
+        messages.append({"role": "user", "content": PLAY_SONOS_RETRY_PROMPT})
+        return True
+    arguments = {}
+    if room:
+        arguments["room"] = room
+    result = run_play_sonos(arguments)
+    record_tool("play_sonos", arguments, result)
+    print(f"[sonos] forced play_sonos -> {result}", flush=True)
+    return result
+
+# Read a Sonos volume percent from the user text
+def parse_sonos_volume_percent(prompt):
+    match = re.search(r"(\d+)\s*%", prompt.lower())
+    if match:
+        return max(0, min(MAX_VOLUME, int(match.group(1))))
+    match = re.search(r"\b(?:to|at)\s+(\d+)\b", prompt.lower())
+    if match:
+        return max(0, min(MAX_VOLUME, int(match.group(1))))
+    return None
+
+# Read all-rooms, a configured speaker name, or blank for the default speaker
+def parse_sonos_room(prompt):
+    text = prompt.lower()
+    if re.search(r"\ball rooms?\b|\beverywhere\b|\bevery room\b", text):
+        return "all"
+    return matched_sonos_room(prompt)
+
+# Return a configured speaker name found in the prompt
+def matched_sonos_room(prompt):
+    text = prompt.lower()
+    account = accounts_store.get_account("sonos", mode="local")
+    if account is None:
+        return ""
+    match_name = ""
+    for speaker in list_local_speakers(account):
+        name = str(speaker.get("name") or "").strip()
+        if not name:
+            continue
+        if name.lower() in text and len(name) > len(match_name):
+            match_name = name
+    return match_name
+
+# Return true when room means every configured speaker
+def is_all_rooms(room):
+    text = str(room or "").strip().lower()
+    return text in ("all", "all rooms", "everywhere", "every room")
+
 # Pick a Sonos account, preferring local when both exist
 def resolve_sonos_account(arguments, prefer_local):
     account_id = str(arguments.get("account_id") or "").strip() or None
@@ -333,8 +481,17 @@ def format_local_speakers(speakers):
         return "No Sonos LAN speakers configured."
     return "Sonos speakers: " + ", ".join(f"{row['name']} at {row['ip']}" for row in speakers)
 
-# Play on a local speaker
+# Play on a local speaker or every configured speaker
 def play_local(account, room, uri):
+    if is_all_rooms(room):
+        names = []
+        for device in local_devices(account):
+            if uri:
+                device.play_uri(uri)
+            else:
+                device.play()
+            names.append(device.player_name)
+        return "Playing on " + ", ".join(names) + "."
     device = local_device(account, room)
     if uri:
         device.play_uri(uri)
@@ -342,21 +499,33 @@ def play_local(account, room, uri):
     device.play()
     return f"Playing on {device.player_name}."
 
-# Pause a local speaker
+# Pause a local speaker or every configured speaker
 def pause_local(account, room):
+    if is_all_rooms(room):
+        names = []
+        for device in local_devices(account):
+            device.pause()
+            names.append(device.player_name)
+        return "Paused " + ", ".join(names) + "."
     device = local_device(account, room)
     device.pause()
     return f"Paused {device.player_name}."
 
-# Set volume on a local speaker
+# Set volume on a local speaker or every configured speaker
 def set_local_volume(account, room, percent):
+    if is_all_rooms(room):
+        names = []
+        for device in local_devices(account):
+            device.volume = percent
+            names.append(device.player_name)
+        return f"Set {', '.join(names)} volume to {percent} percent."
     device = local_device(account, room)
     device.volume = percent
     return f"Set {device.player_name} volume to {percent} percent."
 
 # Connect to one local speaker by room name
 def local_device(account, room):
-    soco = import_soco()
+    soco_module = import_soco()
     speakers = list_local_speakers(account)
     if not speakers:
         raise ValueError("No Sonos LAN speakers configured.")
@@ -365,16 +534,47 @@ def local_device(account, room):
     target_name = room or default_speaker or speakers[0]["name"]
     for speaker in speakers:
         if speaker["name"].lower() == target_name.lower():
-            return soco.SoCo(speaker["ip"])
+            return soco_module.SoCo(speaker["ip"])
     raise ValueError(f"Sonos speaker {target_name} not found.")
 
-# Import SoCo or raise a clear error
+# Connect to every configured local speaker
+def local_devices(account):
+    soco_module = import_soco()
+    speakers = list_local_speakers(account)
+    if not speakers:
+        raise ValueError("No Sonos LAN speakers configured.")
+    return [soco_module.SoCo(speaker["ip"]) for speaker in speakers]
+
+# Import SoCo, installing it into the speak venv when missing
 def import_soco():
+    ensure_soco_installed()
     try:
         import soco
     except ImportError as error:
-        raise ImportError("soco is not installed. Run ./install.sh or pip install soco.") from error
+        raise ImportError("soco is not installed. Run ./install.sh or uv pip install soco.") from error
     return soco
+
+# Install soco into the speak venv when missing
+def ensure_soco_installed():
+    try:
+        import soco
+        return
+    except ImportError:
+        pass
+    speak_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    python_path = os.path.join(speak_dir, ".venv", "bin", "python")
+    if not os.path.isfile(python_path):
+        python_path = sys.executable
+    print("Installing soco with: uv pip install soco", flush=True)
+    result = subprocess.run(["uv", "pip", "install", "--python", python_path, "soco"], check=False)
+    if result.returncode != 0:
+        raise ImportError("Could not install soco. Run: uv pip install soco")
+    try:
+        import importlib
+        importlib.invalidate_caches()
+        import soco
+    except ImportError as error:
+        raise ImportError("soco installed, but this process still cannot import it. Restart talk.py.") from error
 
 # List cloud groups for an account
 def list_cloud_groups(account):
