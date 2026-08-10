@@ -761,6 +761,13 @@ def chat_completion(messages):
     # Return the assistant message
     return response["choices"][0]["message"]
 
+# Drop desk set_volume when Sonos or music volume was requested
+def drop_conflicting_volume_tools(tool_calls, prompt):
+    names = [(tool_call.get("function") or {}).get("name") for tool_call in tool_calls]
+    if "set_sonos_volume" in names or accounts.sonos.needs_set_sonos_volume(prompt):
+        return [tool_call for tool_call in tool_calls if (tool_call.get("function") or {}).get("name") != "set_volume"]
+    return tool_calls
+
 # Run one tool call and return a short result string
 def run_tool(tool_call):
     # Read the function name and arguments
