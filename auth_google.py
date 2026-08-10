@@ -1,6 +1,6 @@
 #!.venv/bin/python
 
-# One-line Google Calendar setup, prints steps and opens the browser
+# Google Calendar setup, prints steps and opens the browser
 
 # Imports
 import os
@@ -60,10 +60,10 @@ def print_google_setup_steps():
     print("")
     print("1. Open https://console.cloud.google.com/")
     print("2. Create or select a project")
-    print("3. Enable the Google Calendar API")
-    print("4. Create an OAuth client as Desktop app")
-    print(f"5. Add redirect URI: {REDIRECT_URI}")
-    print("6. Copy the client id and client secret")
+    print("3. Enable the Google Calendar API by searching \"Calendar\"")
+    print("4. Create credentials, as a Desktop app")
+    print("5. Publish app at https://console.cloud.google.com/auth/audience")
+    print("6. Open app details, copy the client id and client secret")
     print("")
     print("Then sign in when the browser opens.")
     print("")
