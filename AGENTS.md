@@ -34,3 +34,18 @@ Naming:
 - Use full variable and function names
 - Prefer arg names load and save
 
+## Cursor Cloud specific instructions
+
+This is an offline text to speech project. Setup is `./install.sh`, which installs `uv` into `~/.local/bin`, apt packages `espeak-ng` and `alsa-utils`, creates `.venv` on Python 3.12, and installs kokoro, torch (CPU here, no GPU), soundfile, soco. See `README.md` and `install.sh` for the full command set.
+
+Run everything from the repo root. The script shebangs are relative, `#!.venv/bin/python`, so `./speak.py` only resolves from `/workspace`. Otherwise use `./.venv/bin/python speak.py`.
+
+The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Two non-obvious consequences:
+
+- `speak.py` and `say.py` exit before generating with `Audio playback unavailable: no USB audio device found` because playback is checked up front. `./test.py` fails every speak/say step for this same reason. This is a hardware limit, not a code or setup bug. The model still loads and generation still works.
+- To exercise the TTS core here, generate WAVs directly through the venv kokoro pipeline instead of relying on playback, for example load `kokoro.KModel(repo_id='hexgrad/Kokoro-82M', disable_complex=True).to('cpu')`, build a `KPipeline`, and `soundfile.write` each chunk at 24000 Hz.
+
+The Kokoro model and voices download into `cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
+
+`listen.py` and `talk.py` need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --text`, where `--text` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `text/tests.py` needs that server running. Stop `llama-server` when done, see `.cursor/rules/stop-llm-server.mdc`.
+
