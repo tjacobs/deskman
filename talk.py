@@ -78,8 +78,9 @@ VOICE = DEFAULT_VOICE
 MAC_PLAYER = 'afplay'
 LINUX_PLAYER = 'aplay'
 
-# Config test question
+# Config test question and llm warm-up
 TEST_QUESTION = 'What is the time?'
+WARMUP_PROMPT = 'Say hello.'
 
 # Config dirs and env
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -181,10 +182,11 @@ def run_talk(record):
     # Silence onnxruntime GPU discovery warning from the VAD
     import_onnxruntime_quietly()
 
-    # Load models
+    # Load models, then warm the LLM so the system prompt is cached
     whisper_model = load_whisper_model()
     vad_model = load_vad_model()
     kokoro_pipeline = load_kokoro_pipeline()
+    warm_llm()
 
     # Listen continuously, test mode does one exchange and exits
     listener = Listener(record, vad_model)
@@ -288,6 +290,21 @@ def load_kokoro_pipeline():
     pipeline.load_voice(VOICE)
     print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
     return pipeline
+
+# Run one hello ask so the system prompt is prefilled into the LLM cache
+def warm_llm():
+    print('Warming llm...', flush=True)
+    load_start = time.perf_counter()
+    try:
+        text_ask.ask_model(WARMUP_PROMPT)
+    except urllib.error.URLError:
+        print(f'Warm failed: {TEXT_UNAVAILABLE}')
+        return
+
+    # Drop the warm-up turn so the first spoken ask starts a fresh conversation
+    text_ask.conversation_history.clear()
+    text_ask.last_tool_log.clear()
+    print(f'Warmed in {time.perf_counter() - load_start:.1f} sec, model {text_ask.resolve_model_name()}')
 
 # Return a kokoro pipeline for one language code
 def get_kokoro_pipeline(lang_code):
