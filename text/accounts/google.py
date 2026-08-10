@@ -237,8 +237,8 @@ def format_event_line(event):
 
 # Interactive paste-code OAuth setup
 def add_google_account(options):
-    client_id = options["client_id"] or input("Google client id: ").strip()
-    client_secret = options["client_secret"] or input("Google client secret: ").strip()
+    client_id = options["client_id"] or input("Client ID: ").strip()
+    client_secret = options["client_secret"] or input("Client secret: ").strip()
     if not client_id or not client_secret:
         return "Google client id and client secret are required."
     auth_url = build_google_auth_url(client_id, REDIRECT_URI_PASTE)
