@@ -88,6 +88,8 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 - `voice.py` owns speaking voice tools through talk.py.
 - `volume.py` owns speaker volume tools and amixer control.
 - `accounts/` owns Google Calendar and Sonos tools, plus `accounts.json` setup CLIs.
+- `../auth_google.py` one-line Google Calendar browser setup.
+- `../auth_sonos.py` one-line Sonos LAN or cloud setup guide.
 - `../prompt.json` holds the system prompt read on each ask.
 - `../memory.json` holds long-term facts.
 - `../reminders.json` holds daily spoken reminders.
