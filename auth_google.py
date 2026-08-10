@@ -61,8 +61,9 @@ def print_google_setup_steps():
     print("2. Create or select a project")
     print("3. Enable the Google Calendar API by searching \"Calendar\"")
     print("4. Create credentials, as a Desktop app")
-    print("5. Publish app at https://console.cloud.google.com/auth/audience (cmd-click)")
-    print("6. Open app details, copy the client id and client secret")
+    print("5. Add scopes: all calendar read writes https://console.cloud.google.com/auth/scopes (cmd-click)")
+    print("6. Publish app at https://console.cloud.google.com/auth/audience (cmd-click)")
+    print("7. Open app details, copy the client id and client secret")
     print("")
 
 # Ensure text/ is importable
