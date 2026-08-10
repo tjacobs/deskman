@@ -110,7 +110,8 @@ def parse_args():
 def print_usage():
     print("Usage: python3 -m accounts.auth_browser google|sonos [flags...]")
     print("  Opens a browser, catches localhost OAuth, writes accounts.json")
-    print("  Register redirect URI http://127.0.0.1:8765/callback on the OAuth client")
+    print("  Google Desktop apps need no redirect URI in the console")
+    print("  Sonos cloud needs redirect URI http://127.0.0.1:8765/callback")
     print("  --client-id --client-secret --key --calendar-id --household-id --accounts --port")
 
 # Run the browser OAuth flow and save the account
