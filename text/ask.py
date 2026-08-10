@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 
 # Import ask modules
+import accounts.google
+import accounts.sonos
 import client
 import dates
 import maths
@@ -39,7 +41,7 @@ MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
 
 # Tools the local model can call
-TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS
+TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS + accounts.sonos.TOOLS + accounts.google.TOOLS
 TOOL_NAMES = [tool["function"]["name"] for tool in TOOLS]
 TOOL_NAME_SET = set(TOOL_NAMES)
 
@@ -794,6 +796,34 @@ def run_tool(tool_call):
     # Read computer and model info
     if name == "get_system_info":
         result = system.run_get_system_info(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Control Sonos speakers or groups
+    if name == "list_sonos_speakers":
+        result = accounts.sonos.run_list_sonos_speakers(arguments)
+        record_tool(name, arguments, result)
+        return result
+    if name == "play_sonos":
+        result = accounts.sonos.run_play_sonos(arguments)
+        record_tool(name, arguments, result)
+        return result
+    if name == "pause_sonos":
+        result = accounts.sonos.run_pause_sonos(arguments)
+        record_tool(name, arguments, result)
+        return result
+    if name == "set_sonos_volume":
+        result = accounts.sonos.run_set_sonos_volume(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Read Google Calendar events
+    if name == "list_calendar_events":
+        result = accounts.google.run_list_calendar_events(arguments)
+        record_tool(name, arguments, result)
+        return result
+    if name == "get_next_calendar_event":
+        result = accounts.google.run_get_next_calendar_event(arguments)
         record_tool(name, arguments, result)
         return result
 

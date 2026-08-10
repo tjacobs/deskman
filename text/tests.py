@@ -40,6 +40,8 @@ TOOL_TESTS = [
     {"name": "set_reminder", "prompt": f"Remind me about {TEST_REMINDER_NAME} at {TEST_REMINDER_TIME}.", "tools": ["set_reminder"], "contains": [TEST_REMINDER_NAME]},
     {"name": "cancel_reminder", "prompt": f"Cancel the {TEST_REMINDER_NAME} reminder.", "tools": ["cancel_reminder"], "contains": [TEST_REMINDER_NAME]},
     {"name": "look", "prompt": "Look center.", "tools": ["look"], "direct": {"name": "look", "arguments": {"direction": "center"}}},
+    {"name": "list_sonos_speakers", "prompt": "List the Sonos speakers.", "tools": ["list_sonos_speakers"], "direct": {"name": "list_sonos_speakers", "arguments": {}}, "contains": ["not configured"]},
+    {"name": "get_next_calendar_event", "prompt": "What is my next calendar event?", "tools": ["get_next_calendar_event"], "direct": {"name": "get_next_calendar_event", "arguments": {}}, "contains": ["not configured"]},
 ]
 
 # Main
