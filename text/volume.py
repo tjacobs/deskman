@@ -64,7 +64,7 @@ def needs_set_volume(prompt):
     text = prompt.lower()
 
     # Sonos volume uses set_sonos_volume, not the desk speaker
-    if re.search(r"\b(sonos|sono'?s|sonar)\b", text):
+    if is_sonos_volume_request(prompt):
         return False
     if re.search(r"\b(louder|quieter|mute|unmute)\b", text):
         return True
@@ -79,13 +79,18 @@ def needs_get_volume(prompt):
     text = prompt.lower()
 
     # Sonos volume uses Sonos tools, not the desk speaker
-    if re.search(r"\b(sonos|sono'?s|sonar)\b", text):
+    if is_sonos_volume_request(prompt):
         return False
     if "volume" not in text:
         return False
     if needs_set_volume(prompt):
         return False
     return bool(re.search(r"\b(what|how|current|check|get|tell)\b", text))
+
+# Return true when volume is aimed at Sonos by name or room
+def is_sonos_volume_request(prompt):
+    import accounts.sonos as sonos_account
+    return sonos_account.wants_sonos_control(prompt) and "volume" in prompt.lower()
 
 # Retry set_volume once, then apply it in Python if still missing
 def force_set_volume(prompt, messages, message, already_retried, record_tool):

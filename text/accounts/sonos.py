@@ -303,10 +303,16 @@ def run_set_sonos_volume(arguments):
 def mentions_sonos(prompt):
     return bool(re.search(SONOS_MENTION, prompt.lower()))
 
+# Return true when the prompt targets Sonos by name or a configured room
+def wants_sonos_control(prompt):
+    if mentions_sonos(prompt):
+        return True
+    return bool(matched_sonos_room(prompt))
+
 # Return true when the user wants Sonos volume changed
 def needs_set_sonos_volume(prompt):
     text = prompt.lower()
-    if not mentions_sonos(prompt):
+    if not wants_sonos_control(prompt):
         return False
     if "volume" not in text:
         return False
@@ -317,14 +323,14 @@ def needs_set_sonos_volume(prompt):
 # Return true when the user wants Sonos paused
 def needs_pause_sonos(prompt):
     text = prompt.lower()
-    if not mentions_sonos(prompt):
+    if not wants_sonos_control(prompt):
         return False
     return bool(re.search(r"\b(pause|stop)\b", text))
 
 # Return true when the user wants Sonos to play
 def needs_play_sonos(prompt):
     text = prompt.lower()
-    if not mentions_sonos(prompt):
+    if not wants_sonos_control(prompt):
         return False
     if needs_pause_sonos(prompt) or needs_set_sonos_volume(prompt):
         return False
@@ -398,12 +404,27 @@ def parse_sonos_volume_percent(prompt):
         return max(0, min(MAX_VOLUME, int(match.group(1))))
     return None
 
-# Read all-rooms or leave blank for the default speaker
+# Read all-rooms, a configured speaker name, or blank for the default speaker
 def parse_sonos_room(prompt):
     text = prompt.lower()
     if re.search(r"\ball rooms?\b|\beverywhere\b|\bevery room\b", text):
         return "all"
-    return ""
+    return matched_sonos_room(prompt)
+
+# Return a configured speaker name found in the prompt
+def matched_sonos_room(prompt):
+    text = prompt.lower()
+    account = accounts_store.get_account("sonos", mode="local")
+    if account is None:
+        return ""
+    match_name = ""
+    for speaker in list_local_speakers(account):
+        name = str(speaker.get("name") or "").strip()
+        if not name:
+            continue
+        if name.lower() in text and len(name) > len(match_name):
+            match_name = name
+    return match_name
 
 # Return true when room means every configured speaker
 def is_all_rooms(room):
