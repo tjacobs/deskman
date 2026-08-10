@@ -64,8 +64,6 @@ def print_google_setup_steps():
     print("5. Publish app at https://console.cloud.google.com/auth/audience (cmd-click)")
     print("6. Open app details, copy the client id and client secret")
     print("")
-    print("Then sign in when the browser opens.")
-    print("")
 
 # Ensure text/ is importable
 def ensure_text_path():

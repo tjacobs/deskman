@@ -116,10 +116,10 @@ def print_usage():
 
 # Run the browser OAuth flow and save the account
 def run_browser_auth(provider, options):
-    client_id = options["client_id"] or input(f"{provider} client id: ").strip()
-    client_secret = options["client_secret"] or input(f"{provider} client secret: ").strip()
+    client_id = options["client_id"] or input("Client ID: ").strip()
+    client_secret = options["client_secret"] or input("Client secret: ").strip()
     if not client_id or not client_secret:
-        return "Client id and client secret are required."
+        return "Client ID and client secret are required."
     api_key = options["key"]
     if provider == "sonos":
         api_key = api_key or input("Sonos API key: ").strip()
