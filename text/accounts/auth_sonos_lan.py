@@ -4,6 +4,7 @@
 
 # Imports
 import os
+import subprocess
 import sys
 
 import accounts as accounts_store
@@ -81,9 +82,8 @@ def run_lan_setup(options):
     print("Sonos LAN setup")
     print("Use the same WiFi as your Sonos speakers. No Sonos cloud account is needed.")
     print(f"This will write {options['accounts_path']}.")
+    ensure_soco_installed()
     if not options["speakers"]:
-        options["account_id"] = prompt_value("Account id", options["account_id"])
-        options["label"] = prompt_value("Label", options["label"])
         speakers = discover_or_enter_speakers()
     else:
         speakers = options["speakers"]
@@ -106,6 +106,28 @@ def run_lan_setup(options):
         lines.append(run_smoke_test(account, default_speaker))
     return "\n".join(lines)
 
+# Install soco into the speak venv when missing
+def ensure_soco_installed():
+    try:
+        import soco
+        return
+    except ImportError:
+        pass
+    speak_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    python_path = os.path.join(speak_dir, ".venv", "bin", "python")
+    if not os.path.isfile(python_path):
+        python_path = sys.executable
+    print("Installing soco...")
+    result = os.system(f'uv pip install --python "{python_path}" soco')
+    if result != 0:
+        print("Could not install soco. Run: uv pip install soco")
+        return
+    try:
+        import soco
+    except ImportError:
+        print("soco installed, but this process still cannot import it. Re-run ./auth_sonos.py.")
+        sys.exit(1)
+
 # Discover speakers, or fall back to manual IP entry
 def discover_or_enter_speakers():
     print("Discovering Sonos speakers on the LAN...")
@@ -115,7 +137,6 @@ def discover_or_enter_speakers():
         print(str(error))
         speakers = []
     if speakers:
-        print_speaker_table(speakers)
         return speakers
     print("No speakers found. Check WiFi, VLANs, and firewall multicast, then enter speakers manually.")
     return enter_speakers_manually()
