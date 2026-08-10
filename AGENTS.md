@@ -40,10 +40,10 @@ This is an offline text to speech project. Setup is `./install.sh`, which instal
 
 Run everything from the repo root. The script shebangs are relative, `#!.venv/bin/python`, so `./speak.py` only resolves from `/workspace`. Otherwise use `./.venv/bin/python speak.py`.
 
-The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Two non-obvious consequences:
+The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Kernel modules and `/dev/snd` are absent and `/proc/asound` cannot be created, so a real or dummy ALSA card cannot be loaded. Non-obvious consequence:
 
-- `speak.py` and `say.py` exit before generating with `Audio playback unavailable: no USB audio device found` because playback is checked up front. `./test.py` fails every speak/say step for this same reason. This is a hardware limit, not a code or setup bug. The model still loads and generation still works.
-- To exercise the TTS core here, generate WAVs directly through the venv kokoro pipeline instead of relying on playback, for example load `kokoro.KModel(repo_id='hexgrad/Kokoro-82M', disable_complex=True).to('cpu')`, build a `KPipeline`, and `soundfile.write` each chunk at 24000 Hz.
+- `speak.py` and `say.py` check for a USB soundcard up front and exit with `Audio playback unavailable: no USB audio device found`, so `./test.py` fails every speak/say step. The model still loads and generation still works, only playback is blocked.
+- Run `./tools-fake-soundcard.sh` to work around this. It builds an `LD_PRELOAD` shim that points `/proc/asound/cards` at a fake USB-Audio entry and writes a null ALSA default so playback goes nowhere. Then run tools with the shim, for example `LD_PRELOAD=cache/fake_soundcard.so ./test.py` or `./tools-fake-soundcard.sh --test`. The shim and its files live in `cache/` which is gitignored, so rerun the tool after a fresh VM.
 
 The Kokoro model and voices download into `cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
 
