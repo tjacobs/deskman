@@ -1,6 +1,6 @@
 #!.venv/bin/python
 
-# One-line Sonos setup, guides LAN discovery or cloud browser auth
+# Sonos setup, guides LAN discovery or cloud browser auth
 
 # Imports
 import os
@@ -17,38 +17,28 @@ def main():
     # Put text/ on the import path for accounts modules
     ensure_text_path()
 
-    # Parse optional mode, then guide LAN or cloud setup
-    mode = parse_args()
+    # Reject unknown flags, then ask lan or cloud and guide setup
+    parse_args()
+    mode = ask_mode()
     if mode == "lan":
         run_lan_guide()
         return
     run_cloud_guide()
 
-# Parse lan/cloud mode or ask interactively
+# Parse help-only flags
 def parse_args():
-    words = sys.argv[1:]
-    if not words:
-        return ask_mode()
-    if words[0] in ("-h", "--help"):
-        print_usage()
-        sys.exit(0)
-    if words[0] in ("lan", "local", "cloud"):
-        mode = "lan" if words[0] in ("lan", "local") else "cloud"
-        if len(words) > 1:
-            print(f"Unknown argument: {words[1]}")
+    for word in sys.argv[1:]:
+        if word in ("-h", "--help"):
             print_usage()
-            sys.exit(2)
-        return mode
-    print(f"Unknown argument: {words[0]}")
-    print_usage()
-    sys.exit(2)
+            sys.exit(0)
+        print(f"Unknown argument: {word}")
+        print_usage()
+        sys.exit(2)
 
 # Print usage help
 def print_usage():
-    print("Usage: ./auth_sonos.py [lan|cloud]")
-    print("  No args: ask lan or cloud, then guide setup into accounts.json")
-    print("  lan      discover Sonos speakers on this WiFi")
-    print("  cloud    open browser OAuth for Sonos Control API")
+    print("Usage: ./auth_sonos.py")
+    print("  Asks lan or cloud, then guides setup into accounts.json")
 
 # Ask whether to set up LAN or cloud
 def ask_mode():
