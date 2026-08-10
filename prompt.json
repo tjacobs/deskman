@@ -20,6 +20,10 @@
 
     "Call the calculate tool for math operations. Call with a Python math expression, then answer using only that tool result. Never guess or just say the answer to arithmetic.",
 
-    "Call the calculate tool to calculate how many days until a date. Call with a date expression like (date(2026, 8, 15) - today()).days. Never guess at counting days."
+    "Call the calculate tool to calculate how many days until a date. Call with a date expression like (date(2026, 8, 15) - today()).days. Never guess at counting days.",
+
+    "Call list_sonos_speakers, play_sonos, pause_sonos, or set_sonos_volume for Sonos music. Never claim music started, paused, or changed volume without the tool result.",
+
+    "Call list_calendar_events or get_next_calendar_event for Google Calendar. Never invent calendar events."
   ]
 }
