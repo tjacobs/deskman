@@ -1,34 +1,38 @@
 # Speak
 
-Offline text to speech generation, using the [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) model.
+Offline speech to text, LLM inference, and text to speech generation.
+Conversational AI bot with tools like time, date, volume, and google calendar integration.
 
-Four tools:
+Four scripts:
 
 - `speak.py` — speak a phrase once, with timing stats
-- `say.py` — interactive keyboard control over SSH, with preset phrases, voice and speed control
-- `listen.py` — live speech to text from the microphone, using [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+- `say.py` — speak phrases from pressing keys, with voice and speed control
+- `listen.py` — live speech to text transcription from the microphone
 - `talk.py` — wake word loop, listens for a command and speaks a reply
 
 CUDA is used when available for speak and say. Pass `--cpu` to force CPU inference. Every script takes `--help`.
 
 ```bash
-./speak.py
-./speak.py Hello there
-./speak.py --cpu
+./speak.py [optional text to speak]
 ./say.py
-./say.py --cpu
+./listen.py
+./talk.py
+./test.py
 ```
+
+Speech to text: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+Local LLM: [Gemma 4 E2B][https://huggingface.co/google/gemma-4-E2B]
+Text to speech: [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
 
 ## Setup
 
 ```bash
-./install.sh
-./install.sh --listen
+./install.sh --listen --talk
 ```
 
-Works on linux and mac. Installs [uv](https://docs.astral.sh/uv/) when missing, installs espeak-ng with brew or apt, plus alsa-utils on linux, then creates `.venv` and installs kokoro, torch, and soundfile into it.
+Works on linux and mac. Installs [uv](https://docs.astral.sh/uv/) when missing, installs system requirements, then creates `.venv` and installs kokoro and torch into it.
 
-Pass `--listen` to also install speech to text for `listen.py` and `talk.py`, see below.
+Pass `--listen --talk` to also install speech to text for `listen.py` and `talk.py`.
 
 On first run, the model and all voices download into `cache/`.
 
@@ -41,8 +45,6 @@ Generated audio files are saved in `audio/` as `001.wav`, `002.wav`, etc.
 ## say.py
 
 Interactive speech tool. Press keys to speak phrases.
-
-Single keypresses work without Enter. Preset phrases are in `say.py` as `PHRASES`, triggered by keys `1`–`9`.
 
 ### Controls
 
@@ -72,24 +74,30 @@ Live transcription from the microphone. Speak and lines print as you talk, CTRL-
 ./listen.py
 ```
 
-On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. The build takes around 30 minutes and only runs once. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.
+On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.
 
 Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the USB microphone on linux, preferring a mic-only card over a speaker card's fallback mic, and with sox from the default input device on mac.
 
 ## talk.py
 
-Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Needs the same install as `listen.py`, plus `./install.sh --text`. Starts `./text/server.sh` itself when the model is not already running.
+Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running.
 
 ```bash
-./install.sh --listen --text
+./install.sh --listen --talk
 ./talk.py
 ```
 
-Say it all in one breath, `robot, what is the time`, and it answers straight away. Say just `robot` and it replies `Question for me?`, then waits for the command. Right after `Hi!`, and after each reply, you can keep talking for 20 seconds without saying `robot` again.
+Say `robot what is the time`, and it answers straight away. Say just `robot` and it replies `Question for me?`, then waits for the command. You can keep talking for 20 seconds after a reply without saying `robot` again.
 
-The microphone stays open the whole time. A background thread reads it into blocks, the silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. Nothing is missed between turns, and silence is never transcribed. The mic is muted only while it speaks, so it does not hear itself.
+The microphone stays open the whole time. A background thread reads it into blocks, the Silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. The mic is muted while it speaks, so it does not hear itself.
 
-Each command is sent to Gemma through `text/ask.py`, and the spoken reply is whatever the model returns. Tools cover look left or right via `~/robot/src/look.py`, time and date, math and day counts, volume, voice, long-term remember/forget, and daily reminders. Facts you ask it to remember are saved in `memory.json` and survive reboot. Daily reminders are saved in `reminders.json`; while talk is running, a background check speaks each one once per day at its clock time. Session chat history does not survive reboot. Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit. Conversations are appended to `talks/YYYY-MM-DD.txt`, including tool calls and results.
+Each command is sent to Gemma through `text/ask.py`, and the spoken reply is whatever the model returns. Tools are: time and date, math and days, volume, voice, long-term remember/forget, and daily reminders.
+
+Facts you ask it to remember are saved in `memory.json` and survive reboot. Daily reminders are saved in `reminders.json`; while talk is running, a background check speaks each one once per day at its clock time. 
+
+Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit. 
+
+Conversations are appended to `talks/YYYY-MM-DD.txt`, including tool calls and results. You can ask it to remember a day's conversations to put it into memory context.
 
 Say `remind me at dinner time` or `remind me at 10 PM for bedtime` to schedule a spoken reminder. Say `what reminders do I have` to list them, or `cancel the dinner reminder` to remove one. On startup, dinner and bedtime reminders are seeded from matching memory facts when those reminders are missing.
 
@@ -102,11 +110,11 @@ Two flags help check what the mic picked up, and combine with each other and wit
 - `--replay` plays the recording back after each utterance, saved as `audio/heard.wav`
 - `--repeat` says the transcribed words back after each utterance
 
-By default it also plays back what was said to it, the utterance with the wake word in it and any command that follows, so you can hear what it caught. Pass `--no-replay-robot` to turn that off. All mute the mic while playing, so it does not hear itself.
+By default it also plays back what was said to it, so you can hear what it heard. Pass `--no-replay-robot` to turn that off.
 
 ## talk service
 
-Install a systemd service that runs `talk_service.sh` on boot, which starts `~/robot/src/real.py` and `talk.py` with `--no-replay-robot`:
+Install a systemd service that runs `talk_service.sh` on boot, which starts `talk.py` with `--no-replay-robot`:
 
 ```bash
 ./install_talk_service.sh
@@ -122,21 +130,6 @@ journalctl -u talk -f
 tail -f ~/speak/log.txt
 ```
 
-Optional memory sampling every 5 minutes into `monitor.log`:
-
-```bash
-(crontab -l 2>/dev/null | grep -v monitor_memory.sh; echo "*/5 * * * * $HOME/speak/monitor_memory.sh") | crontab -
-```
-
-After an SSH outage, check that file and run:
-
-```bash
-tail -50 ~/speak/monitor.log
-dmesg -T | rg -i 'oom|killed process'
-journalctl -b -1 -k | rg -i 'oom|killed process'
-last -x | head
-```
-
 ## Testing
 
 ```bash
@@ -146,11 +139,10 @@ last -x | head
 
 Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `talk.py --test`. Pass `--fresh` to clear `cache/` and `audio/` first. Requires internet when the model is not cached.
 
-The talk step is skipped when faster-whisper or a microphone is missing.
-
 ## Tools
 
 - `tools-audio.sh` — route audio to any USB soundcard, disable onboard HDMI audio, on a Raspberry Pi or a Jetson. Run `./tools-audio.sh` once, it asks for sudo and sets audio up again on its own when an adapter is replugged
+- `tools-offline.sh` — block internet for offline testing, `./tools-offline.sh --fix` to restore
 - `tools-power.sh` — set Jetson power mode. No args shows status
 
 ```bash
@@ -160,9 +152,3 @@ The talk step is skipped when faster-whisper or a microphone is missing.
 ./tools-power.sh max    # 25W uncapped, full performance, clocks locked high
 ```
 
-- `tools-offline.sh` — block internet for offline testing, `./tools-offline.sh --fix` to restore
-
-## Notes
-
-- First `say.py` launch downloads all voices and takes longer. Later launches are faster.
-- `min` / `mid` turn off `jetson_clocks` so CPU frequency can drop when idle. `max` turns it back on. `mid` and `max` are both 25W-class; `max` unlocks clocks fully (MAXN_SUPER).
