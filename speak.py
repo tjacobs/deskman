@@ -68,6 +68,9 @@ def main():
         log_timing("Run total", run_start)
         log_timing("Script total", STARTUP_START)
 
+        # Suggest the interactive speech tool next
+        print('Next: run ./say.py for more advanced speech.')
+
     # Done
     finally:
         if saved_cpu_mode:

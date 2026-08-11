@@ -156,6 +156,9 @@ def run_transcribe_loop(model, command):
     finally:
         recorder.terminate()
 
+    # Suggest the full talk loop next
+    print('Next: put it all together with ./talk.py.')
+
 # Start the recorder streaming raw audio to stdout
 def start_recorder(command):
     return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)

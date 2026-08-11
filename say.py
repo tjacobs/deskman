@@ -101,6 +101,9 @@ def main():
         else:
             run_input_loop(engine, PHRASES)
 
+        # Suggest microphone transcription next
+        print('Next: run ./listen.py for microphone listening transcription.')
+
     # Done
     finally:
         engine.stop()
