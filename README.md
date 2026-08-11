@@ -9,7 +9,7 @@ Conversational AI bot with tools like time, date, volume, and google calendar in
 Four scripts:
 
 - `speak.py` — speak a phrase once, with timing stats
-- `say.py` — speak phrases from pressing keys, with voice and speed control
+- `say.py` — speak phrases by pressing keys, with voice and speed control
 - `listen.py` — live speech to text transcription from the microphone
 - `talk.py` — wake word loop, listens for a command and speaks a reply
 
