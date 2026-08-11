@@ -24,7 +24,7 @@ CUDA is used when available for speak and say. Pass `--cpu` to force CPU inferen
 ```
 
 - Speech to text: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-- Local LLM: [Gemma 4 E2B][https://huggingface.co/google/gemma-4-E2B]
+- Local LLM: [Gemma 4 E2B](https://huggingface.co/google/gemma-4-E2B)
 - Text to speech: [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
 
 ## Setup
