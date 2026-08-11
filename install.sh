@@ -12,6 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 PYTHON_VERSION="3.12"
+JETSON_PYTHON_VERSION="3.10"
 PYTHON_PACKAGES=(kokoro soundfile soco)
 SPACY_MODEL_URL="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 LISTEN_PACKAGES=(faster-whisper)
@@ -19,11 +20,14 @@ BUILD_PACKAGES=(pybind11 wheel)
 
 # Config torch, the default linux wheel pulls cuda libraries a raspberry pi cannot load
 TORCH_PACKAGES=(torch==2.9.1)
+TORCH_JETSON_PACKAGES=(torch==2.8.0 'numpy<2')
 TORCH_CPU_INDEX_URL="https://download.pytorch.org/whl/cpu"
 TORCH_CUDA_INDEX_URL="https://download.pytorch.org/whl/cu126"
+TORCH_JETSON_INDEX_URL="https://pypi.jetson-ai-lab.io/jp6/cu126"
 CUDA_PACKAGE_PATTERN="^nvidia-"
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
+JETSON_RELEASE_FILE="/etc/nv_tegra_release"
 
 # Config system packages and players
 LINUX_PACKAGES=(espeak-ng alsa-utils htop)
@@ -180,16 +184,23 @@ install_linux_packages() {
     sudo apt-get install -y "${missing[@]}"
 }
 
-# Create the venv when missing
+# Create the venv when missing or on the wrong python
 create_venv() {
-    # Skip when the venv already exists
+    local python_version
+    python_version="$(venv_python_version)"
+
+    # Recreate when an existing venv is on the wrong python for this machine
     if [[ -x "${VENV_DIR}/bin/python" ]]; then
-        echo "Venv already exists at ${VENV_DIR}."
-        return 0
+        if "${VENV_DIR}/bin/python" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == tuple(map(int, '${python_version}'.split('.'))) else 1)"; then
+            echo "Venv already exists at ${VENV_DIR}."
+            return 0
+        fi
+        echo "Recreating venv for Python ${python_version}."
+        rm -rf "${VENV_DIR}"
     fi
 
     # Create a venv on a python version torch supports
-    uv venv --python "${PYTHON_VERSION}" "${VENV_DIR}"
+    uv venv --python "${python_version}" "${VENV_DIR}"
 }
 
 # Install the python packages into the venv
@@ -204,9 +215,16 @@ install_python_packages() {
     install_packages "${SPACY_MODEL_URL}"
 }
 
-# Install torch, cpu wheels on a raspberry pi and CUDA 12.6 wheels elsewhere
+# Install torch, Jetson Orin wheels, CPU on pi, CUDA 12.6 elsewhere
 install_torch() {
-    # Use the CUDA 12.6 index on Jetson and other CUDA machines
+    # Use Jetson AI Lab wheels built for Orin sm_87, pytorch.org aarch64 skips that arch
+    if is_jetson; then
+        echo "Installing torch ${TORCH_JETSON_PACKAGES[*]} from ${TORCH_JETSON_INDEX_URL}."
+        uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_JETSON_INDEX_URL}" "${TORCH_JETSON_PACKAGES[@]}"
+        return 0
+    fi
+
+    # Use the CUDA 12.6 index on other CUDA machines
     if ! is_raspberry_pi; then
         echo "Installing torch ${TORCH_PACKAGES[*]} from ${TORCH_CUDA_INDEX_URL}."
         uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_CUDA_INDEX_URL}" "${TORCH_PACKAGES[@]}"
@@ -244,12 +262,26 @@ verify_install() {
         exit 1
     fi
 
+    # Check the Jetson wheel can run CUDA kernels for Orin
+    if is_jetson; then
+        verify_jetson_torch
+    fi
+
     # Check the audio player for this platform
     if ! command -v "$(audio_player)" >/dev/null 2>&1; then
         echo "Audio player $(audio_player) not found, speech cannot play."
         exit 1
     fi
     echo "Verified imports and $(audio_player)."
+}
+
+# Quit when torch cannot run a CUDA kernel on this Jetson
+verify_jetson_torch() {
+    if ! "${VENV_DIR}/bin/python" -c 'import torch; x = torch.randn(8, 8, device="cuda"); x @ x' >/dev/null 2>&1; then
+        echo "Install failed, torch cannot run CUDA on this Jetson GPU."
+        exit 1
+    fi
+    echo "CUDA OK on Jetson GPU."
 }
 
 # Install faster-whisper so listen.py and talk.py can transcribe
@@ -447,6 +479,24 @@ find_brew() {
             return 0
         fi
     done
+}
+
+# Return the python version this machine should use for torch
+venv_python_version() {
+    if is_jetson; then
+        echo "${JETSON_PYTHON_VERSION}"
+    else
+        echo "${PYTHON_VERSION}"
+    fi
+}
+
+# Return true when running on a Jetson
+is_jetson() {
+    # L4T ships this release file on Jetson boards
+    if [[ -r "${JETSON_RELEASE_FILE}" ]]; then
+        return 0
+    fi
+    return 1
 }
 
 # Return true when running on a raspberry pi
