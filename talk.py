@@ -9,6 +9,7 @@ import sys
 import time
 import queue
 import shutil
+import traceback
 import warnings
 import platform
 import threading
@@ -35,6 +36,13 @@ GREETING = 'Hi!'
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
+
+# Config wake tone
+WAKE_TONE_RATE = 24000
+WAKE_TONE_NOTES = ((880.0, 0.12), (1174.7, 0.18))
+WAKE_TONE_GAP_SECONDS = 0.04
+WAKE_TONE_FADE_SECONDS = 0.015
+WAKE_TONE_AMPLITUDE = 0.0625
 
 # Config follow-up window
 FOLLOW_UP_SECONDS = 20.0
@@ -78,7 +86,7 @@ VOICE = DEFAULT_VOICE
 MAC_PLAYER = 'afplay'
 LINUX_PLAYER = 'aplay'
 
-# Config test question and llm warm-up
+# Config test question and text warm-up
 TEST_QUESTION = 'What is the time?'
 WARMUP_PROMPT = 'Say hello.'
 
@@ -96,15 +104,20 @@ TEXT_CUDA_LIBRARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'libggml
 TEXT_UNAVAILABLE = 'The language model is not running.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
+TEXT_SERVER_LOG = os.path.join(SCRIPT_DIR, 'text_server.log')
+TEXT_SERVER_RESTART_TRIES = 3
+ALLOW_MULTIPLE_INSTANCES = False
+
+# Expected RAM use in gigabytes
+TEXT_SERVER_EXPECTED_GB = 2.0
+WHISPER_EXPECTED_GB = 0.4
+KOKORO_EXPECTED_GB = 0.7
+SPEECH_STACK_EXPECTED_GB = TEXT_SERVER_EXPECTED_GB + WHISPER_EXPECTED_GB + KOKORO_EXPECTED_GB
+MEMORY_LOW_GB = 0.5
+
+# Download flags
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
-
-# Config wake tone
-WAKE_TONE_RATE = 24000
-WAKE_TONE_NOTES = ((880.0, 0.12), (1174.7, 0.18))
-WAKE_TONE_GAP_SECONDS = 0.04
-WAKE_TONE_FADE_SECONDS = 0.015
-WAKE_TONE_AMPLITUDE = 0.0625
 
 # Import local text model helper and reminders
 sys.path.insert(0, TEXT_DIR)
@@ -118,57 +131,54 @@ TEST_MODE = False
 REPEAT_MODE = False
 REPLAY_MODE = False
 REPLAY_WAKE_MODE = True
+MEMORY_MODE = False
 LAST_ASK_AT = 0.0
 kokoro_model = None
 kokoro_pipelines = {}
 speak_lock = threading.Lock()
+text_server_log_file = None
+text_server_process = None
 
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE = parse_args()
 
-    # Quit when another talk.py is already running
+    # Exit if another talk.py is already running
     ensure_single_instance()
+
+    # Exit if audio playback is unavailable
+    check_ready()
+
+    # Warn when free RAM is below what whisper, kokoro, and the text server need
+    warn_if_low_memory()
 
     # Build the record command
     record = record_command()
 
-    # Quit if audio playback is unavailable
-    check_ready()
-
-    # Start the local text model server, warm inference, then load speech models
-    text_server = start_text_server()
+    # Load speech first, then the text server
     try:
-        warm_llm()
-        run_talk(record)
-    finally:
-        stop_text_server(text_server)
+        # Load speech models
+        whisper_model, vad_model, kokoro_pipeline = load_speech_models()
 
-# Quit when another talk.py process is already alive
-def ensure_single_instance():
-    other_pid = find_other_talk_pid()
-    if other_pid is not None:
-        print(f'talk.py is already running, pid {other_pid}.')
-        print('Stop it with: sudo service robot stop; sudo service talk stop')
+        # Load text server
+        text_server_process = start_text_server()
+        warm_text()
+
+        # Run
+        run_talk(record, whisper_model, vad_model, kokoro_pipeline)
+    except SystemExit:
+        # Raise
+        raise
+    except Exception as error:
+        # Fail
+        print_error('talk.py failed', error)
         sys.exit(1)
-
-# Return the pid of another talk.py process, or None
-def find_other_talk_pid():
-    my_pid = os.getpid()
-    result = subprocess.run(['ps', 'ax', '-o', 'pid=,command='], capture_output=True, text=True)
-    for line in result.stdout.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) < 2:
-            continue
-        pid = int(parts[0])
-        if pid == my_pid:
-            continue
-        command = parts[1]
-        if 'talk.py' in command and 'python' in command:
-            return pid
-    return None
+    finally:
+        # End
+        stop_text_server(text_server_process)
+        text_server_process = None
 
 # Parse command line arguments
 def parse_args():
@@ -176,6 +186,7 @@ def parse_args():
     repeat_mode = False
     replay_mode = False
     replay_wake_mode = True
+    memory_mode = False
     for argument in sys.argv[1:]:
         if argument == '--test':
             test_mode = True
@@ -183,6 +194,8 @@ def parse_args():
             repeat_mode = True
         elif argument == '--replay':
             replay_mode = True
+        elif argument == '--memory':
+            memory_mode = True
         elif argument == REPLAY_WAKE_FLAG:
             replay_wake_mode = True
         elif argument == NO_REPLAY_WAKE_FLAG:
@@ -194,20 +207,21 @@ def parse_args():
             print(f"Unknown argument: {argument}")
             print_usage()
             sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode
 
 # Print usage help
 def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [{NO_REPLAY_WAKE_FLAG}]')
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [{NO_REPLAY_WAKE_FLAG}]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
     print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
+    print('  --memory           print available memory while loading models')
     print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, asks the local LLM, and speaks the reply')
     print(f'                     by default plays back what was said to "{WAKE_WORD}"')
 
-# Load models and run the talk loop
-def run_talk(record):
+# Load whisper, vad, and kokoro
+def load_speech_models():
     # Silence onnxruntime GPU discovery warning from the VAD
     import_onnxruntime_quietly()
 
@@ -215,7 +229,10 @@ def run_talk(record):
     whisper_model = load_whisper_model()
     vad_model = load_vad_model()
     kokoro_pipeline = load_kokoro_pipeline()
+    return whisper_model, vad_model, kokoro_pipeline
 
+# Run the talk loop with models already loaded
+def run_talk(record, whisper_model, vad_model, kokoro_pipeline):
     # Listen continuously, test mode does one exchange and exits
     listener = Listener(record, vad_model)
     try:
@@ -274,23 +291,38 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 break
     except KeyboardInterrupt:
         print('\nDone.')
+    except Exception as error:
+        print_error('talk loop failed', error)
+        raise
 
 # Load whisper model on gpu when available
 def load_whisper_model():
     print('Loading whisper...', flush=True)
+    warn_if_low_memory_for('whisper', WHISPER_EXPECTED_GB)
+    print_memory('before whisper')
     load_start = time.perf_counter()
-    import ctranslate2
-    from faster_whisper import WhisperModel
-    device = 'cuda' if ctranslate2.get_cuda_device_count() > 0 else 'cpu'
-    compute_type = 'float16' if device == 'cuda' else 'float32'
-    model = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
-    print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec')
+    try:
+        import ctranslate2
+        from faster_whisper import WhisperModel
+        device = 'cuda' if ctranslate2.get_cuda_device_count() > 0 else 'cpu'
+        compute_type = 'float16' if device == 'cuda' else 'float32'
+        model = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
+    except Exception as error:
+        print_error('whisper load failed', error)
+        raise
+    print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec', flush=True)
+    print_memory('after whisper')
     return model
 
 # Load the silero speech detector bundled with faster-whisper
 def load_vad_model():
-    from faster_whisper.vad import get_vad_model
-    return get_vad_model()
+    try:
+        from faster_whisper.vad import get_vad_model
+        model = get_vad_model()
+    except Exception as error:
+        print_error('vad load failed', error)
+        raise
+    return model
 
 # Load kokoro speech pipeline on gpu when available
 def load_kokoro_pipeline():
@@ -298,6 +330,7 @@ def load_kokoro_pipeline():
 
     # Suppress torch warnings before kokoro imports torch
     print('Loading kokoro...', flush=True)
+    warn_if_low_memory_for('kokoro', KOKORO_EXPECTED_GB)
     load_start = time.perf_counter()
     os.environ['OMP_NUM_THREADS'] = '4'
     os.environ['MKL_NUM_THREADS'] = '4'
@@ -307,17 +340,23 @@ def load_kokoro_pipeline():
     warnings.filterwarnings('ignore', category=UserWarning, module='torch.cuda')
 
     # Import kokoro and pick device
-    import kokoro
-    import torch
-    import soundfile
-    torch.set_num_threads(4)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    try:
+        # Import
+        import kokoro
+        import torch
+        import soundfile
+        torch.set_num_threads(4)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    # Load model and the default voice
-    kokoro_model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
-    pipeline = get_kokoro_pipeline(VOICE[0])
-    pipeline.load_voice(VOICE)
-    print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
+        # Load model and the default voice
+        kokoro_model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
+        pipeline = get_kokoro_pipeline(VOICE[0])
+        pipeline.load_voice(VOICE)
+    except Exception as error:
+        print_error('kokoro load failed', error)
+        raise
+    print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}', flush=True)
+    print_memory('after kokoro')
     return pipeline
 
 # Return a kokoro pipeline for one language code
@@ -498,13 +537,40 @@ def make_reply(command):
         text_ask.last_tool_log.clear()
         return "I didn't catch that."
 
-    # Ask the local LLM, fall back when the server is down
-    try:
-        return text_ask.ask_model(command)
-    except urllib.error.URLError as error:
+    # Restart the text server a few times when it died, often from OOM
+    if not ensure_text_server_alive():
         text_ask.last_tool_log.clear()
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+        return TEXT_UNAVAILABLE
+
+    # Ask the local LLM, fall back when the server is down
+    try:
+        # Ask
+        return text_ask.ask_model(command)
+    except urllib.error.URLError as error:
+        # Error?
+        text_ask.last_tool_log.clear()
+
+        # Start server again
+        if ensure_text_server_alive():
+            try:
+                # Ask
+                return text_ask.ask_model(command)
+            except Exception as retry_error:
+                # Fail
+                print_error('ask retry failed', retry_error)
+
+        # Fail
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print(f'Error: {format_llm_error(error)}', flush=True)
+        print_memory('ask failed')
+        return TEXT_UNAVAILABLE
+    except Exception as error:
+        # Fail
+        text_ask.last_tool_log.clear()
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+        print_error('ask failed', error)
+        print_memory('ask failed')
         return TEXT_UNAVAILABLE
 
 # Return a short reason for an LLM connection failure
@@ -513,6 +579,43 @@ def format_llm_error(error):
     if reason is None or reason == '':
         return str(error)
     return str(reason)
+
+# Print an error label, message, and traceback
+def print_error(label, error):
+    print(f'Error: {label}: {error}', flush=True)
+    traceback.print_exc()
+
+# Print available system memory in GB when --memory or free RAM is critically low
+def print_memory(label):
+    available_gb = available_memory_gb()
+    if not should_print_memory(available_gb, MEMORY_LOW_GB):
+        return
+    print(f'Memory: {format_gigabytes(available_gb)} available {label}', flush=True)
+
+# Return true when memory lines should print
+def should_print_memory(available_gb, expected_gb):
+    if MEMORY_MODE:
+        return True
+    return memory_is_low(available_gb, expected_gb)
+
+# Return true when available RAM is below the expected amount
+def memory_is_low(available_gb, expected_gb):
+    return available_gb >= 0 and available_gb < expected_gb
+
+# Format gigabytes as 1.1 GB
+def format_gigabytes(gigabytes):
+    return f'{gigabytes:.1f} GB'
+
+# Return MemAvailable from /proc/meminfo in GB, or -1 when unknown
+def available_memory_gb():
+    try:
+        with open('/proc/meminfo') as meminfo_file:
+            for line in meminfo_file:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except OSError:
+        pass
+    return -1.0
 
 # Append one command, tool lines, and reply to today's talk log
 def log_talk(command, reply):
@@ -768,42 +871,112 @@ def check_ready():
         sys.exit(1)
 
 # Start the local text model server when needed, return the process we started
-def start_text_server():
+def start_text_server(require_success=True):
     print('Loading text model server...', flush=True)
+    warn_if_low_memory_for('text server', TEXT_SERVER_EXPECTED_GB)
     load_start = time.perf_counter()
 
     # Reuse a server that is already healthy
     if text_server_healthy():
-        print_text_server_ready(load_start)
+        print_text_server_already_running()
+        print_memory('after text server')
         return None
 
     # Quit when the install is incomplete
     if not os.access(TEXT_SERVER_SCRIPT, os.X_OK):
         print(f'Text server missing. Run ./install.sh --talk first.')
-        sys.exit(1)
+        if require_success:
+            sys.exit(1)
+        return None
 
-    # Start server.sh in the background
-    process = subprocess.Popen([TEXT_SERVER_SCRIPT], cwd=TEXT_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Start server.sh and keep its log so startup failures are visible
+    process = spawn_text_server()
 
     # Wait until the health endpoint answers
     deadline = time.time() + TEXT_SERVER_START_SECONDS
     while time.time() < deadline:
         if process.poll() is not None:
-            print('Text server failed to start. Run ./text/server.sh to see the error.')
-            sys.exit(1)
+            text_server_log_file.flush()
+            print('Text server failed to start. Run ./text/server.sh to see the error.', flush=True)
+            print_log_tail(TEXT_SERVER_LOG)
+            if require_success:
+                sys.exit(1)
+            return None
         if text_server_healthy():
-            print_text_server_ready(load_start)
+            print_text_server_started(load_start)
+            print_memory('after text server')
             return process
         time.sleep(TEXT_SERVER_POLL_SECONDS)
 
     # Timed out waiting for the model to load
     stop_text_server(process)
-    print('Text server did not become ready in time.')
-    sys.exit(1)
+    text_server_log_file.flush()
+    print('Text server did not become ready in time.', flush=True)
+    print_log_tail(TEXT_SERVER_LOG)
+    if require_success:
+        sys.exit(1)
+    return None
 
-# Print text server ready line with model and CPU or GPU
-def print_text_server_ready(load_start):
+# Spawn server.sh and replace the log file handle
+def spawn_text_server():
+    global text_server_log_file
+    if text_server_log_file is not None:
+        text_server_log_file.close()
+    text_server_log_file = open(TEXT_SERVER_LOG, 'w')
+    return subprocess.Popen([TEXT_SERVER_SCRIPT], cwd=TEXT_DIR, stdout=text_server_log_file, stderr=subprocess.STDOUT)
+
+# Restart the text server when it died, return true when healthy again
+def ensure_text_server_alive():
+    global text_server_process
+
+    # Already up
+    if text_server_healthy():
+        return True
+
+    # Often out of memory on 8GB machines
+    print('text server is not responding, it may have been killed by an out of memory error.', flush=True)
+    print_memory('text server down')
+
+    # Retry a few cold starts
+    for attempt in range(1, TEXT_SERVER_RESTART_TRIES + 1):
+        warn_if_low_memory_for('text server restart', TEXT_SERVER_EXPECTED_GB)
+        print(f'Restarting text server, try {attempt}/{TEXT_SERVER_RESTART_TRIES}...', flush=True)
+        stop_text_server(text_server_process)
+        text_server_process = None
+        process = start_text_server(require_success=False)
+        if text_server_healthy():
+            text_server_process = process
+            warm_text()
+            return True
+        stop_text_server(process)
+
+    print(f'Error: text server still down after {TEXT_SERVER_RESTART_TRIES} restarts.', flush=True)
+    print_memory('text server restart failed')
+    return False
+
+# Print the last lines of a log file
+def print_log_tail(path, line_count=40):
+    try:
+        with open(path) as log_file:
+            lines = log_file.read().splitlines()
+    except OSError as error:
+        print(f'Error: could not read {path}: {error}', flush=True)
+        return
+    if not lines:
+        print(f'Error: {path} is empty.', flush=True)
+        return
+    print(f'----- {path} -----', flush=True)
+    for line in lines[-line_count:]:
+        print(line, flush=True)
+    print('----- end -----', flush=True)
+
+# Print when talk started the text server
+def print_text_server_started(load_start):
     print(f'Text model server started in {time.perf_counter() - load_start:.1f} sec on {text_server_device()}. Model: {text_ask.resolve_model_name()}', flush=True)
+
+# Print when a text server was already healthy
+def print_text_server_already_running():
+    print(f'Text model server already running. Model: {text_ask.resolve_model_name()}.', flush=True)
 
 # Return GPU when llama.cpp was built with the CUDA library, else CPU
 def text_server_device():
@@ -837,8 +1010,8 @@ def stop_text_server(process):
         process.kill()
         process.wait()
 
-# Run one hello ask so the system prompt is prefilled into the LLM cache
-def warm_llm():
+# Run one hello ask so the system prompt is prefilled into the text model cache
+def warm_text():
     print('Starting text model inference...', flush=True)
     load_start = time.perf_counter()
     try:
@@ -847,11 +1020,15 @@ def warm_llm():
         print(f'Start failed: {TEXT_UNAVAILABLE}', flush=True)
         print(f'Error: {format_llm_error(error)}', flush=True)
         return
+    except Exception as error:
+        print_error('warm text failed', error)
+        return
 
     # Drop the warm-up turn so the first spoken ask starts a fresh conversation
     text_ask.conversation_history.clear()
     text_ask.last_tool_log.clear()
-    print(f'Started in {time.perf_counter() - load_start:.1f} sec')
+    print(f'Started in {time.perf_counter() - load_start:.1f} sec', flush=True)
+    print_memory('after warm text')
 
 # Return true when a card has a capture stream
 def card_has_capture(card_index):
@@ -894,6 +1071,53 @@ def play_wav_command(wav_path):
 # Return audio player command for this platform
 def audio_player():
     return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
+
+# Warn when free RAM is below the expected cost of the three heavy loads
+def warn_if_low_memory():
+    available_gb = available_memory_gb()
+    expected_gb = SPEECH_STACK_EXPECTED_GB
+    low = memory_is_low(available_gb, expected_gb)
+    if should_print_memory(available_gb, expected_gb):
+        print(f'Memory: expect about {format_gigabytes(expected_gb)} for text server ({format_gigabytes(TEXT_SERVER_EXPECTED_GB)}), whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}), and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
+    if low:
+        print(f'Warning: only {format_gigabytes(available_gb)} available, need about {format_gigabytes(expected_gb)}. The text model may be killed by an out of memory error.', flush=True)
+
+# Warn when free RAM is below one load step
+def warn_if_low_memory_for(name, expected_gb):
+    available_gb = available_memory_gb()
+    if memory_is_low(available_gb, expected_gb):
+        print(f'Warning: only {format_gigabytes(available_gb)} available before {name}, expect about {format_gigabytes(expected_gb)}.', flush=True)
+
+# Quit when another talk.py process is already alive
+def ensure_single_instance():
+    # Temp: allow a second talk.py so memory pressure can be reproduced
+    if ALLOW_MULTIPLE_INSTANCES:
+        other_pid = find_other_talk_pid()
+        if other_pid is not None:
+            print(f'Warning: talk.py already running, pid {other_pid}, continuing anyway.', flush=True)
+        return
+
+    other_pid = find_other_talk_pid()
+    if other_pid is not None:
+        print(f'talk.py is already running, pid {other_pid}.')
+        print('Stop it with: sudo service robot stop; sudo service talk stop')
+        sys.exit(1)
+
+# Return the pid of another talk.py process, or None
+def find_other_talk_pid():
+    my_pid = os.getpid()
+    result = subprocess.run(['ps', 'ax', '-o', 'pid=,command='], capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) < 2:
+            continue
+        pid = int(parts[0])
+        if pid == my_pid:
+            continue
+        command = parts[1]
+        if 'talk.py' in command and 'python' in command:
+            return pid
+    return None
 
 # Main
 if __name__ == '__main__':
