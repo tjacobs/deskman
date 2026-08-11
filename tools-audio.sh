@@ -12,6 +12,8 @@ SETUP_LINK_PATH="/usr/local/bin/speak-usb-audio"
 SYSTEM_ASOUND_PATH="/etc/asound.conf"
 USER_ASOUND_NAME=".asoundrc"
 BLACKLIST_PATH="/etc/modprobe.d/blacklist-speak-internal-audio.conf"
+PULSE_SINK_NAME="speak_usb"
+PULSE_DEFAULT_PA_NAME="default.pa"
 
 # Config the account to set up when sudo does not name one, udev runs with no sudo user
 LOGIN_USER_ID=1000
@@ -49,11 +51,10 @@ parse_args() {
         if [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
             print_usage
             exit 0
-        else
-            echo "Unknown argument: ${argument}"
-            print_usage
-            exit 1
         fi
+        echo "Unknown argument: ${argument}"
+        print_usage
+        exit 1
     done
 }
 
@@ -79,7 +80,10 @@ find_target_user() {
     # Prefer the user who called sudo
     TARGET_USER="${SUDO_USER:-}"
 
-    # Fall back to the first login account
+    # Fall back to the owner of this repo, then the configured login id
+    if [[ -z "${TARGET_USER}" || "${TARGET_USER}" == "root" ]]; then
+        TARGET_USER="$(stat -c '%U' "${SCRIPT_DIR}" 2>/dev/null || true)"
+    fi
     if [[ -z "${TARGET_USER}" || "${TARGET_USER}" == "root" ]]; then
         TARGET_USER="$(getent passwd "${LOGIN_USER_ID}" | cut -d: -f1)"
     fi
@@ -113,7 +117,8 @@ configure_audio() {
 
     # Turn the card up and hand it to pulse
     set_usb_volume "${card_index}"
-    configure_pulse_runtime
+    write_pulse_default_pa "${card_name}"
+    configure_pulse_runtime "${card_index}" "${card_name}"
 
     echo "USB card ${card_index}: ${card_name}"
     echo "Wrote ${TARGET_HOME}/${USER_ASOUND_NAME} and ${SYSTEM_ASOUND_PATH}"
@@ -179,31 +184,58 @@ EOF
 set_usb_volume() {
     local card_index="$1"
 
-    # Try both common mixer names, cards carry one or the other
+    # Try common mixer names, USB dongles use Speaker, PCM, or Master
     if command -v amixer >/dev/null 2>&1; then
+        amixer -c "${card_index}" set Speaker 100% unmute >/dev/null 2>&1 || true
         amixer -c "${card_index}" set PCM 100% unmute >/dev/null 2>&1 || true
         amixer -c "${card_index}" set Master 100% unmute >/dev/null 2>&1 || true
     fi
 }
 
+# Persist a pulse startup file that loads the USB sink after reboot
+write_pulse_default_pa() {
+    local card_name="$1"
+    local pulse_dir="${TARGET_HOME}/.config/pulse"
+    local output_path="${pulse_dir}/${PULSE_DEFAULT_PA_NAME}"
+
+    # Keep the system defaults, then force the USB sink so aplay is not Dummy Output
+    mkdir -p "${pulse_dir}"
+    cat > "${output_path}" <<EOF
+# Written by speak tools-audio.sh
+.include /etc/pulse/default.pa
+
+.nofail
+load-module module-alsa-sink device=hw:CARD=${card_name},DEV=0 sink_name=${PULSE_SINK_NAME}
+set-default-sink ${PULSE_SINK_NAME}
+.fail
+EOF
+    chown -R "${TARGET_USER}:${TARGET_USER}" "${pulse_dir}"
+    echo "Wrote ${output_path}"
+}
+
 # Turn off the onboard pulse cards and pick the USB sink
 configure_pulse_runtime() {
+    local card_index="$1"
+    local card_name="$2"
+
     # Skip when pulse is not running for the login user
     if ! run_as_user pactl info >/dev/null 2>&1; then
+        echo "Pulse is not running for ${TARGET_USER}, wrote startup config only."
         return 0
     fi
 
     # Disable every card that is not USB
     local card sink default_sink_file
     while IFS= read -r card; do
-        if [[ "${card}" != *usb* ]]; then
+        if [[ "${card}" != *usb* && "${card}" != *${card_name}* ]]; then
             run_as_user pactl set-card-profile "${card}" off 2>/dev/null || true
         fi
     done < <(run_as_user pactl list cards short | awk '{print $2}')
 
-    # Quit when pulse has no USB sink
-    sink="$(run_as_user pactl list sinks short | awk '/usb/ {print $2; exit}')"
+    # Load or find the USB sink, pulse often only has Dummy Output until this runs
+    sink="$(ensure_pulse_usb_sink "${card_index}" "${card_name}")"
     if [[ -z "${sink}" ]]; then
+        echo "Could not create a Pulse USB sink."
         return 0
     fi
 
@@ -212,27 +244,90 @@ configure_pulse_runtime() {
     run_as_user pactl set-sink-volume "${sink}" 100% 2>/dev/null || true
     run_as_user pactl set-sink-mute "${sink}" 0 2>/dev/null || true
 
-    # Persist the default sink in the user session store
+    # Persist the stable sink name for the next pulse start
+    mkdir -p "${TARGET_HOME}/.config/pulse"
+    shopt -s nullglob
     for default_sink_file in "${TARGET_HOME}/.config/pulse/"*-default-sink; do
-        if [[ -f "${default_sink_file}" ]]; then
-            echo "${sink}" > "${default_sink_file}"
-            chown "${TARGET_USER}:${TARGET_USER}" "${default_sink_file}"
-        fi
+        echo "${PULSE_SINK_NAME}" > "${default_sink_file}"
+        chown "${TARGET_USER}:${TARGET_USER}" "${default_sink_file}"
     done
+    shopt -u nullglob
+    echo "Pulse default sink: ${sink}"
+}
+
+# Return a Pulse sink for the USB card, loading one when missing
+ensure_pulse_usb_sink() {
+    local card_index="$1"
+    local card_name="$2"
+    local sink
+
+    # Prefer the stable name this script installs
+    sink="$(find_pulse_sink_by_name "${PULSE_SINK_NAME}" || true)"
+    if [[ -n "${sink}" ]]; then
+        echo "${sink}"
+        return 0
+    fi
+
+    # Reuse an existing USB or hw sink when pulse already has one
+    sink="$(find_existing_pulse_usb_sink "${card_index}" "${card_name}" || true)"
+    if [[ -n "${sink}" ]]; then
+        echo "${sink}"
+        return 0
+    fi
+
+    # Load a named sink so aplay through pulse reaches the speaker
+    run_as_user pactl load-module module-alsa-sink "device=hw:CARD=${card_name},DEV=0" "sink_name=${PULSE_SINK_NAME}" >/dev/null 2>&1 || true
+    sink="$(find_pulse_sink_by_name "${PULSE_SINK_NAME}" || true)"
+    if [[ -n "${sink}" ]]; then
+        echo "${sink}"
+        return 0
+    fi
+
+    # Fall back to the numeric device string when the card name form fails
+    run_as_user pactl load-module module-alsa-sink "device=hw:${card_index},0" "sink_name=${PULSE_SINK_NAME}" >/dev/null 2>&1 || true
+    find_pulse_sink_by_name "${PULSE_SINK_NAME}"
+}
+
+# Return a sink name when it already exists
+find_pulse_sink_by_name() {
+    local wanted="$1"
+    local sink
+    while IFS= read -r sink; do
+        if [[ "${sink}" == "${wanted}" ]]; then
+            echo "${sink}"
+            return 0
+        fi
+    done < <(run_as_user pactl list sinks short | awk '{print $2}')
+    return 1
+}
+
+# Return any current non-dummy sink that looks like the USB card
+find_existing_pulse_usb_sink() {
+    local card_index="$1"
+    local card_name="$2"
+    local sink
+    local card_name_lower
+    card_name_lower="$(echo "${card_name}" | tr '[:upper:]' '[:lower:]')"
+
+    while IFS= read -r sink; do
+        if [[ "${sink}" == "auto_null" || "${sink}" == *.monitor ]]; then
+            continue
+        fi
+        if [[ "${sink}" == *usb* || "${sink}" == *"${card_name_lower}"* || "${sink}" == "alsa_output.hw_${card_index}_0" ]]; then
+            echo "${sink}"
+            return 0
+        fi
+    done < <(run_as_user pactl list sinks short | awk '{print $2}')
+    return 1
 }
 
 # Install the udev rule so a replugged card is set up again
 install_udev_rule() {
-    # Skip when already installed, this also runs from udev
-    if [[ -f "${UDEV_RULE_PATH}" && -L "${SETUP_LINK_PATH}" ]]; then
-        return 0
-    fi
-
     # Link the script where udev can reach it
     ln -sf "${SCRIPT_DIR}/tools-audio.sh" "${SETUP_LINK_PATH}"
     chmod 755 "${SCRIPT_DIR}/tools-audio.sh"
 
-    # Run this script again when a USB soundcard appears
+    # Run as root on plug, the script finds the login user and configures their pulse
     cat > "${UDEV_RULE_PATH}" <<EOF
 # Reconfigure audio when a USB soundcard is plugged in
 ACTION=="add", SUBSYSTEM=="sound", KERNEL=="card*", ENV{ID_BUS}=="usb", RUN+="${SETUP_LINK_PATH}"
