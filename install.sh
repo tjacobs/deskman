@@ -42,14 +42,17 @@ UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 UV_BIN_DIR="${HOME}/.local/bin"
 
 # Config the ctranslate2 cuda build for listen.py
+LIBS_DIR="${SCRIPT_DIR}/libs"
 FASTER_WHISPER_URL="https://github.com/SYSTRAN/faster-whisper.git"
-FASTER_WHISPER_DIR="${HOME}/faster-whisper"
+FASTER_WHISPER_DIR="${LIBS_DIR}/faster-whisper"
 CTRANSLATE2_URL="https://github.com/OpenNMT/CTranslate2.git"
-CTRANSLATE2_DIR="${HOME}/CTranslate2"
+CTRANSLATE2_DIR="${LIBS_DIR}/CTranslate2"
 CTRANSLATE2_LIBRARY="/usr/local/lib/libctranslate2.so"
 CUDA_BIN="/usr/local/cuda/bin"
 CUDA_ARCHITECTURE=87
-BUILD_JOBS=4
+BUILD_JOBS=6
+CTRANSLATE2_CXX_WARNINGS="-Wno-unused-parameter -Wno-unused-variable -Wno-implicit-fallthrough -Wno-reorder"
+CTRANSLATE2_CUDA_WARNINGS="-diag-suppress=177 -Xcompiler=-Wno-unused-parameter,-Wno-unused-variable,-Wno-reorder"
 
 # Config llama.cpp and the text model
 LLAMA_CPP_URL="https://github.com/ggml-org/llama.cpp.git"
@@ -312,8 +315,8 @@ install_listen() {
 # Build and install faster-whisper against a cuda build of ctranslate2
 install_listen_cuda() {
     check_build_tools
-    clone_repository "${CTRANSLATE2_URL}" "${CTRANSLATE2_DIR}" --recursive
-    clone_repository "${FASTER_WHISPER_URL}" "${FASTER_WHISPER_DIR}"
+    clone_repository "${CTRANSLATE2_URL}" "${CTRANSLATE2_DIR}" --depth 1 --recursive --shallow-submodules
+    clone_repository "${FASTER_WHISPER_URL}" "${FASTER_WHISPER_DIR}" --depth 1
     build_ctranslate2
     install_ctranslate2
     install_listen_packages
@@ -338,10 +341,19 @@ build_ctranslate2() {
         return 0
     fi
 
-    # Configure and build
+    # Configure and build, silence unused-code warnings from upstream sources
     cd "${CTRANSLATE2_DIR}"
-    PATH="${CUDA_BIN}:${PATH}" cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=ON -DWITH_MKL=OFF -DWITH_OPENBLAS=ON -DOPENMP_RUNTIME=COMP -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}"
+    PATH="${CUDA_BIN}:${PATH}" cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=ON -DWITH_MKL=OFF -DWITH_OPENBLAS=ON -DOPENMP_RUNTIME=COMP -DBUILD_CLI=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DCMAKE_CXX_FLAGS="${CTRANSLATE2_CXX_WARNINGS}" -DCUDA_NVCC_FLAGS="${CTRANSLATE2_CUDA_WARNINGS}"
+    silence_ctranslate2_cxx_warnings
     PATH="${CUDA_BIN}:${PATH}" cmake --build build "-j${BUILD_JOBS}"
+}
+
+# Re-append warning silences after CTranslate2 adds -Wall -Wextra
+silence_ctranslate2_cxx_warnings() {
+    local flags_file
+    while IFS= read -r flags_file; do
+        sed -i "s/-Wall -Wextra/-Wall -Wextra ${CTRANSLATE2_CXX_WARNINGS}/g" "${flags_file}"
+    done < <(find "${CTRANSLATE2_DIR}/build" -name flags.make)
 }
 
 # Install the ctranslate2 library system wide
@@ -462,6 +474,9 @@ clone_repository() {
         echo "$(basename "${directory}") already cloned."
         return 0
     fi
+
+    # Create the parent directory for clones under libs
+    mkdir -p "$(dirname "${directory}")"
     git clone "$@" "${url}" "${directory}"
 }
 

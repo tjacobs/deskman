@@ -15,6 +15,10 @@ SAMPLE_RATE = 16000
 CHUNK_SECONDS = 3
 MAC_RECORDER = 'rec'
 LINUX_RECORDER = 'arecord'
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
+os.environ['HF_HUB_CACHE'] = CACHE_DIR
+os.environ['HF_HUB_VERBOSITY'] = 'error'
 
 # Main
 def main():
@@ -104,9 +108,17 @@ def import_onnxruntime_quietly():
         try:
             import onnxruntime
             onnxruntime.set_default_logger_severity(3)
+            import_failed = False
+        except ImportError:
+            import_failed = True
         finally:
             os.dup2(saved_fd, stderr_fd)
             os.close(saved_fd)
+
+    # Quit with install help when the listen deps are missing
+    if import_failed:
+        print('onnxruntime not found. Run ./install.sh --listen to install it.')
+        sys.exit(1)
 
 # Load whisper model on gpu when available
 def load_model():
