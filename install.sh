@@ -18,14 +18,15 @@ LISTEN_PACKAGES=(faster-whisper)
 BUILD_PACKAGES=(pybind11 wheel)
 
 # Config torch, the default linux wheel pulls cuda libraries a raspberry pi cannot load
-TORCH_PACKAGES=(torch)
+TORCH_PACKAGES=(torch==2.9.1)
 TORCH_CPU_INDEX_URL="https://download.pytorch.org/whl/cpu"
+TORCH_CUDA_INDEX_URL="https://download.pytorch.org/whl/cu126"
 CUDA_PACKAGE_PATTERN="^nvidia-"
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
 
 # Config system packages and players
-LINUX_PACKAGES=(espeak-ng alsa-utils)
+LINUX_PACKAGES=(espeak-ng alsa-utils htop)
 MAC_PACKAGES=(espeak-ng)
 MAC_LISTEN_PACKAGES=(sox)
 LINUX_PLAYER="aplay"
@@ -44,7 +45,7 @@ CTRANSLATE2_DIR="${HOME}/CTranslate2"
 CTRANSLATE2_LIBRARY="/usr/local/lib/libctranslate2.so"
 CUDA_BIN="/usr/local/cuda/bin"
 CUDA_ARCHITECTURE=87
-BUILD_JOBS=3
+BUILD_JOBS=4
 
 # Config llama.cpp and the text model
 LLAMA_CPP_URL="https://github.com/ggml-org/llama.cpp.git"
@@ -203,11 +204,12 @@ install_python_packages() {
     install_packages "${SPACY_MODEL_URL}"
 }
 
-# Install torch, cpu wheels on a raspberry pi and the default wheels elsewhere
+# Install torch, cpu wheels on a raspberry pi and CUDA 12.6 wheels elsewhere
 install_torch() {
-    # Use the default index when the machine can run cuda
+    # Use the CUDA 12.6 index on Jetson and other CUDA machines
     if ! is_raspberry_pi; then
-        install_packages "${TORCH_PACKAGES[@]}"
+        echo "Installing torch ${TORCH_PACKAGES[*]} from ${TORCH_CUDA_INDEX_URL}."
+        uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_CUDA_INDEX_URL}" "${TORCH_PACKAGES[@]}"
         return 0
     fi
 
@@ -384,8 +386,8 @@ build_llama_cpp() {
         cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
     fi
 
-    # Build the server, client, and benchmark
-    PATH="${CUDA_BIN}:${PATH}" cmake --build "${LLAMA_CPP_DIR}/build" --target llama-server llama-cli llama-bench "-j${BUILD_JOBS}"
+    # Build only the server, skips cli and bench to cut Jetson compile time
+    PATH="${CUDA_BIN}:${PATH}" cmake --build "${LLAMA_CPP_DIR}/build" --target llama-server "-j${BUILD_JOBS}"
 }
 
 # Quit when llama-server or the model is unavailable
