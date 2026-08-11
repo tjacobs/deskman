@@ -129,6 +129,9 @@ def main():
     global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE
     TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE = parse_args()
 
+    # Quit when another talk.py is already running
+    ensure_single_instance()
+
     # Build the record command
     record = record_command()
 
@@ -142,6 +145,30 @@ def main():
         run_talk(record)
     finally:
         stop_text_server(text_server)
+
+# Quit when another talk.py process is already alive
+def ensure_single_instance():
+    other_pid = find_other_talk_pid()
+    if other_pid is not None:
+        print(f'talk.py is already running, pid {other_pid}.')
+        print('Stop it with: sudo service robot stop; sudo service talk stop')
+        sys.exit(1)
+
+# Return the pid of another talk.py process, or None
+def find_other_talk_pid():
+    my_pid = os.getpid()
+    result = subprocess.run(['ps', 'ax', '-o', 'pid=,command='], capture_output=True, text=True)
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) < 2:
+            continue
+        pid = int(parts[0])
+        if pid == my_pid:
+            continue
+        command = parts[1]
+        if 'talk.py' in command and 'python' in command:
+            return pid
+    return None
 
 # Parse command line arguments
 def parse_args():
@@ -234,7 +261,8 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
             # Reply, mic muted so it does not hear itself
             reply = make_reply(command)
-            print(f'Reply: {reply}', flush=True)
+            if reply != TEXT_UNAVAILABLE:
+                print(f'Reply: {reply}', flush=True)
             log_talk(command, reply)
             speak_muted(listener, kokoro_pipeline, reply)
 
@@ -473,9 +501,18 @@ def make_reply(command):
     # Ask the local LLM, fall back when the server is down
     try:
         return text_ask.ask_model(command)
-    except urllib.error.URLError:
+    except urllib.error.URLError as error:
         text_ask.last_tool_log.clear()
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+        print(f'Error: {format_llm_error(error)}', flush=True)
         return TEXT_UNAVAILABLE
+
+# Return a short reason for an LLM connection failure
+def format_llm_error(error):
+    reason = getattr(error, 'reason', None)
+    if reason is None or reason == '':
+        return str(error)
+    return str(reason)
 
 # Append one command, tool lines, and reply to today's talk log
 def log_talk(command, reply):
@@ -806,8 +843,9 @@ def warm_llm():
     load_start = time.perf_counter()
     try:
         text_ask.ask_model(WARMUP_PROMPT)
-    except urllib.error.URLError:
-        print(f'Start failed: {TEXT_UNAVAILABLE}')
+    except urllib.error.URLError as error:
+        print(f'Start failed: {TEXT_UNAVAILABLE}', flush=True)
+        print(f'Error: {format_llm_error(error)}', flush=True)
         return
 
     # Drop the warm-up turn so the first spoken ask starts a fresh conversation
