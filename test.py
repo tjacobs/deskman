@@ -139,7 +139,7 @@ def check_online():
 # Return expected output for default online device
 def device():
     if cuda_available():
-        return ('Device: cuda',)
+        return ('Device: gpu',)
     return ()
 
 # Return true when torch sees cuda
@@ -175,7 +175,7 @@ def microphone_available():
 # Return expected output for the device talk.py loads on
 def talk_device():
     if cuda_available():
-        return ('Loaded on CUDA',)
+        return ('Loaded on GPU',)
     return ('Loaded on CPU',)
 
 # Run speak.py with args and check output

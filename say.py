@@ -131,7 +131,7 @@ def parse_args():
 # Print usage help
 def print_usage():
     print('Usage: ./say.py [--cpu] [--test]')
-    print('  --cpu     force CPU inference instead of CUDA')
+    print('  --cpu     force CPU inference instead of GPU')
     print('  --test    speak the first two preset phrases, then exit')
     print('  (no arg)  press keys to speak phrases, h shows the controls')
 
@@ -306,7 +306,7 @@ def print_system_info(perf_set):
         print("GPU: disabled")
     else:
         print("GPU: not available")
-    print(f"Device: {DEVICE}")
+    print(f"Device: {'gpu' if DEVICE == 'cuda' else DEVICE}")
 
 # Format aligned status prefix
 def format_status(engine, message, state=None):

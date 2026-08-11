@@ -131,7 +131,8 @@ def load_model():
 
     # Load model
     model = WhisperModel(MODEL_SIZE, device=device, compute_type=compute_type)
-    print(f'Whisper {MODEL_SIZE} on {device.upper()} {compute_type}, VAD on CPU')
+    label = 'GPU' if device == 'cuda' else device.upper()
+    print(f'Whisper {MODEL_SIZE} on {label} {compute_type}, VAD on CPU')
     return model
 
 # Record chunks from the microphone and print transcripts

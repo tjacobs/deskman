@@ -94,7 +94,7 @@ def parse_args():
 # Print usage help
 def print_usage():
     print('Usage: ./speak.py [--cpu] [text...]')
-    print('  --cpu     force CPU inference instead of CUDA')
+    print('  --cpu     force CPU inference instead of GPU')
     print('  text      optional words to speak instead of the TEXT constant')
     print('  (no arg)  speak the TEXT constant once, with timing stats')
 
@@ -219,7 +219,7 @@ def print_system_info(perf_set):
         print("GPU: disabled")
     else:
         print("GPU: not available")
-    print(f"Device: {DEVICE}")
+    print(f"Device: {'gpu' if DEVICE == 'cuda' else DEVICE}")
 
 # Warn when audio playback is unavailable, generation still runs
 def check_ready():

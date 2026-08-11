@@ -92,6 +92,7 @@ HEARD_WAV = 'heard.wav'
 WAKE_WAV = 'wake.wav'
 TEXT_DIR = os.path.join(SCRIPT_DIR, 'text')
 TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
+TEXT_CUDA_LIBRARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'libggml-cuda.so')
 TEXT_UNAVAILABLE = 'The language model is not running.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
@@ -255,7 +256,7 @@ def load_whisper_model():
     device = 'cuda' if ctranslate2.get_cuda_device_count() > 0 else 'cpu'
     compute_type = 'float16' if device == 'cuda' else 'float32'
     model = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
-    print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec')
+    print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec')
     return model
 
 # Load the silero speech detector bundled with faster-whisper
@@ -288,7 +289,7 @@ def load_kokoro_pipeline():
     kokoro_model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
     pipeline = get_kokoro_pipeline(VOICE[0])
     pipeline.load_voice(VOICE)
-    print(f'Loaded on {device.upper()} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
+    print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}')
     return pipeline
 
 # Return a kokoro pipeline for one language code
@@ -736,7 +737,7 @@ def start_text_server():
 
     # Reuse a server that is already healthy
     if text_server_healthy():
-        print(f'Text model server started in {time.perf_counter() - load_start:.1f} sec. Model: {text_ask.resolve_model_name()}', flush=True)
+        print_text_server_ready(load_start)
         return None
 
     # Quit when the install is incomplete
@@ -754,7 +755,7 @@ def start_text_server():
             print('Text server failed to start. Run ./text/server.sh to see the error.')
             sys.exit(1)
         if text_server_healthy():
-            print(f'Text model server started in {time.perf_counter() - load_start:.1f} sec. Model: {text_ask.resolve_model_name()}', flush=True)
+            print_text_server_ready(load_start)
             return process
         time.sleep(TEXT_SERVER_POLL_SECONDS)
 
@@ -762,6 +763,22 @@ def start_text_server():
     stop_text_server(process)
     print('Text server did not become ready in time.')
     sys.exit(1)
+
+# Print text server ready line with model and CPU or GPU
+def print_text_server_ready(load_start):
+    print(f'Text model server started in {time.perf_counter() - load_start:.1f} sec on {text_server_device()}. Model: {text_ask.resolve_model_name()}', flush=True)
+
+# Return GPU when llama.cpp was built with the CUDA library, else CPU
+def text_server_device():
+    if os.path.exists(TEXT_CUDA_LIBRARY):
+        return 'GPU'
+    return 'CPU'
+
+# Return a user-facing device name, GPU instead of CUDA
+def device_label(device):
+    if device == 'cuda':
+        return 'GPU'
+    return device.upper()
 
 # Return true when the local text model health endpoint answers
 def text_server_healthy():
