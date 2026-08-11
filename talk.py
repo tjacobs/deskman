@@ -742,7 +742,7 @@ def start_text_server():
 
     # Quit when the install is incomplete
     if not os.access(TEXT_SERVER_SCRIPT, os.X_OK):
-        print(f'Text server missing. Run ./install.sh --text first.')
+        print(f'Text server missing. Run ./install.sh --talk first.')
         sys.exit(1)
 
     # Start server.sh in the background

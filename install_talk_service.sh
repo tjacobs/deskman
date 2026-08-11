@@ -41,7 +41,7 @@ main() {
         exit 1
     fi
     if [[ ! -x "${PYTHON_BIN}" ]]; then
-        echo "Error: ${PYTHON_BIN} not found. Run ./install.sh --listen --text first." >&2
+        echo "Error: ${PYTHON_BIN} not found. Run ./install.sh --listen --talk first." >&2
         exit 1
     fi
     if [[ ! -f "${REAL_SCRIPT}" ]]; then

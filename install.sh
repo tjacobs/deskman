@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install dependencies into .venv with uv, works on linux and mac.
-# Usage: ./install.sh [--listen] [--text]
+# Usage: ./install.sh [--listen] [--talk]
 
 # WiFi connect: 
 # nmcli device wifi connect "NETWORK" password "PASSWORD"
@@ -68,7 +68,7 @@ LLAMA_LIBRARY_DIR="${LLAMA_CPP_DIR}/build/bin"
 
 # State
 INSTALL_LISTEN=false
-INSTALL_TEXT=false
+INSTALL_TALK=false
 
 # Main
 main() {
@@ -81,7 +81,7 @@ main() {
     if [[ "${INSTALL_LISTEN}" == true ]]; then
         install_listen
     fi
-    if [[ "${INSTALL_TEXT}" == true ]]; then
+    if [[ "${INSTALL_TALK}" == true ]]; then
         install_text
     fi
     print_done
@@ -94,8 +94,8 @@ parse_args() {
             --listen)
                 INSTALL_LISTEN=true
                 ;;
-            --text)
-                INSTALL_TEXT=true
+            --talk|--text)
+                INSTALL_TALK=true
                 ;;
             -h|--help)
                 print_usage
@@ -112,9 +112,9 @@ parse_args() {
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./install.sh [--listen] [--text]"
+    echo "Usage: ./install.sh [--listen] [--talk]"
     echo "  --listen  also install speech to text for listen.py and talk.py"
-    echo "  --text    also install llama.cpp and Gemma 4 E2B for local responses"
+    echo "  --talk    also install llama.cpp and Gemma 4 E2B for talk.py"
     echo "  (no arg)  install text to speech for speak.py and say.py into .venv"
 }
 
@@ -453,8 +453,8 @@ print_done() {
     if [[ "${INSTALL_LISTEN}" == true ]]; then
         echo "Run ./listen.py to transcribe from the microphone."
     fi
-    if [[ "${INSTALL_TEXT}" == true ]]; then
-        echo "Run ./text/server.sh, then ./text/ask.py to ask the local model."
+    if [[ "${INSTALL_TALK}" == true ]]; then
+        echo "Run ./talk.py to put speech and the local model together."
     fi
 }
 
