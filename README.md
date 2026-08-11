@@ -1,6 +1,7 @@
 # Speak
 
-Offline speech to text, LLM inference, and text to speech generation.
+Speech to text, LLM inference, and text to speech generation.
+Runs locally, offline, no cloud/internet/wifi needed once downloaded.
 Conversational AI bot with tools like time, date, volume, and google calendar integration.
 
 Four scripts:
