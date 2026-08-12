@@ -1,17 +1,71 @@
 #!/usr/bin/env bash
-# Sample memory and talk-related processes into a log
+# Sample memory and talk-related processes into a log.
+# Cron every 5 minutes: */5 * * * * /home/deskman/speak/tools/memory.sh
+# Usage: ./tools/memory.sh
+#        ./tools/memory.sh --cron
 
 # Stop on errors
 set -euo pipefail
 
 # Paths and thresholds
-SPEAK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_FILE="${SPEAK_DIR}/monitor.log"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${SCRIPT_DIR}/memory.sh"
+LOG_FILE="${SCRIPT_DIR}/memory.log"
+CRON_SCHEDULE='*/5 * * * *'
 WARN_AVAILABLE_MB=400
 CRITICAL_AVAILABLE_MB=200
 
 # Main
 main() {
+    parse_args "$@"
+    if [[ "${CRON_MODE}" == "true" ]]; then
+        install_cron
+        return
+    fi
+    sample_memory
+}
+
+# Parse command line arguments
+parse_args() {
+    CRON_MODE="false"
+    for argument in "$@"; do
+        if [[ "${argument}" == "--cron" ]]; then
+            CRON_MODE="true"
+        elif [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
+            print_usage
+            exit 0
+        else
+            echo "Unknown argument: ${argument}"
+            print_usage
+            exit 1
+        fi
+    done
+}
+
+# Print usage help
+print_usage() {
+    echo "Usage: ./tools/memory.sh [--cron]"
+    echo "  --cron    install a crontab line that samples every 5 minutes"
+    echo "  (no arg)  append one memory sample to tools/memory.log"
+}
+
+# Install or refresh the every-5-minutes crontab line for this script
+install_cron() {
+    local cron_line
+    cron_line="${CRON_SCHEDULE} ${SCRIPT_PATH}"
+
+    # Keep other crontab lines, replace any prior memory.sh entry
+    {
+        crontab -l 2>/dev/null | grep -v 'tools/memory.sh' || true
+        echo "${cron_line}"
+    } | crontab -
+
+    echo "Installed cron: ${cron_line}"
+    echo "Log: ${LOG_FILE}"
+}
+
+# Append one memory sample to the log
+sample_memory() {
     # Create log file
     mkdir -p "$(dirname "${LOG_FILE}")"
     touch "${LOG_FILE}"
@@ -94,4 +148,4 @@ trim_log() {
 }
 
 # Run
-main
+main "$@"
