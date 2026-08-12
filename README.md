@@ -11,7 +11,7 @@ Four scripts:
 - `speak.py` — speak a phrase once, with timing stats
 - `say.py` — speak phrases by pressing keys, with voice and speed control
 - `listen.py` — live speech to text transcription from the microphone
-- `talk.py` — wake word loop, listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
+- `talk.py` — listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
 
 CUDA is used when available for speak and say. Pass `--cpu` to force CPU inference. Every script takes `--help`.
 
