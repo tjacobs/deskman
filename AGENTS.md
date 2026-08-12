@@ -46,5 +46,22 @@ The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphon
 
 The Kokoro model and voices download into `cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
 
-`listen.py` and `talk.py` need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --talk`, where `--talk` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `text/tests.py` needs that server running. Stop `llama-server` when done, see `.cursor/rules/stop-llm-server.mdc`.
+`listen.py` and `talk.py` need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --talk`, where `--talk` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `text/tests.py` needs that server running. Stop `llama-server` when done.
+
+## Stop the local LLM server when done
+
+When you start or use `text/server.sh` / `llama-server` for testing, benches, or debugging:
+
+- Stop it before ending your turn once you no longer need it
+- Prefer killing the `llama-server` process, or Ctrl+C equivalent, so port 8080 is free
+- Do not leave a background model server running after the task is finished
+- Exception: only leave it running if the user explicitly asks to keep the server up
+
+## ask.py system messages and KV cache
+
+When building the chat `messages` list for the local LLM:
+
+- First system message is `prompt.json` only via `load_system_prompt()`. That content must stay identical across asks so llama-server can reuse the KV cache prefix.
+- Memories and reminders go on the user message via `prompt_extras()`, prefixed before the question. Do not use a second `system` message: Gemma 3 chat templates only allow one system role, then alternating user/assistant.
+- Never glue extras into the first system string with `+`. That changes the first message object and forces a full prefill.
 
