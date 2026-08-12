@@ -70,7 +70,7 @@ Pass `--test` to speak the first two preset phrases and exit.
 
 ## listen.py
 
-Live transcription from the microphone. Speak and lines print as you talk, CTRL-C to stop.
+Live transcription from the microphone. Speak into your microphone, and text lines will print as you talk, CTRL-C to stop.
 
 ```bash
 ./install.sh --listen
