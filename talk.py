@@ -47,6 +47,9 @@ WAKE_TONE_AMPLITUDE = 0.0625
 # Config follow-up window
 FOLLOW_UP_SECONDS = 20.0
 
+# Config how long --test waits to hear itself before using the question text
+TEST_HEAR_SECONDS = 8.0
+
 # Config daily reminders
 REMINDER_CHECK_SECONDS = 20.0
 
@@ -475,7 +478,7 @@ def normalize_voice_name(voice_name):
 def hear_wake_command(whisper_model, kokoro_pipeline, listener):
     while True:
         # Listen for the next utterance, using follow-up replay while the window is open
-        text = hear_utterance(whisper_model, kokoro_pipeline, listener, conversation_open())
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener, conversation_open(), 0.0)
         if text is None:
             return None
 
@@ -506,7 +509,9 @@ def conversation_open():
 
 # Transcribe the next utterance, falling back when nothing was heard
 def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
-    command = hear_utterance(whisper_model, kokoro_pipeline, listener, True)
+    # In --test, stop waiting for the mic after a few seconds
+    timeout_seconds = TEST_HEAR_SECONDS if TEST_MODE else 0.0
+    command = hear_utterance(whisper_model, kokoro_pipeline, listener, True, timeout_seconds)
     if command is None:
         return None
     if not command and fallback:
@@ -515,11 +520,13 @@ def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
     return command
 
 # Wait for one utterance and return what was said
-def hear_utterance(whisper_model, kokoro_pipeline, listener, after_wake):
-    # Transcribe one whole utterance
-    audio = listener.next_utterance()
+def hear_utterance(whisper_model, kokoro_pipeline, listener, after_wake, timeout_seconds):
+    # Transcribe one whole utterance, empty when the hear timeout expired
+    audio = listener.next_utterance(timeout_seconds)
     if audio is None:
         return None
+    if len(audio) == 0:
+        return ''
     text = transcribe(whisper_model, audio)
     if text:
         print(f'Heard: {text}', flush=True)
@@ -739,15 +746,27 @@ class Listener:
                 continue
             self.blocks.put(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
 
-    # Collect audio from when speech starts until it stops
-    def next_utterance(self):
+    # Collect audio from when speech starts until it stops, empty array on timeout
+    def next_utterance(self, timeout_seconds):
         pre_roll = collections.deque(maxlen=PRE_ROLL_BLOCKS)
         utterance = []
         speech_blocks = 0
         silence_blocks = 0
+        deadline = time.time() + timeout_seconds if timeout_seconds > 0 else None
         while True:
+            # Give up when the hear timeout is reached, so --test can fall back
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return np.zeros(0, dtype=np.float32)
+                try:
+                    block = self.blocks.get(timeout=remaining)
+                except queue.Empty:
+                    return np.zeros(0, dtype=np.float32)
+            else:
+                block = self.blocks.get()
+
             # Stop when the recorder has gone away
-            block = self.blocks.get()
             if block is None:
                 return None
             speaking = speech_probability(self.vad_model, block) > VAD_THRESHOLD
@@ -1114,8 +1133,13 @@ def find_other_talk_pid():
         pid = int(parts[0])
         if pid == my_pid:
             continue
-        command = parts[1]
-        if 'talk.py' in command and 'python' in command:
+
+        # Only match python running talk.py, not shells or timeout wrappers that mention both
+        tokens = parts[1].split()
+        executable = os.path.basename(tokens[0])
+        if not executable.startswith('python'):
+            continue
+        if any(token.endswith('talk.py') for token in tokens):
             return pid
     return None
 
