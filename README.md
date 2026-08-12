@@ -13,7 +13,7 @@ Four scripts:
 - `listen.py` — live speech to text transcription from the microphone
 - `talk.py` — listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
 
-CUDA is used when available for speak and say. Pass `--cpu` to force CPU inference. Every script takes `--help`.
+The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
 
 ```bash
 ./speak.py [optional text to speak]
