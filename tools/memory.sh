@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Paths and thresholds
-SPEAK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SPEAK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="${SPEAK_DIR}/monitor.log"
 WARN_AVAILABLE_MB=400
 CRITICAL_AVAILABLE_MB=200

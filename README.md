@@ -150,11 +150,13 @@ Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `tal
 - `tools/audio.sh` — route audio to any USB soundcard, disable onboard HDMI audio, on a Raspberry Pi or a Jetson. Run `./tools/audio.sh` once, it asks for sudo and sets audio up again on its own when an adapter is replugged
 - `tools/offline.sh` — block internet for offline testing, `./tools/offline.sh --fix` to restore
 - `tools/power.sh` — set Jetson power mode. No args shows status
+- `tools/memory.sh` — sample free RAM and talk-related process size into `monitor.log`
 
 ```bash
 ./tools/power.sh        # status
 ./tools/power.sh min    # 15W, coolest/quietest, clocks scale with load
 ./tools/power.sh mid    # 25W, balanced
 ./tools/power.sh max    # 25W uncapped, full performance, clocks locked high
+./tools/memory.sh       # append one memory sample to monitor.log
 ```
 

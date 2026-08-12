@@ -93,7 +93,7 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 - `../prompt.json` holds the system prompt read on each ask.
 - `../memory.json` holds long-term facts.
 - `../reminders.json` holds daily spoken reminders.
-- `../accounts.json` holds third-party account tokens, gitignored. See `../accounts.example.json`.
+- `../accounts.json` holds third-party account tokens, gitignored. Create it with `../auth_google.py` or `../auth_sonos.py`.
 - `llama.cpp/` builds the server with CUDA when available, else CPU.
 - `models/` contains GGUF model weights.
 - Prior questions, tool calls, tool results, and answers stay in process memory for later asks in the same session.
