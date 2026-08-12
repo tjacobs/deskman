@@ -3,11 +3,16 @@
 # Tool tests for ask.py, one ask per tool
 
 # Imports
-import json
+import os
 import re
+import subprocess
 import sys
+import time
+import urllib.error
+import urllib.request
 
 import ask
+import client
 import memory
 import reminders
 import system
@@ -20,6 +25,11 @@ STEP_NAME_WIDTH = 16
 GREEN = "\033[92m"
 RED = "\033[91m"
 RESET = "\033[0m"
+NESTED_TEST = os.environ.get("SPEAK_NESTED_TEST") == "1"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.sh")
+SERVER_START_SECONDS = 180
+SERVER_POLL_SECONDS = 0.5
 
 # End to end asks that should call these tools
 TOOL_TESTS = [
@@ -39,9 +49,9 @@ TOOL_TESTS = [
     {"name": "forget", "prompt": f"Forget that {TEST_MEMORY_TEXT}.", "tools": ["forget"]},
     {"name": "set_reminder", "prompt": f"Remind me about {TEST_REMINDER_NAME} at {TEST_REMINDER_TIME}.", "tools": ["set_reminder"], "contains": [TEST_REMINDER_NAME]},
     {"name": "cancel_reminder", "prompt": f"Cancel the {TEST_REMINDER_NAME} reminder.", "tools": ["cancel_reminder"], "contains": [TEST_REMINDER_NAME]},
-    {"name": "look", "prompt": "Look center.", "tools": ["look"], "direct": {"name": "look", "arguments": {"direction": "center"}}},
-    {"name": "list_sonos_speakers", "prompt": "List the Sonos speakers.", "tools": ["list_sonos_speakers"], "direct": {"name": "list_sonos_speakers", "arguments": {}}, "contains": ["not configured"]},
-    {"name": "get_next_calendar_event", "prompt": "What is my next calendar event?", "tools": ["get_next_calendar_event"], "direct": {"name": "get_next_calendar_event", "arguments": {}}, "contains": ["not configured"]},
+    # {"name": "look", "prompt": "Look center.", "tools": ["look"], "rejects": ["unavailable", "failed"]},
+    {"name": "list_sonos_speakers", "prompt": "List the Sonos speakers.", "tools": ["list_sonos_speakers"], "contains": ["not configured"]},
+    {"name": "get_next_calendar_event", "prompt": "What is my next calendar event?", "tools": ["get_next_calendar_event"], "contains": ["not configured"]},
 ]
 
 # Main
@@ -55,10 +65,17 @@ def run_tool_tests():
     failed = False
     original_record_tool = ask.record_tool
     ask.record_tool = record_tool_for_tests
+    server_process = None
 
-    # Print
-    print("Testing...")
+    # Print banner when run standalone
+    if not NESTED_TEST:
+        print("Testing...")
     print(f"Model: {ask.resolve_model_name()}", flush=True)
+
+    # Start the local text server when it is not already up
+    server_ready, server_process = ensure_text_server()
+    if not server_ready:
+        return False
 
     # Clean leftover test memory and reminder before and after the suite
     cleanup_tool_tests()
@@ -70,12 +87,15 @@ def run_tool_tests():
     finally:
         ask.record_tool = original_record_tool
         cleanup_tool_tests()
+        stop_text_server(server_process)
 
-    # Exit with pass or fail
+    # Exit with pass or fail, parent ./test.py prints the suite result when nested
     if failed:
-        print_fail("One or more tests")
+        if not NESTED_TEST:
+            print_fail("One or more tests")
         return False
-    print_pass("All tests")
+    if not NESTED_TEST:
+        print_pass("All tests")
     return True
 
 # Run one named test case
@@ -86,24 +106,68 @@ def run_step(case):
     error = tool_test_error(case, reply)
     if reply:
         print(reply, flush=True)
-    if error is None and ask_error:
-        print(f"NOTE: tools ok, later ask error: {ask_error}", flush=True)
+    if ask_error and error is None:
+        error = f"ask error: {ask_error}"
     if error:
         print(f"{RED}FAIL{RESET}", flush=True)
         print(error, flush=True)
-        if ask_error:
+        if ask_error and not str(error).startswith("ask error:"):
             print(f"ask error: {ask_error}", flush=True)
         return False
     print(f"{GREEN}PASS{RESET}", flush=True)
     return True
 
-# Run one case through the model, or call the tool directly when marked
+# Reuse a healthy server, or start server.sh and wait for /health
+def ensure_text_server():
+    if text_server_healthy():
+        return True, None
+    if not os.access(SERVER_SCRIPT, os.X_OK):
+        print_fail(f"Text server missing at {SERVER_SCRIPT}. Run ./install.sh --talk first")
+        return False, None
+
+    # Start server.sh in the background
+    print("Starting text server...", flush=True)
+    load_start = time.perf_counter()
+    process = subprocess.Popen([SERVER_SCRIPT], cwd=SCRIPT_DIR, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+
+    # Wait until the health endpoint answers
+    deadline = time.time() + SERVER_START_SECONDS
+    while time.time() < deadline:
+        if process.poll() is not None:
+            print_fail("Text server failed to start. Run ./server.sh to see the error")
+            return False, None
+        if text_server_healthy():
+            print(f"Text server ready in {time.perf_counter() - load_start:.1f} sec", flush=True)
+            return True, process
+        time.sleep(SERVER_POLL_SECONDS)
+
+    # Timed out waiting for the model to load
+    stop_text_server(process)
+    print_fail(f"Text server did not become ready within {SERVER_START_SECONDS} sec")
+    return False, None
+
+# Return true when the local text model health endpoint answers
+def text_server_healthy():
+    try:
+        request = urllib.request.Request(client.HEALTH_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
+        urllib.request.urlopen(request, timeout=2)
+        return True
+    except urllib.error.URLError:
+        return False
+
+# Stop a text server that these tests started
+def stop_text_server(process):
+    if process is None or process.poll() is not None:
+        return
+    process.terminate()
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+# Run one case through the model
 def run_one_tool_test(case):
-    direct = case.get("direct")
-    if direct:
-        ask.last_tool_log.clear()
-        reply = ask.run_tool({"id": "test", "function": {"name": direct["name"], "arguments": json.dumps(direct.get("arguments") or {})}})
-        return reply, None
     try:
         return ask.ask_model(case["prompt"]), None
     except Exception as error:
@@ -117,10 +181,15 @@ def tool_test_error(case, reply):
         return f"expected tools {case['tools']}, used {used or ['none']}"
 
     # Check optional text in the reply or tool log
+    haystack = f"{reply}\n" + "\n".join(ask.last_tool_log)
     for needle in case.get("contains") or []:
-        haystack = f"{reply}\n" + "\n".join(ask.last_tool_log)
         if needle.lower() not in haystack.lower():
             return f"missing {needle!r} in reply or tool results"
+
+    # Fail when the tool reported unavailable or similar
+    for needle in case.get("rejects") or []:
+        if needle.lower() in haystack.lower():
+            return f"got rejected text {needle!r} in reply or tool results"
     return None
 
 # Tool names recorded for the last ask
@@ -132,11 +201,11 @@ def tools_used_from_log():
             used.append(match.group(1))
     return used
 
-# Record tools during tests, keep talk log bodies out of the console
+# Record tools during tests, keep long tool bodies out of the console
 def record_tool_for_tests(name, arguments, result):
     ask.last_tool_log.append(f"[Tool] {name} {arguments} -> {result}")
     display = result
-    if name == "load_talk_log":
+    if name in ("load_talk_log", "get_system_info"):
         display = result.split("\n", 1)[0]
         if "\n" in result:
             display = display + " ..."

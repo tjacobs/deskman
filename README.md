@@ -143,7 +143,7 @@ tail -f log.txt
 ./test.py --fresh
 ```
 
-Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `talk.py --test`. Pass `--fresh` to clear `cache/` and `audio/` first. Requires internet when the model is not cached.
+Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `talk.py --test`, then `text/tests.py` (starts the text server if needed). Asks for sudo early for firewall offline tests. Pass `--fresh` to clear `cache/` and `audio/` first. Requires internet when the model is not cached.
 
 ## Tools
 

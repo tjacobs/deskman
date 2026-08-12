@@ -71,7 +71,7 @@ def force_get_system_info(prompt, messages, message, already_retried, record_too
     # Second miss, read it directly in Python
     result = run_get_system_info()
     record_tool("get_system_info", {}, result)
-    print(f"[system] forced get_system_info -> {result[:120]}...", flush=True)
+    print("[system] forced get_system_info", flush=True)
     return result
 
 # Build a short system and model info report

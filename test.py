@@ -14,12 +14,16 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK = os.path.join(SCRIPT_DIR, 'speak.py')
 SAY = os.path.join(SCRIPT_DIR, 'say.py')
 TALK = os.path.join(SCRIPT_DIR, 'talk.py')
+TEXT_TESTS = os.path.join(SCRIPT_DIR, 'text', 'tests.py')
+TEXT_DIR = os.path.join(SCRIPT_DIR, 'text')
+TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
 OFFLINE_TOOL = os.path.join(SCRIPT_DIR, 'tools', 'offline.sh')
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 ONLINE_TIMEOUT_SECONDS = 30
 OFFLINE_TIMEOUT_SECONDS = 30
 TALK_TIMEOUT_SECONDS = 120
+TEXT_TIMEOUT_SECONDS = 1200
 MAC_RECORDER = 'rec'
 LINUX_RECORDER = 'arecord'
 STEP_NAME_WIDTH = 19
@@ -29,6 +33,7 @@ RESET = '\033[0m'
 
 # State
 INTERNET_BLOCKED = False
+SUDO_READY = False
 
 # Main
 def main():
@@ -49,16 +54,12 @@ def main():
         print('Need internet for first-run cache download.')
         sys.exit(1)
 
+    # Cache sudo now so offline firewall setup does not prompt mid-suite
+    ensure_sudo()
+
     # Run online cuda tests when cuda is available
     failed |= not run_step('Online speak.py', lambda: run_speak([], *device()))
     failed |= not run_step('Online say.py', lambda: run_say(['--test'], *device()))
-
-    # Run the talk test when speech to text and a microphone are available
-    talk_blocker = find_talk_blocker()
-    if talk_blocker:
-        print_skip(f'talk.py, {talk_blocker}')
-    else:
-        failed |= not run_step('Online talk.py', lambda: run_talk(['--test'], 'Test done.', *talk_device()))
 
     # Run cpu mode tests
     failed |= not run_step('CPU speak.py', lambda: run_speak(['--cpu'], 'Device: cpu', 'GPU: disabled'))
@@ -76,6 +77,20 @@ def main():
             failed |= not run_step('Offline say.py', lambda: run_say(['--test'], env=offline_env(), timeout=OFFLINE_TIMEOUT_SECONDS))
     finally:
         restore_internet_if_blocked()
+
+    # Run the talk test when speech to text and a microphone are available
+    talk_blocker = find_talk_blocker()
+    if talk_blocker:
+        print_skip(f'talk.py, {talk_blocker}')
+    else:
+        failed |= not run_step('Online talk.py', lambda: run_talk(['--test'], 'Test done.', *talk_device()))
+
+    # Run text tool tests when the local LLM server is up
+    text_blocker = find_text_test_blocker()
+    if text_blocker:
+        print_skip(f'text/tests.py, {text_blocker}')
+    else:
+        failed |= not run_streaming_step('text/tests.py', run_text_tests)
 
     # Exit with pass or fail
     if failed:
@@ -102,7 +117,7 @@ def parse_args():
 def print_usage():
     print('Usage: ./test.py [--fresh]')
     print('  --fresh   clear cache/ and audio/ before testing')
-    print('  (no arg)  run the speak, say, and talk tests online, on cpu, and offline')
+    print('  (no arg)  run speak, say, talk, and text/tests.py online, on cpu, and offline')
 
 # Remove cache and audio dirs for a fresh run
 def clean_dirs():
@@ -130,11 +145,36 @@ def run_step(name, function):
             print(detail, end='' if detail.endswith('\n') else '\n')
     return passed
 
+# Run one named step that prints its own multi-line progress
+def run_streaming_step(name, function):
+    print(f"== {name:<{STEP_NAME_WIDTH}} ==", flush=True)
+    result = function()
+    if isinstance(result, tuple):
+        passed, detail = result
+    else:
+        passed, detail = result, None
+    if passed:
+        print(f'{GREEN}PASS{RESET}: {name}')
+    else:
+        print(f'{RED}FAIL{RESET}: {name}')
+        if detail:
+            print(detail, end='' if detail.endswith('\n') else '\n')
+    return passed
+
 # Return true when public internet responds to ping
 def check_online():
     # Ping
     result = subprocess.run(['ping', '-c', '1', '-W', '2', '1.1.1.1'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return result.returncode == 0
+
+# Prompt for sudo once up front so offline.sh can run non-interactively later
+def ensure_sudo():
+    global SUDO_READY
+    result = subprocess.run(['sudo', '-v'])
+    SUDO_READY = result.returncode == 0
+    if not SUDO_READY:
+        print_skip('sudo, offline tests will use HF_HUB_OFFLINE instead')
+    return SUDO_READY
 
 # Return expected output for default online device
 def device():
@@ -177,6 +217,22 @@ def talk_device():
     if cuda_available():
         return ('Loaded on GPU',)
     return ('Loaded on CPU',)
+
+# Return why text/tests.py cannot run, or none when it can
+def find_text_test_blocker():
+    if not os.access(TEXT_SERVER_SCRIPT, os.X_OK):
+        return 'text server missing, run ./install.sh --talk'
+    return None
+
+# Run text/tests.py and stream its output
+def run_text_tests():
+    run_env = os.environ.copy()
+    run_env['SPEAK_NESTED_TEST'] = '1'
+    try:
+        result = subprocess.run([sys.executable, TEXT_TESTS], cwd=TEXT_DIR, env=run_env, timeout=TEXT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return False, f'Timed out after {TEXT_TIMEOUT_SECONDS} seconds.'
+    return result.returncode == 0, None
 
 # Run speak.py with args and check output
 def run_speak(args, *expects, env=None, timeout=ONLINE_TIMEOUT_SECONDS):
@@ -224,12 +280,21 @@ def offline_env():
 # Block internet with tools/offline.sh when sudo works
 def try_block_internet():
     global INTERNET_BLOCKED
+    if not SUDO_READY:
+        INTERNET_BLOCKED = False
+        return False
+
+    # Keep the sudo ticket alive, then block without a password prompt
+    subprocess.run(['sudo', '-n', '-v'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     result = subprocess.run([OFFLINE_TOOL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
     INTERNET_BLOCKED = result.returncode == 0
     return INTERNET_BLOCKED
 
 # Restore internet after tools/offline.sh
 def try_restore_internet():
+    if not SUDO_READY:
+        return
+    subprocess.run(['sudo', '-n', '-v'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run([OFFLINE_TOOL, '--fix'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 
 # Restore internet when firewall block is active

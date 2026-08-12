@@ -22,7 +22,7 @@ cd ~/speak/text
 ./tests.py
 ```
 
-`./ask.py --test` and `./tests.py` run the tool suite in `tests.py`, one ask per tool.
+`./ask.py --test` and `./tests.py` run the tool suite in `tests.py`, one ask per tool. They start `./server.sh` when the text server is not already up, and stop it again if they started it.
 
 The API is available only on the local machine:
 
