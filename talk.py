@@ -119,13 +119,6 @@ MEMORY_LOW_GB = 0.5
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
 
-# Import local text model helper and reminders
-sys.path.insert(0, TEXT_DIR)
-import ask as text_ask
-import client as text_client
-import reminders
-text_ask.set_talk_module(sys.modules[__name__])
-
 # State
 TEST_MODE = False
 REPEAT_MODE = False
@@ -138,6 +131,13 @@ kokoro_pipelines = {}
 speak_lock = threading.Lock()
 text_server_log_file = None
 text_server_process = None
+
+# Import local text model helper and reminders
+sys.path.insert(0, TEXT_DIR)
+import ask as text_ask
+import client as text_client
+import reminders
+text_ask.set_talk_module(sys.modules[__name__])
 
 # Main
 def main():
@@ -220,17 +220,6 @@ def print_usage():
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, asks the local LLM, and speaks the reply')
     print(f'                     by default plays back what was said to "{WAKE_WORD}"')
 
-# Load whisper, vad, and kokoro
-def load_speech_models():
-    # Silence onnxruntime GPU discovery warning from the VAD
-    import_onnxruntime_quietly()
-
-    # Load speech models
-    whisper_model = load_whisper_model()
-    vad_model = load_vad_model()
-    kokoro_pipeline = load_kokoro_pipeline()
-    return whisper_model, vad_model, kokoro_pipeline
-
 # Run the talk loop with models already loaded
 def run_talk(record, whisper_model, vad_model, kokoro_pipeline):
     # Listen continuously, test mode does one exchange and exits
@@ -244,7 +233,7 @@ def run_talk(record, whisper_model, vad_model, kokoro_pipeline):
 def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     global LAST_ASK_AT
 
-    # Seed dinner and bedtime reminders from memory, then check them in the background
+    # Seed reminders from memory, then check them in the background
     reminders.seed_reminders_from_memory()
     start_reminder_checker(listener, kokoro_pipeline)
 
@@ -294,6 +283,67 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     except Exception as error:
         print_error('talk loop failed', error)
         raise
+
+# Print how to talk, test mode skips the wake word
+def print_talk_help():
+    if TEST_MODE:
+        print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
+    else:
+        print(f'After Hi, talk for {FOLLOW_UP_SECONDS:g}s without "{WAKE_WORD}". Then say "{WAKE_WORD}" to talk again. "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
+
+# Ask the local text model for a spoken reply
+def make_reply(command):
+    # No speech heard
+    if not command.strip():
+        text_ask.last_tool_log.clear()
+        return "I didn't catch that."
+
+    # Restart the text server a few times when it died, often from OOM
+    if not ensure_text_server_alive():
+        text_ask.last_tool_log.clear()
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+        return TEXT_UNAVAILABLE
+
+    # Ask the local LLM, fall back when the server is down
+    try:
+        # Ask
+        return text_ask.ask_model(command)
+    except urllib.error.URLError as error:
+        # Error?
+        text_ask.last_tool_log.clear()
+
+        # Start server again
+        if ensure_text_server_alive():
+            try:
+                # Ask
+                return text_ask.ask_model(command)
+            except Exception as retry_error:
+                # Fail
+                print_error('ask retry failed', retry_error)
+
+        # Fail
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+        print(f'Error: {format_llm_error(error)}', flush=True)
+        print_memory('ask failed')
+        return TEXT_UNAVAILABLE
+    except Exception as error:
+        # Fail
+        text_ask.last_tool_log.clear()
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+        print_error('ask failed', error)
+        print_memory('ask failed')
+        return TEXT_UNAVAILABLE
+
+# Load whisper, vad, and kokoro
+def load_speech_models():
+    # Silence onnxruntime GPU discovery warning from the VAD
+    import_onnxruntime_quietly()
+
+    # Load speech models
+    whisper_model = load_whisper_model()
+    vad_model = load_vad_model()
+    kokoro_pipeline = load_kokoro_pipeline()
+    return whisper_model, vad_model, kokoro_pipeline
 
 # Load whisper model on gpu when available
 def load_whisper_model():
@@ -421,13 +471,6 @@ def normalize_voice_name(voice_name):
         return matches[0]
     return text
 
-# Print how to talk, test mode skips the wake word
-def print_talk_help():
-    if TEST_MODE:
-        print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
-    else:
-        print(f'After Hi, talk for {FOLLOW_UP_SECONDS:g}s without "{WAKE_WORD}". Then say "{WAKE_WORD}" to talk again. "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
-
 # Wait for the wake word, or a follow-up while the conversation is still open
 def hear_wake_command(whisper_model, kokoro_pipeline, listener):
     while True:
@@ -529,49 +572,6 @@ def transcribe(whisper_model, audio):
 def wants_to_quit(command):
     text = command.lower()
     return any(word in text for word in QUIT_WORDS)
-
-# Ask the local text model for a spoken reply
-def make_reply(command):
-    # No speech heard
-    if not command.strip():
-        text_ask.last_tool_log.clear()
-        return "I didn't catch that."
-
-    # Restart the text server a few times when it died, often from OOM
-    if not ensure_text_server_alive():
-        text_ask.last_tool_log.clear()
-        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-        return TEXT_UNAVAILABLE
-
-    # Ask the local LLM, fall back when the server is down
-    try:
-        # Ask
-        return text_ask.ask_model(command)
-    except urllib.error.URLError as error:
-        # Error?
-        text_ask.last_tool_log.clear()
-
-        # Start server again
-        if ensure_text_server_alive():
-            try:
-                # Ask
-                return text_ask.ask_model(command)
-            except Exception as retry_error:
-                # Fail
-                print_error('ask retry failed', retry_error)
-
-        # Fail
-        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-        print(f'Error: {format_llm_error(error)}', flush=True)
-        print_memory('ask failed')
-        return TEXT_UNAVAILABLE
-    except Exception as error:
-        # Fail
-        text_ask.last_tool_log.clear()
-        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-        print_error('ask failed', error)
-        print_memory('ask failed')
-        return TEXT_UNAVAILABLE
 
 # Return a short reason for an LLM connection failure
 def format_llm_error(error):
