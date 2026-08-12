@@ -8,7 +8,8 @@ import sys
 
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TEXT_DIR = os.path.join(SCRIPT_DIR, "text")
+SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
+TEXT_DIR = os.path.join(SPEAK_DIR, "text")
 REDIRECT_URI = "http://127.0.0.1:8765/callback"
 DEFAULT_MODE = "lan"
 
@@ -37,13 +38,13 @@ def parse_args():
 
 # Print usage help
 def print_usage():
-    print("Usage: ./auth_sonos.py")
+    print("Usage: ./tools/auth_sonos.py")
     print("  Asks lan or cloud, then guides setup into accounts.json")
 
 # Ask whether to set up LAN or cloud
 def ask_mode():
     print("Sonos setup")
-    print(f"This will write {os.path.join(SCRIPT_DIR, 'accounts.json')}.")
+    print(f"This will write {os.path.join(SPEAK_DIR, 'accounts.json')}.")
     print("")
     print("Choose setup mode:")
     print("  1. lan    same WiFi as speakers, no Sonos developer account")
@@ -94,7 +95,7 @@ def run_cloud_guide():
 # Explain Sonos Control API setup before prompting
 def print_sonos_cloud_steps():
     print("Sonos cloud setup")
-    print(f"This will write {os.path.join(SCRIPT_DIR, 'accounts.json')}.")
+    print(f"This will write {os.path.join(SPEAK_DIR, 'accounts.json')}.")
     print("")
     print("1. Create a Sonos Control API integration and get client id, secret, and API key")
     print(f"2. Add redirect URI: {REDIRECT_URI}")

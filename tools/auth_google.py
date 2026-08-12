@@ -8,14 +8,15 @@ import sys
 
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TEXT_DIR = os.path.join(SCRIPT_DIR, "text")
+SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
+TEXT_DIR = os.path.join(SPEAK_DIR, "text")
 
 # Main
 def main():
     # Put text/ on the import path for accounts modules
     ensure_text_path()
 
-    # Parse unused args so ./auth_google.py works with no flags
+    # Parse unused args so ./tools/auth_google.py works with no flags
     parse_args()
 
     # Print the Google Cloud steps, then run browser OAuth
@@ -49,13 +50,13 @@ def parse_args():
 
 # Print usage help
 def print_usage():
-    print("Usage: ./auth_google.py")
+    print("Usage: ./tools/auth_google.py")
     print("  Prints Google Calendar setup steps, opens the browser, writes accounts.json")
 
 # Explain Google Cloud Console setup before prompting
 def print_google_setup_steps():
     print("Google Calendar setup")
-    print(f"This will write {os.path.join(SCRIPT_DIR, 'accounts.json')}.")
+    print(f"This will write {os.path.join(SPEAK_DIR, 'accounts.json')}.")
     print("")
     print("1. Open https://console.cloud.google.com/ (cmd-click)")
     print("2. Create or select a project")

@@ -151,6 +151,8 @@ Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `tal
 - `tools/offline.sh` — block internet for offline testing, run with `--fix` to restore
 - `tools/power.sh` — set Jetson power mode. No args shows status
 - `tools/memory.sh` — sample free RAM and talk process size into `memory.log`. Pass `--cron` for an every-5-minutes crontab.
+- `tools/auth_google.py` — Google Calendar browser OAuth into `accounts.json`
+- `tools/auth_sonos.py` — Sonos LAN or cloud setup into `accounts.json`
 
 ```bash
 ./tools/power.sh        # status
@@ -159,5 +161,7 @@ Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `tal
 ./tools/power.sh max    # 25W uncapped, full performance, clocks locked high
 ./tools/memory.sh       # append one memory sample to tools/memory.log
 ./tools/memory.sh --cron
+./tools/auth_google.py
+./tools/auth_sonos.py
 ```
 
