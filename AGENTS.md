@@ -61,7 +61,7 @@ When you start or use `text/server.sh` / `llama-server` for testing, benches, or
 
 When building the chat `messages` list for the local LLM:
 
-- First system message is `prompt.json` only via `load_system_prompt()`. That content must stay identical across asks so llama-server can reuse the KV cache prefix.
+- First system message is `text_prompt.json` only via `load_system_prompt()`. That content must stay identical across asks so llama-server can reuse the KV cache prefix.
 - Memories and reminders go on the user message via `prompt_extras()`, prefixed before the question. Do not use a second `system` message: Gemma 3 chat templates only allow one system role, then alternating user/assistant.
 - Never glue extras into the first system string with `+`. That changes the first message object and forces a full prefill.
 

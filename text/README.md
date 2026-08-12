@@ -90,7 +90,7 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 - `accounts/` owns Google Calendar and Sonos tools, plus `accounts.json` setup CLIs.
 - `../auth_google.py` one-line Google Calendar browser setup.
 - `../auth_sonos.py` one-line Sonos LAN or cloud setup guide.
-- `../prompt.json` holds the system prompt read on each ask.
+- `../text_prompt.json` holds the system prompt read on each ask.
 - `../memory.json` holds long-term facts.
 - `../reminders.json` holds daily spoken reminders.
 - `../accounts.json` holds third-party account tokens, gitignored. Create it with `../auth_google.py` or `../auth_sonos.py`.

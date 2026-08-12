@@ -26,7 +26,7 @@ import volume
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
-PROMPT_PATH = os.path.join(SPEAK_DIR, "prompt.json")
+PROMPT_PATH = os.path.join(SPEAK_DIR, "text_prompt.json")
 SERVER_SCRIPT = os.path.join(SCRIPT_DIR, "server.sh")
 
 # Config model
@@ -493,7 +493,7 @@ def ask_model(prompt):
 
 # Build the chat messages for one ask
 def build_messages(prompt):
-    # Start with prompt.json alone so that prefix stays identical across asks for KV cache reuse
+    # Start with text_prompt.json alone so that prefix stays identical across asks for KV cache reuse
     system_prompt = load_system_prompt()
 
     # Teach 1b to emit tool JSON in content, its chat template has no tool path
@@ -568,7 +568,7 @@ def trim_conversation_history():
         while conversation_history and conversation_history[0].get("role") != "user":
             conversation_history.pop(0)
 
-# Load the system prompt from ../prompt.json
+# Load the system prompt from ../text_prompt.json
 def load_system_prompt():
     with open(PROMPT_PATH, encoding="utf-8") as prompt_file:
         data = json.load(prompt_file)
