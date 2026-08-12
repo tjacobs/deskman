@@ -83,7 +83,7 @@ Uses the whisper `base` model with voice activity detection, on GPU when availab
 
 ## talk.py
 
-Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running.
+Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop` or `sudo service talk stop`.
 
 ```bash
 ./install.sh --listen --talk
@@ -106,12 +106,15 @@ Say `remind me at dinner time` or `remind me at 10 PM for bedtime` to schedule a
 
 When it nearly hears its name, a transcription with `rob` or `rub` in it but not `robot`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
 
+On an 8 GB machine the text server, whisper, and kokoro together need a few GB of RAM. Talk loads whisper and kokoro first, then the text server, so a tight memory load does not kill an already-running Gemma. It warns when free RAM is below the expected cost before loading. If the text server dies later, often from out of memory, talk prints that and tries to restart it a few times before giving up. Startup failures are logged to `text_server.log`.
+
 Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What is the time?` so it hears itself through the mic, then answers. When the mic cannot hear the speaker it falls back to the question text.
 
-Two flags help check what the mic picked up, and combine with each other and with `--test`:
+Flags that help debug audio and memory, and combine with each other and with `--test`:
 
 - `--replay` plays the recording back after each utterance, saved as `audio/heard.wav`
 - `--repeat` says the transcribed words back after each utterance
+- `--memory` prints available RAM while models load, also printed automatically when free RAM is critically low
 
 By default it also plays back what was said to it, so you can hear what it heard. Pass `--no-replay-robot` to turn that off.
 
