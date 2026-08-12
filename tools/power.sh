@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Set Jetson power mode: min, mid, or max.
-# Usage: ./tools-power.sh
-#        ./tools-power.sh min
-#        ./tools-power.sh mid
-#        ./tools-power.sh max
+# Usage: ./tools/power.sh
+#        ./tools/power.sh min
+#        ./tools/power.sh mid
+#        ./tools/power.sh max
 
 # Exit on error, undefined variables, and pipe failure
 set -euo pipefail
@@ -66,7 +66,7 @@ parse_args() {
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./tools-power.sh [min|mid|max]"
+    echo "Usage: ./tools/power.sh [min|mid|max]"
     echo "  min       ${NAME_MIN}, quietest and coolest, clocks scale with load"
     echo "  mid       ${NAME_MID}, balanced"
     echo "  max       ${NAME_MAX}, full performance, clocks locked high"

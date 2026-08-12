@@ -867,7 +867,7 @@ def check_ready():
         print(f'Audio playback unavailable: {player} not found.')
         sys.exit(1)
     if player == LINUX_PLAYER and find_usb_card() is None:
-        print('No USB speaker found. Plug one in and run ./tools-audio.sh.')
+        print('No USB speaker found. Plug one in and run ./tools/audio.sh.')
         sys.exit(1)
 
 # Start the local text model server when needed, return the process we started
@@ -1064,7 +1064,7 @@ def find_usb_card():
 
 # Build playback command for one wav file
 def play_wav_command(wav_path):
-    # Play through the default device, tools-audio.sh points that at the USB soundcard
+    # Play through the default device, tools/audio.sh points that at the USB soundcard
     # Naming the card takes it exclusively, which fails whenever pipewire holds it
     return [audio_player(), wav_path]
 

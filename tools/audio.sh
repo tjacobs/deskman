@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Route audio to the USB soundcard and disable onboard HDMI audio, on a raspberry pi or a jetson.
-# Usage: ./tools-audio.sh
+# Usage: ./tools/audio.sh
 
 # Exit on error, undefined variables, and pipe failure
 set -euo pipefail
@@ -60,7 +60,7 @@ parse_args() {
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./tools-audio.sh"
+    echo "Usage: ./tools/audio.sh"
     echo "  Routes ALSA and pulse to the USB soundcard, for this user and for services."
     echo "  Disables onboard HDMI audio, and sets audio up again when a card is replugged."
     echo "  Asks for sudo, since it writes system config."
@@ -105,7 +105,7 @@ configure_audio() {
     local card_index card_name
     card_index="$(find_usb_card || true)"
     if [[ -z "${card_index}" ]]; then
-        echo "No USB soundcard found. Plug one in and run ./tools-audio.sh again."
+        echo "No USB soundcard found. Plug one in and run ./tools/audio.sh again."
         exit 1
     fi
 
@@ -167,7 +167,7 @@ write_asound_config() {
 
     # Name the card rather than number it, indexes shift when other cards come and go
     cat > "${output_path}" <<EOF
-# Written by speak tools-audio.sh, defaults ALSA to the USB soundcard
+# Written by speak tools/audio.sh, defaults ALSA to the USB soundcard
 pcm.!default {
     type plug
     slave.pcm "hw:CARD=${card_name},DEV=0"
@@ -201,7 +201,7 @@ write_pulse_default_pa() {
     # Keep the system defaults, then force the USB sink so aplay is not Dummy Output
     mkdir -p "${pulse_dir}"
     cat > "${output_path}" <<EOF
-# Written by speak tools-audio.sh
+# Written by speak tools/audio.sh
 .include /etc/pulse/default.pa
 
 .nofail
@@ -324,8 +324,8 @@ find_existing_pulse_usb_sink() {
 # Install the udev rule so a replugged card is set up again
 install_udev_rule() {
     # Link the script where udev can reach it
-    ln -sf "${SCRIPT_DIR}/tools-audio.sh" "${SETUP_LINK_PATH}"
-    chmod 755 "${SCRIPT_DIR}/tools-audio.sh"
+    ln -sf "${SCRIPT_DIR}/audio.sh" "${SETUP_LINK_PATH}"
+    chmod 755 "${SCRIPT_DIR}/audio.sh"
 
     # Run as root on plug, the script finds the login user and configures their pulse
     cat > "${UDEV_RULE_PATH}" <<EOF
@@ -398,7 +398,7 @@ install_blacklist() {
     fi
 
     cat > "${BLACKLIST_PATH}" <<EOF
-# Added by speak tools-audio.sh, keeps HDMI and APE audio out of ALSA
+# Added by speak tools/audio.sh, keeps HDMI and APE audio out of ALSA
 blacklist snd_hda_tegra
 install snd_hda_tegra /bin/false
 blacklist snd_soc_tegra_machine_driver

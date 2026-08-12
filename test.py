@@ -14,7 +14,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK = os.path.join(SCRIPT_DIR, 'speak.py')
 SAY = os.path.join(SCRIPT_DIR, 'say.py')
 TALK = os.path.join(SCRIPT_DIR, 'talk.py')
-OFFLINE_TOOL = os.path.join(SCRIPT_DIR, 'tools-offline.sh')
+OFFLINE_TOOL = os.path.join(SCRIPT_DIR, 'tools', 'offline.sh')
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 ONLINE_TIMEOUT_SECONDS = 30
@@ -221,14 +221,14 @@ def run_script(script, args, expects, env, timeout):
 def offline_env():
     return {'HF_HUB_OFFLINE': '1'}
 
-# Block internet with tools-offline.sh when sudo works
+# Block internet with tools/offline.sh when sudo works
 def try_block_internet():
     global INTERNET_BLOCKED
     result = subprocess.run([OFFLINE_TOOL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
     INTERNET_BLOCKED = result.returncode == 0
     return INTERNET_BLOCKED
 
-# Restore internet after tools-offline.sh
+# Restore internet after tools/offline.sh
 def try_restore_internet():
     subprocess.run([OFFLINE_TOOL, '--fix'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
 

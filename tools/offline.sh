@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Block or restore internet access for offline testing.
-# Usage: ./tools-offline.sh
-#        ./tools-offline.sh --fix
+# Usage: ./tools/offline.sh
+#        ./tools/offline.sh --fix
 
 # Exit on error, undefined variables, and pipe failure
 set -euo pipefail
@@ -54,7 +54,7 @@ parse_args() {
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./tools-offline.sh [--fix]"
+    echo "Usage: ./tools/offline.sh [--fix]"
     echo "  --fix     restore internet access"
     echo "  (no arg)  block outbound internet, keeping SSH and local networks"
 }
@@ -132,7 +132,7 @@ verify_offline() {
         echo "Warning: local host ${LOCAL_TEST_HOST} is not reachable."
     fi
 
-    echo "Offline mode active. Run ./tools-offline.sh --fix to restore internet."
+    echo "Offline mode active. Run ./tools/offline.sh --fix to restore internet."
 }
 
 # Confirm public internet works again

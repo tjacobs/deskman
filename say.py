@@ -396,7 +396,7 @@ def find_usb_card():
 
 # Build playback command for one wav file
 def play_wav_command(wav_path):
-    # Play through the default device, tools-audio.sh points that at the USB soundcard
+    # Play through the default device, tools/audio.sh points that at the USB soundcard
     # Naming the card takes it exclusively, which fails whenever pipewire holds it
     return [PLAYER, wav_path]
 
@@ -409,7 +409,7 @@ def check_audio_player():
         if result.returncode != 0:
             return False, 'no audio device found'
         if find_usb_card() is None:
-            return False, 'no USB audio device found, plug one in and run ./tools-audio.sh'
+            return False, 'no USB audio device found, plug one in and run ./tools/audio.sh'
     return True, None
 
 # Set the playback flag, warn when no audio device is available
@@ -828,7 +828,7 @@ def enable_offline_if_cached():
 # Quit early when offline without cached voices
 def check_offline_cache():
     if is_offline() and not all_voices_cached():
-        print('Offline and voices not cached. Run once online to download, or run ./tools-offline.sh --fix.')
+        print('Offline and voices not cached. Run once online to download, or run ./tools/offline.sh --fix.')
         sys.exit(1)
 
 # Main
