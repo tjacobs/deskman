@@ -123,9 +123,9 @@ By default it also plays back what was said to it, so you can hear what it heard
 Install a systemd service that runs `talk_service.sh` on boot, which starts `talk.py` with `--no-replay-robot`:
 
 ```bash
-./install_talk_service.sh
-./install_talk_service.sh --start
-./install_talk_service.sh --uninstall
+./talk_service_install.sh
+./talk_service_install.sh --start
+./talk_service_install.sh --uninstall
 ```
 
 ```bash
@@ -133,7 +133,7 @@ sudo service talk start
 sudo service talk stop
 sudo service talk status
 journalctl -u talk -f
-tail -f ~/speak/log.txt
+tail -f log.txt
 ```
 
 ## Testing
