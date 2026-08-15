@@ -115,7 +115,8 @@ ALLOW_MULTIPLE_INSTANCES = False
 TEXT_SERVER_EXPECTED_GB = 2.0
 WHISPER_EXPECTED_GB = 0.4
 KOKORO_EXPECTED_GB = 0.7
-SPEECH_STACK_EXPECTED_GB = TEXT_SERVER_EXPECTED_GB + WHISPER_EXPECTED_GB + KOKORO_EXPECTED_GB
+SPEECH_MODELS_EXPECTED_GB = WHISPER_EXPECTED_GB + KOKORO_EXPECTED_GB
+SPEECH_STACK_EXPECTED_GB = TEXT_SERVER_EXPECTED_GB + SPEECH_MODELS_EXPECTED_GB
 MEMORY_LOW_GB = 0.5
 
 # Download flags
@@ -154,7 +155,7 @@ def main():
     # Exit if audio playback is unavailable
     check_ready()
 
-    # Warn when free RAM is below what whisper, kokoro, and the text server need
+    # Warn when free RAM is below what still needs to load
     warn_if_low_memory()
 
     # Build the record command
@@ -891,15 +892,15 @@ def check_ready():
 
 # Start the local text model server when needed, return the process we started
 def start_text_server(require_success=True):
-    print('Loading text model server...', flush=True)
-    warn_if_low_memory_for('text server', TEXT_SERVER_EXPECTED_GB)
-    load_start = time.perf_counter()
-
     # Reuse a server that is already healthy
     if text_server_healthy():
         print_text_server_already_running()
         print_memory('after text server')
         return None
+
+    print('Loading text model server...', flush=True)
+    warn_if_low_memory_for('text server', TEXT_SERVER_EXPECTED_GB)
+    load_start = time.perf_counter()
 
     # Quit when the install is incomplete
     if not os.access(TEXT_SERVER_SCRIPT, os.X_OK):
@@ -1091,15 +1092,29 @@ def play_wav_command(wav_path):
 def audio_player():
     return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
 
-# Warn when free RAM is below the expected cost of the three heavy loads
+# Warn when free RAM is below the expected cost of loads that are not already up
 def warn_if_low_memory():
+    # Skip the text server budget when it is already loaded
     available_gb = available_memory_gb()
-    expected_gb = SPEECH_STACK_EXPECTED_GB
+    text_server_running = text_server_healthy()
+    if text_server_running:
+        expected_gb = SPEECH_MODELS_EXPECTED_GB
+    else:
+        expected_gb = SPEECH_STACK_EXPECTED_GB
     low = memory_is_low(available_gb, expected_gb)
+
+    # Print the remaining load cost when RAM is short or --memory
     if should_print_memory(available_gb, expected_gb):
-        print(f'Memory: expect about {format_gigabytes(expected_gb)} for text server ({format_gigabytes(TEXT_SERVER_EXPECTED_GB)}), whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}), and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
-    if low:
+        if text_server_running:
+            print(f'Memory: expect about {format_gigabytes(expected_gb)} for whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}) and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
+        else:
+            print(f'Memory: expect about {format_gigabytes(expected_gb)} for text server ({format_gigabytes(TEXT_SERVER_EXPECTED_GB)}), whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}), and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
+
+    # Warn only about memory that still has to be allocated
+    if low and not text_server_running:
         print(f'Warning: only {format_gigabytes(available_gb)} available, need about {format_gigabytes(expected_gb)}. The text model may be killed by an out of memory error.', flush=True)
+    elif low:
+        print(f'Warning: only {format_gigabytes(available_gb)} available, need about {format_gigabytes(expected_gb)}.', flush=True)
 
 # Warn when free RAM is below one load step
 def warn_if_low_memory_for(name, expected_gb):
