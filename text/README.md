@@ -70,7 +70,7 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 
 ### System
 
-`get_system_info` reports `uname`, hardware like Jetson or Raspberry Pi, memory, and live LLM model stats from the local server.
+`get_system_info` reports `uname`, hardware like Jetson or Pi, memory, and live LLM model stats from the local server.
 
 ## Files
 

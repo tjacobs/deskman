@@ -148,7 +148,7 @@ Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `tal
 
 ## Tools
 
-- `tools/audio.sh` — route audio to any USB soundcard, disable onboard HDMI audio, on a Raspberry Pi or a Jetson.
+- `tools/audio.sh` — route audio to any USB soundcard, disable onboard HDMI audio, on a Pi or a Jetson.
 - `tools/offline.sh` — block internet for offline testing, run with `--fix` to restore
 - `tools/power.sh` — set Jetson power mode. No args shows status
 - `tools/memory.sh` — sample free RAM and talk process size into `memory.log`. Pass `--cron` for an every-5-minutes crontab.
