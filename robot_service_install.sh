@@ -74,7 +74,7 @@ main() {
     # Write systemd unit file
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=Robot wake-word assistant
+Description=Robot service
 After=network.target sound.target graphical.target
 Wants=graphical.target
 
@@ -128,6 +128,7 @@ EOF
     echo "  sudo service ${SERVICE_NAME} stop"
     echo "  sudo service ${SERVICE_NAME} status"
     echo "  journalctl -u ${SERVICE_NAME} -f"
+    echo "  tail -f ~/speak/log.txt"
 }
 
 # Uninstall
