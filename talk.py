@@ -130,6 +130,7 @@ REPEAT_MODE = False
 REPLAY_MODE = False
 REPLAY_WAKE_MODE = True
 MEMORY_MODE = False
+COLD_MODE = False
 LAST_ASK_AT = 0.0
 kokoro_model = None
 kokoro_pipelines = {}
@@ -147,8 +148,8 @@ text_ask.set_talk_module(sys.modules[__name__])
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE = parse_args()
 
     # Exit if another talk.py is already running
     ensure_single_instance()
@@ -169,7 +170,8 @@ def main():
 
         # Load text server
         text_server_process = start_text_server()
-        warm_text()
+        if not COLD_MODE:
+            warm_text()
 
         # Run
         run_talk(record, whisper_model, vad_model, kokoro_pipeline)
@@ -192,6 +194,7 @@ def parse_args():
     replay_mode = False
     replay_wake_mode = True
     memory_mode = False
+    cold_mode = False
     for argument in sys.argv[1:]:
         if argument == '--test':
             test_mode = True
@@ -201,6 +204,8 @@ def parse_args():
             replay_mode = True
         elif argument == '--memory':
             memory_mode = True
+        elif argument == '--cold':
+            cold_mode = True
         elif argument == REPLAY_WAKE_FLAG:
             replay_wake_mode = True
         elif argument == NO_REPLAY_WAKE_FLAG:
@@ -212,15 +217,16 @@ def parse_args():
             print(f"Unknown argument: {argument}")
             print_usage()
             sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode
 
 # Print usage help
 def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [{NO_REPLAY_WAKE_FLAG}]')
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [{NO_REPLAY_WAKE_FLAG}]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
     print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
     print('  --memory           print available memory while loading models')
+    print('  --cold             skip text model warm-up ask')
     print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, asks the local LLM, and speaks the reply')
     print(f'                     by default plays back what was said to "{WAKE_WORD}"')
@@ -966,7 +972,8 @@ def ensure_text_server_alive():
         process = start_text_server(require_success=False)
         if text_server_healthy():
             text_server_process = process
-            warm_text()
+            if not COLD_MODE:
+                warm_text()
             return True
         stop_text_server(process)
 
