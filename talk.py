@@ -1134,7 +1134,7 @@ def ensure_single_instance():
     other_pid = find_other_talk_pid()
     if other_pid is not None:
         print(f'talk.py is already running, pid {other_pid}.')
-        print('Stop it with: sudo service robot stop; sudo service talk stop')
+        print('Stop it with: sudo service robot stop')
         sys.exit(1)
 
 # Return the pid of another talk.py process, or None
