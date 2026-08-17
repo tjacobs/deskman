@@ -10,7 +10,7 @@ Four scripts:
 
 - `speak.py` — speak a phrase once, with timing stats
 - `say.py` — speak phrases by pressing keys, with voice and speed control
-- `listen.py` — live speech to text transcription from the microphone
+- `speech_listen.py` — live speech to text transcription from the microphone
 - `talk.py` — listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
 
 The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
@@ -18,7 +18,7 @@ The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference.
 ```bash
 ./speak.py [optional text to speak]
 ./say.py
-./listen.py
+./speech_listen.py
 ./talk.py
 ./test.py
 ```
@@ -35,7 +35,7 @@ The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference.
 
 Works on linux and mac. Installs [uv](https://docs.astral.sh/uv/) when missing, installs system requirements, then creates `.venv` and installs kokoro and torch into it.
 
-Pass `--listen --talk` to also install speech to text for `listen.py` and `talk.py`.
+Pass `--listen --talk` to also install speech to text for `speech_listen.py` and `talk.py`.
 
 On first run, the model and all voices download into `cache/`.
 
@@ -68,13 +68,13 @@ Generated audio files are saved in `audio/`.
 
 Pass `--test` to speak the first two preset phrases and exit.
 
-## listen.py
+## speech_listen.py
 
 Live transcription from the microphone. Speak into your microphone, and text lines will print as you talk, CTRL-C to stop.
 
 ```bash
 ./install.sh --listen
-./listen.py
+./speech_listen.py
 ```
 
 On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.

@@ -48,7 +48,7 @@ def parse_args():
 
 # Print usage help
 def print_usage():
-    print('Usage: ./listen.py')
+    print('Usage: ./speech_listen.py')
     print(f'  (no arg)  transcribe the microphone with the whisper {MODEL_SIZE} model, CTRL-C to stop')
 
 # Build the record command for this platform
