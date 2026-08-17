@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# Install the service that runs talk_service.sh.
-# Usage: ./talk_service_install.sh             (install, enable)
-#        ./talk_service_install.sh --start     (install, enable, start now)
-#        ./talk_service_install.sh --uninstall (uninstall)
+# Install the service that runs robot_service.sh.
+# Usage: ./robot_service_install.sh             (install, enable)
+#        ./robot_service_install.sh --start     (install, enable, start now)
+#        ./robot_service_install.sh --uninstall (uninstall)
 
 # Stop on errors
 set -euo pipefail
 
 # Service config
-SERVICE_NAME="talk"
+SERVICE_NAME="robot"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 # Paths
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LAUNCHER_SCRIPT="${PROJECT_DIR}/talk_service.sh"
+LAUNCHER_SCRIPT="${PROJECT_DIR}/robot_service.sh"
 TALK_SCRIPT="${PROJECT_DIR}/talk.py"
 PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./talk_service_install.sh [--start|--uninstall]"
-    echo "  (no arg)     install and enable talk.service"
+    echo "Usage: ./robot_service_install.sh [--start|--uninstall]"
+    echo "  (no arg)     install and enable robot.service"
     echo "  --start      install, enable, and start now"
-    echo "  --uninstall  stop, disable, and remove talk.service"
+    echo "  --uninstall  stop, disable, and remove robot.service"
 }
 
 # Help does not need root
@@ -74,7 +74,7 @@ main() {
     # Write systemd unit file
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
-Description=Talk wake-word assistant
+Description=Robot wake-word assistant
 After=network.target sound.target
 
 [Service]
@@ -97,6 +97,14 @@ EOF
     # Set permissions
     chmod 644 "${SERVICE_FILE}"
     chmod 755 "${LAUNCHER_SCRIPT}" "${TALK_SCRIPT}"
+
+    # Remove leftover talk.service from the old name
+    if [[ -f /etc/systemd/system/talk.service ]]; then
+        echo "Removing old talk.service"
+        systemctl stop talk.service 2>/dev/null || true
+        systemctl disable talk.service 2>/dev/null || true
+        rm -f /etc/systemd/system/talk.service
+    fi
 
     # Enable on boot
     echo "Reloading systemd"

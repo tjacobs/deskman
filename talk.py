@@ -244,7 +244,6 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     # Greet, then keep the conversation open so the first line needs no wake word
     speak_muted(listener, kokoro_pipeline, GREETING)
     LAST_ASK_AT = time.time()
-    print(f'Follow-up open {FOLLOW_UP_SECONDS:g}s', flush=True)
     print_talk_help()
     try:
         while True:
@@ -293,7 +292,7 @@ def print_talk_help():
     if TEST_MODE:
         print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
     else:
-        print(f'After Hi, talk for {FOLLOW_UP_SECONDS:g}s without "{WAKE_WORD}". Then say "{WAKE_WORD}" to talk again. "{WAKE_WORD} {QUIT_WORDS[0]}" or CTRL-C to stop.', flush=True)
+        print(f'{WAKE_WORD.capitalize()} ready and listening. Say "{WAKE_WORD.capitalize()}" to talk.', flush=True)
 
 # Ask the local text model for a spoken reply
 def make_reply(command):
@@ -1134,7 +1133,7 @@ def ensure_single_instance():
     other_pid = find_other_talk_pid()
     if other_pid is not None:
         print(f'talk.py is already running, pid {other_pid}.')
-        print('Stop it with: sudo service robot stop; sudo service talk stop')
+        print('Stop it with: sudo service robot stop')
         sys.exit(1)
 
 # Return the pid of another talk.py process, or None

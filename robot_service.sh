@@ -12,11 +12,13 @@ LOG_FILE="${SPEAK_DIR}/log.txt"
 
 # Main
 main() {
-    # Append output to log file
+    # Tell the user where output goes, then append to the log
     mkdir -p "$(dirname "${LOG_FILE}")"
+    echo "Writing log.txt"
+    echo "Run: tail -f log.txt"
     exec >> "${LOG_FILE}" 2>&1
     echo ""
-    echo "=== talk_service $(date -Is) ==="
+    echo "=== robot_service $(date -Is) ==="
 
     # Quit if talk.py or its venv is missing
     if [[ ! -f "${TALK_SCRIPT}" || ! -x "${TALK_PYTHON}" ]]; then

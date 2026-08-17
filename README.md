@@ -83,7 +83,7 @@ Uses the whisper `base` model with voice activity detection, on GPU when availab
 
 ## talk.py
 
-Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop` or `sudo service talk stop`.
+Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop`.
 
 ```bash
 ./install.sh --listen --talk
@@ -118,21 +118,21 @@ Flags that help debug audio and memory, and combine with each other and with `--
 
 By default it also plays back what was said to it, so you can hear what it heard. Pass `--no-replay-robot` to turn that off.
 
-## talk service
+## robot service
 
-Install a systemd service that runs `talk_service.sh` on boot, which starts `talk.py` with `--no-replay-robot`:
+Install a systemd service that runs `robot_service.sh` on boot, which starts `talk.py` with `--no-replay-robot`:
 
 ```bash
-./talk_service_install.sh
-./talk_service_install.sh --start
-./talk_service_install.sh --uninstall
+./robot_service_install.sh
+./robot_service_install.sh --start
+./robot_service_install.sh --uninstall
 ```
 
 ```bash
-sudo service talk start
-sudo service talk stop
-sudo service talk status
-journalctl -u talk -f
+sudo service robot start
+sudo service robot stop
+sudo service robot status
+journalctl -u robot -f
 tail -f log.txt
 ```
 
