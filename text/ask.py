@@ -39,6 +39,7 @@ TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
+PROMPT_EXTRAS_HEADER = "Do not mention this context unless the user asks."
 
 # Tools the local model can call
 TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS + accounts.sonos.TOOLS + accounts.google.TOOLS
@@ -505,15 +506,16 @@ def build_messages(prompt):
     # Load previous turns in conversation history
     messages.extend(conversation_history)
 
-    # Put memories and reminders on the user turn, Gemma 3 only allows one system message
-    user_content = prompt
-    extras = prompt_extras()
-    if extras:
-        user_content = extras + "\n\n" + prompt
-
-    # Add this question last
-    messages.append({"role": "user", "content": user_content})
+    # Add this question last, memories and reminders only on the first question
+    messages.append({"role": "user", "content": with_prompt_extras(prompt)})
     return messages
+
+# Prefix memories and reminders onto the first question only, later asks keep them via history
+def with_prompt_extras(prompt):
+    extras = prompt_extras()
+    if not extras or conversation_history:
+        return prompt
+    return extras + "\n\n" + prompt
 
 # Handle a forced tool result, True means retry the model, text means return that reply
 def apply_forced(forced, messages, domain, retried):
@@ -564,9 +566,31 @@ def remember_turn(messages, reply):
 # Drop oldest full turns when history grows too long
 def trim_conversation_history():
     while len(conversation_history) > MAX_HISTORY_MESSAGES:
-        conversation_history.pop(0)
-        while conversation_history and conversation_history[0].get("role") != "user":
-            conversation_history.pop(0)
+        drop_at = first_droppable_user_index()
+        if drop_at is None:
+            break
+
+        # Remove that turn, keep the first memories prefix if present
+        conversation_history.pop(drop_at)
+        while drop_at < len(conversation_history) and conversation_history[drop_at].get("role") != "user":
+            conversation_history.pop(drop_at)
+
+# Oldest user turn that is safe to drop, skip the first memories prefix
+def first_droppable_user_index():
+    kept_extras = False
+    for index, message in enumerate(conversation_history):
+        if message.get("role") != "user":
+            continue
+        if not kept_extras and message_has_prompt_extras(message):
+            kept_extras = True
+            continue
+        return index
+    return None
+
+# Return true when this user message already carries memories or reminders
+def message_has_prompt_extras(message):
+    content = message.get("content") or ""
+    return content.startswith(PROMPT_EXTRAS_HEADER)
 
 # Load the system prompt from ../text_prompt.json
 def load_system_prompt():
@@ -590,7 +614,11 @@ def prompt_extras():
     reminder_text = reminders.format_reminders_for_prompt()
     if reminder_text:
         extras.append(reminder_text)
-    return "\n\n".join(extras)
+    if not extras:
+        return ""
+
+    # Keep facts available without treating them as something to announce
+    return PROMPT_EXTRAS_HEADER + "\n\n" + "\n\n".join(extras)
 
 # Print everything that will go into the model for this ask
 def print_context(prompt):

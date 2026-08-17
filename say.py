@@ -102,7 +102,7 @@ def main():
             run_input_loop(engine, PHRASES)
 
         # Suggest microphone transcription next
-        print('Next: run ./listen.py for microphone listening transcription.')
+        print('Next: run ./transcribe.py for microphone transcription.')
 
     # Done
     finally:

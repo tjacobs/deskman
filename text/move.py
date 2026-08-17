@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Head look control through robot look.py, or deskman socket fallback
+# Head look control through deskman socket, or robot look.py fallback
 
 # Imports
 import os
@@ -8,7 +8,8 @@ import sys
 
 # Config
 ROBOT_SRC = os.path.expanduser("~/robot/src")
-LOOK_DEFAULT_DEGREES = 60
+LOOK_DEFAULT_DEGREES = 90
+LOOK_DIRECTIONS = ["left", "right", "center", "forward", "straight", "up", "down", "hat_up", "hat_down"]
 
 # Tools the local model can call for head movement
 TOOLS = [
@@ -16,18 +17,18 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "look",
-            "description": "Turn the robot head left, right, or center.",
+            "description": "Move my head or hat. left and right are my left and my right. forward, straight, and center look straight forward. hat_up raises my hat, hat_down lowers it. Default is all the way, 90. After the tool, say my right or my hat, not your.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "direction": {
                         "type": "string",
-                        "enum": ["left", "right", "center"],
-                        "description": "Which way to face.",
+                        "enum": LOOK_DIRECTIONS,
+                        "description": "Which way to face. Use forward or straight to look straight ahead. hat_up is my hat up, hat_down is my hat down.",
                     },
                     "degrees": {
                         "type": "number",
-                        "description": f"How far to turn for left or right, default {LOOK_DEFAULT_DEGREES}, max 90.",
+                        "description": f"How far to move. Default {LOOK_DEFAULT_DEGREES} is all the way. 90 is full travel. Never use 0. All the way, maximum, and minimum use 90.",
                     },
                 },
                 "required": ["direction"],
@@ -41,13 +42,20 @@ def main():
     # Look center by default
     print(run_look({"direction": "center"}))
 
-# Call robot look.py, or deskman robot_move, to turn the head
+# Call deskman robot_move, or robot look.py, to turn the head
 def run_look(arguments):
     # Read direction and optional degrees
     direction = arguments.get("direction", "left")
     degrees = arguments.get("degrees", LOOK_DEFAULT_DEGREES)
 
-    # Prefer ~/robot/src/look.py when present
+    # Prefer the deskman Unix socket
+    try:
+        from robot_move import look as socket_look
+        return socket_look(direction, degrees)
+    except Exception as error:
+        socket_error = error
+
+    # Fall back to ~/robot/src/look.py when present
     look = load_robot_look()
     if look is not None:
         try:
@@ -55,12 +63,7 @@ def run_look(arguments):
         except Exception as error:
             return f"Look failed: {error}"
 
-    # Fall back to deskman Unix socket client
-    try:
-        from robot_move import look as socket_look
-        return socket_look(direction, degrees)
-    except Exception:
-        return "Look is unavailable."
+    return f"Look is unavailable: {socket_error}"
 
 # Import ~/robot/src/look.py once
 def load_robot_look():
