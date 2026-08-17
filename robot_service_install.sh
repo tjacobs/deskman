@@ -75,7 +75,8 @@ main() {
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=Robot wake-word assistant
-After=network.target sound.target
+After=network.target sound.target graphical.target
+Wants=graphical.target
 
 [Service]
 Type=simple
@@ -83,15 +84,17 @@ User=${RUN_USER}
 Group=${RUN_GROUP}
 WorkingDirectory=${PROJECT_DIR}
 Environment=HOME=${RUN_HOME}
+Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/${RUN_UID}
 ExecStart=${LAUNCHER_SCRIPT}
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+KillMode=mixed
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
 EOF
 
     # Set permissions

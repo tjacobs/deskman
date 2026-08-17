@@ -120,7 +120,8 @@ By default it also plays back what was said to it, so you can hear what it heard
 
 ## robot service
 
-Install a systemd service that runs `robot_service.sh` on boot, which starts `talk.py` with `--no-replay-robot`:
+Install a systemd service that runs `robot_service.sh` on boot. That starts `talk.py`.
+If Deskman cpp binary exists, it starts `~/Deskman/src/build/robot`, which brings up the face UI and `talk.py`.
 
 ```bash
 ./robot_service_install.sh
