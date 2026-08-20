@@ -83,6 +83,8 @@ PRE_ROLL_BLOCKS = round(PRE_ROLL_SECONDS / BLOCK_SECONDS)
 SILENCE_END_BLOCKS = round(SILENCE_END_SECONDS / BLOCK_SECONDS)
 MIN_SPEECH_BLOCKS = round(MIN_SPEECH_SECONDS / BLOCK_SECONDS)
 MAX_UTTERANCE_BLOCKS = round(MAX_UTTERANCE_SECONDS / BLOCK_SECONDS)
+MAX_QUEUED_SECONDS = 5.0
+MAX_QUEUED_BLOCKS = round(MAX_QUEUED_SECONDS / BLOCK_SECONDS)
 
 # Config voice
 REPO_ID = 'hexgrad/Kokoro-82M'
@@ -736,7 +738,7 @@ class Listener:
     # Start recording and drain the microphone in the background
     def __init__(self, record, vad_model):
         self.vad_model = vad_model
-        self.blocks = queue.Queue()
+        self.blocks = queue.Queue(maxsize=MAX_QUEUED_BLOCKS)
         self.muted = False
         self.recorder = start_recorder(record)
         self.reader = threading.Thread(target=self.read_blocks, daemon=True)
@@ -747,11 +749,29 @@ class Listener:
         while True:
             data = self.recorder.stdout.read(BLOCK_BYTES)
             if len(data) < BLOCK_BYTES:
-                self.blocks.put(None)
+                self.put_block(None)
                 return
             if self.muted:
                 continue
-            self.blocks.put(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
+            self.put_block(np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0)
+
+    # Enqueue one block, drop the oldest when the listener is behind
+    def put_block(self, block):
+        try:
+            self.blocks.put(block, block=False)
+            return
+        except queue.Full:
+            pass
+
+        # Make room, then store the new block
+        try:
+            self.blocks.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            self.blocks.put(block, block=False)
+        except queue.Full:
+            pass
 
     # Collect audio from when speech starts until it stops, empty array on timeout
     def next_utterance(self, timeout_seconds):

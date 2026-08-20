@@ -83,10 +83,10 @@ sample_memory() {
     uptime_text="$(uptime -p 2>/dev/null || true)"
 
     # Read talk-related process RSS in MB
-    local talk_rss llama_rss real_rss
+    local talk_rss llama_rss robot_rss
     talk_rss="$(process_rss_mb 'talk.py')"
     llama_rss="$(process_rss_mb 'llama-server')"
-    real_rss="$(process_rss_mb 'real.py')"
+    robot_rss="$(process_rss_mb 'Deskman/src/build/robot')"
 
     # Append one summary line
     local stamp level
@@ -97,7 +97,7 @@ sample_memory() {
     elif (( available_mb < WARN_AVAILABLE_MB )); then
         level="warn"
     fi
-    echo "${stamp} ${level} avail=${available_mb}MB used=${used_mb}/${total_mb}MB swap=${swap_used_mb}MB load=${load} talk=${talk_rss}MB llama=${llama_rss}MB real=${real_rss}MB ${uptime_text}" >> "${LOG_FILE}"
+    echo "${stamp} ${level} avail=${available_mb}MB used=${used_mb}/${total_mb}MB swap=${swap_used_mb}MB load=${load} talk=${talk_rss}MB llama=${llama_rss}MB robot=${robot_rss}MB ${uptime_text}" >> "${LOG_FILE}"
 
     # On low memory, dump more detail and flush to disk
     if (( available_mb < WARN_AVAILABLE_MB )); then
