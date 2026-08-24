@@ -2,16 +2,16 @@
 
 A desk robot: a face on a screen that looks around, wth local voice assistant, and video calls.
 
-- [`talk/`](talk/README.md) — Voice interaction. Wake word, speech to text, a local LLM, and speech back. Python.
-- [`robot/`](robot/README.md) — The face and servo control, and camera face tracking. C++.
-- [`teleport/`](teleport/README.md) — Video calling, both robot to robot, and web to robot. C++.
-- [`website/`](website/) — Product site, deployed to GitHub Pages.
+- [`talk`](talk/README.md) — Voice interaction. Local wake word, speech to text, a local LLM, and speech generation. Python.
+- [`robot`](robot/README.md) — The face and servo control, and camera face tracking. C++.
+- [`teleport`](teleport/README.md) — Video calling, both robot to robot, and web to robot. C++.
+- [`website`](website/) — Product site, deployed to GitHub Pages.
 
 ## Talk
 
 ```bash
 cd talk
-./install.sh --listen --talk
+./install.sh
 ./talk.py
 ```
 
@@ -21,6 +21,7 @@ See [talk/README.md](talk/README.md).
 
 ```bash
 cd robot
+./install.sh
 mkdir -p build && cd build && cmake .. && make
 ./robot
 ```
@@ -42,5 +43,5 @@ See [teleport/README.md](teleport/README.md).
 
 ## Website
 
-Static site in [`website/`](website/). Push to `main` deploys GitHub Pages.
+Website is in [`website/`](website).
 

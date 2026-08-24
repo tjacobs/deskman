@@ -38,9 +38,9 @@ static const int TALK_EARLY_POLL_MS = 100;
 static const int TALK_STOP_WAIT_MS = 200;
 static const int TALK_STOP_POLL_MS = 50;
 static const int MAX_FPS = 30;
-static const char* TALK_PYTHON_REL = "Deskman/talk/.venv/bin/python";
-static const char* TALK_SCRIPT_REL = "Deskman/talk/talk.py";
 static const char* TALK_SCRIPT_NAME = "talk.py";
+static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
+static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
 
 bool show_window = true;
 bool use_camera = true;
@@ -56,7 +56,7 @@ VectorRenderer vectorRenderer;
 static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos);
 static void setup_display_env();
 static void rotate_screen();
-static string home_path(const char* relative);
+static string repo_path(const char* relative);
 static pid_t find_talk_pid();
 static bool start_talk_process(bool cold_talk);
 static void stop_talk_process();
@@ -358,10 +358,14 @@ static void signalHandler(int) {
     g_quit = true;
 }
 
-static string home_path(const char* relative) {
-    const char* home = getenv("HOME");
-    if (!home || !*home) home = ".";
-    return string(home) + "/" + relative;
+static string repo_path(const char* relative) {
+    error_code error;
+    filesystem::path executable = filesystem::read_symlink("/proc/self/exe", error);
+    if (error) return relative;
+
+    // robot/build/robot sits two folders under the repo root
+    filesystem::path repo = executable.parent_path().parent_path().parent_path();
+    return (repo / relative).string();
 }
 
 static pid_t find_talk_pid() {
@@ -448,8 +452,8 @@ static bool start_talk_process(bool cold_talk) {
         return true;
     }
 
-    string talk_python = home_path(TALK_PYTHON_REL);
-    string talk_script = home_path(TALK_SCRIPT_REL);
+    string talk_python = repo_path(TALK_PYTHON_FROM_REPO);
+    string talk_script = repo_path(TALK_SCRIPT_FROM_REPO);
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork talk.py");

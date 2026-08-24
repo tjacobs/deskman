@@ -4,10 +4,10 @@ Runs a local Gemma model through the OpenAI-compatible `llama.cpp` server. Defau
 
 ## Run
 
-Start the server:
+Start the server from the repo root:
 
 ```bash
-cd ~/Deskman/talk/text
+cd talk/text
 ./server.sh        # Gemma 4 E2B, default, tool calling works
 ./server.sh e2b    # same as default
 ./server.sh 1b     # Gemma 3 1B, faster, but no native tool calling
@@ -16,7 +16,7 @@ cd ~/Deskman/talk/text
 In another terminal, ask a question:
 
 ```bash
-cd ~/Deskman/talk/text
+cd talk/text
 ./ask.py "What time is it?"
 ./ask.py --test
 ./tests.py

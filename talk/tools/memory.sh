@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sample memory and talk-related processes into a log.
-# Cron every 5 minutes: */5 * * * * /home/deskman/Deskman/talk/tools/memory.sh
+# Cron every 5 minutes: */5 * * * * /path/to/talk/tools/memory.sh
 # Usage: ./tools/memory.sh
 #        ./tools/memory.sh --cron
 
@@ -86,7 +86,7 @@ sample_memory() {
     local talk_rss llama_rss robot_rss
     talk_rss="$(process_rss_mb 'talk.py')"
     llama_rss="$(process_rss_mb 'llama-server')"
-    robot_rss="$(process_rss_mb 'Deskman/src/build/robot')"
+    robot_rss="$(process_rss_mb 'robot/build/robot')"
 
     # Append one summary line
     local stamp level

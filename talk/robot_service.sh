@@ -10,8 +10,7 @@ TALK_SCRIPT="${SPEAK_DIR}/talk.py"
 TALK_PYTHON="${SPEAK_DIR}/.venv/bin/python"
 ROBOT_BIN=""
 ROBOT_CANDIDATES=(
-    "${HOME}/Deskman/src/build/robot"
-    "${HOME}/Documents/deskman/src/build/robot"
+    "${SPEAK_DIR}/../robot/build/robot"
 )
 LOG_FILE="${SPEAK_DIR}/log.txt"
 DISPLAY_DEFAULT=":0"
@@ -32,7 +31,7 @@ main() {
     # Tell the user where output goes
     mkdir -p "$(dirname "${LOG_FILE}")"
     echo "Writing ${LOG_FILE}"
-    echo "Run: tail -f ~/Deskman/talk/log.txt"
+    echo "Run: tail -f ${LOG_FILE}"
 
     # Append all to log
     exec >> "${LOG_FILE}" 2>&1

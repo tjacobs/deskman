@@ -2,8 +2,8 @@
 
 # Start teleport as the user who owns the binary
 
-# Path to the built teleport binary
-TELEPORT_BINARY_GLOB="/home/*/Deskman/teleport/build/teleport"
+# Path to the built teleport binary, repo folder name does not matter
+TELEPORT_BINARY_GLOB="/home/*/teleport/build/teleport /home/*/*/teleport/build/teleport"
 
 # Default display to use
 DEFAULT_DISPLAY=":0"
