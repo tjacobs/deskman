@@ -92,6 +92,7 @@ TEXT_UNAVAILABLE = 'The language model is not running.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
 TEXT_SERVER_LOG = os.path.join(utils.SCRIPT_DIR, 'text_server.log')
+TEXT_SERVER_PROGRESS_WIDTH = 120
 TEXT_SERVER_RESTART_TRIES = 3
 
 # Expected RAM use in gigabytes
@@ -845,30 +846,12 @@ def start_text_server(require_success=True):
     # Start server.sh and keep its log so startup failures are visible
     process = spawn_text_server()
 
-    # Wait until the health endpoint answers
-    deadline = time.time() + TEXT_SERVER_START_SECONDS
-    while time.time() < deadline:
-        if process.poll() is not None:
-            text_server_log_file.flush()
-            print('Text server failed to start. Run ./text/server.sh to see the error.', flush=True)
-            print_log_tail(TEXT_SERVER_LOG)
-            if require_success:
-                sys.exit(1)
-            return None
-        if text_server_healthy():
-            print_text_server_started(load_start)
-            print_memory('after text server')
-            return process
-        time.sleep(TEXT_SERVER_POLL_SECONDS)
-
-    # Timed out waiting for the model to load
-    stop_text_server(process)
-    text_server_log_file.flush()
-    print('Text server did not become ready in time.', flush=True)
-    print_log_tail(TEXT_SERVER_LOG)
-    if require_success:
+    # Stream the log until the health endpoint answers
+    log_state = {'offset': 0, 'pending': '', 'progress': False, 'printed': False}
+    process = wait_for_text_server(process, load_start, log_state)
+    if process is None and require_success:
         sys.exit(1)
-    return None
+    return process
 
 # Spawn server.sh and replace the log file handle
 def spawn_text_server():
@@ -877,6 +860,110 @@ def spawn_text_server():
         text_server_log_file.close()
     text_server_log_file = open(TEXT_SERVER_LOG, 'w')
     return subprocess.Popen([TEXT_SERVER_SCRIPT], cwd=TEXT_DIR, stdout=text_server_log_file, stderr=subprocess.STDOUT)
+
+# Wait until /health answers, streaming server.sh output including curl progress
+def wait_for_text_server(process, load_start, log_state):
+    deadline = time.time() + TEXT_SERVER_START_SECONDS
+    while True:
+        print_new_text_server_log(log_state)
+
+        # Server.sh exited before becoming healthy
+        if process.poll() is not None:
+            print_new_text_server_log(log_state)
+            finish_text_server_log_progress(log_state)
+            print('Text server failed to start. Run ./text/server.sh to see the error.', flush=True)
+            print_log_tail_if_quiet(log_state)
+            return None
+
+        # Health endpoint is up
+        if text_server_healthy():
+            print_new_text_server_log(log_state)
+            finish_text_server_log_progress(log_state)
+            print_text_server_started(load_start)
+            print_memory('after text server')
+            return process
+
+        # Download time does not count against the model load timeout
+        if text_model_downloading():
+            deadline = time.time() + TEXT_SERVER_START_SECONDS
+        elif time.time() >= deadline:
+            stop_text_server(process)
+            print_new_text_server_log(log_state)
+            finish_text_server_log_progress(log_state)
+            print('Text server did not become ready in time.', flush=True)
+            print_log_tail_if_quiet(log_state)
+            return None
+        time.sleep(TEXT_SERVER_POLL_SECONDS)
+
+# Print new bytes from the text server log, curl progress stays on one line
+def print_new_text_server_log(state):
+    if not os.path.isfile(TEXT_SERVER_LOG):
+        return
+    size = os.path.getsize(TEXT_SERVER_LOG)
+    if state['offset'] > size:
+        state['offset'] = 0
+        state['pending'] = ''
+    with open(TEXT_SERVER_LOG, errors='replace') as log_file:
+        log_file.seek(state['offset'])
+        chunk = log_file.read()
+        state['offset'] = log_file.tell()
+    if not chunk:
+        return
+    state['pending'] += chunk
+    emit_text_server_log(state)
+
+# Split log text on newlines and carriage returns
+def emit_text_server_log(state):
+    pending = state['pending']
+    while True:
+        newline_at = pending.find('\n')
+        return_at = pending.find('\r')
+        if newline_at < 0 and return_at < 0:
+            break
+        if return_at >= 0 and (newline_at < 0 or return_at < newline_at):
+            piece = pending[:return_at]
+            pending = pending[return_at + 1:]
+            if piece.strip():
+                print('\r' + piece.strip()[:TEXT_SERVER_PROGRESS_WIDTH].ljust(TEXT_SERVER_PROGRESS_WIDTH), end='', flush=True)
+                state['progress'] = True
+                state['printed'] = True
+            continue
+        piece = pending[:newline_at]
+        pending = pending[newline_at + 1:]
+        if state['progress']:
+            print(flush=True)
+            state['progress'] = False
+        if piece.strip():
+            print(piece, flush=True)
+            state['printed'] = True
+    state['pending'] = pending
+
+# Flush a leftover progress line when startup wait ends
+def finish_text_server_log_progress(state):
+    leftover = state['pending'].strip()
+    if leftover:
+        print('\r' + leftover[:TEXT_SERVER_PROGRESS_WIDTH].ljust(TEXT_SERVER_PROGRESS_WIDTH), end='', flush=True)
+        state['progress'] = True
+        state['printed'] = True
+        state['pending'] = ''
+    if state['progress']:
+        print(flush=True)
+        state['progress'] = False
+
+# Return true while server.sh is still fetching a .gguf.part file
+def text_model_downloading():
+    models_dir = os.path.join(TEXT_DIR, 'models')
+    if not os.path.isdir(models_dir):
+        return False
+    for name in os.listdir(models_dir):
+        if name.endswith('.part'):
+            return True
+    return False
+
+# Dump the log on failure only when nothing was streamed live
+def print_log_tail_if_quiet(log_state):
+    if not log_state['printed']:
+        print_log_tail(TEXT_SERVER_LOG)
 
 # Restart the text server when it died, return true when healthy again
 def ensure_text_server_alive():
@@ -912,12 +999,19 @@ def ensure_text_server_alive():
 def print_log_tail(path, line_count=40):
     try:
         with open(path) as log_file:
-            lines = log_file.read().splitlines()
+            text = log_file.read()
     except OSError as error:
         print(f'Error: could not read {path}: {error}', flush=True)
         return
-    if not lines:
+    if not text.strip():
         print(f'Error: {path} is empty.', flush=True)
+        return
+
+    # Keep only the last curl progress update on each line
+    text = re.sub(r'[^\n\r]*\r', '', text)
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        print(f'Error: {path} has no printable lines.', flush=True)
         return
     print(f'----- {path} -----', flush=True)
     for line in lines[-line_count:]:
