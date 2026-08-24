@@ -42,6 +42,9 @@ CPU_INDEX_MAX = 64
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
 
+# State
+PLAYBACK_AVAILABLE = True
+
 # Return audio player command for this platform
 def audio_player():
     return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
@@ -63,6 +66,14 @@ def check_audio_player():
         if find_usb_card() is None:
             return False, 'no USB audio device found, plug one in and run ./tools/audio.sh'
     return True, None
+
+# Warn when audio playback is unavailable, generation still runs
+def check_playback():
+    global PLAYBACK_AVAILABLE
+    player_ok, player_error = check_audio_player()
+    if not player_ok:
+        PLAYBACK_AVAILABLE = False
+        print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
 # Return card index for the playback-only USB sound device
 def find_usb_card():
@@ -337,6 +348,10 @@ def log_timing(label, start_time):
 # Print elapsed seconds for a stored duration
 def log_elapsed(label, seconds):
     print(f"{label}: {format_seconds(seconds)}")
+
+# Print kokoro import timing
+def print_import_timing(seconds):
+    log_elapsed("Import kokoro", seconds)
 
 # Format model load errors for terminal output
 def format_load_error(error):

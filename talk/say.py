@@ -49,7 +49,6 @@ FORCE_CPU = False
 KOKORO_SECONDS = 0
 TEST_MODE = False
 OUTPUT_LOCK = threading.Lock()
-PLAYBACK_AVAILABLE = True
 os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
 
 # Main
@@ -63,7 +62,7 @@ def main():
     utils.print_system_info(perf_set, DEVICE, FORCE_CPU, torch)
 
     # Warn when audio playback is unavailable, generation still runs
-    check_playback()
+    utils.check_playback()
 
     # Start the speech engine
     engine = SpeechEngine()
@@ -309,14 +308,6 @@ def write_line(text):
     with OUTPUT_LOCK:
         sys.stdout.write('\r\033[K' + text + '\n')
         sys.stdout.flush()
-
-# Set the playback flag, warn when no audio device is available
-def check_playback():
-    global PLAYBACK_AVAILABLE
-    player_ok, player_error = utils.check_audio_player()
-    if not player_ok:
-        PLAYBACK_AVAILABLE = False
-        print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
 # Format exception text for status lines
 def format_error(error):
@@ -610,7 +601,7 @@ class SpeechEngine:
     # Play wav file and allow cancellation
     def play_wav(self, wav_path):
         # Skip playback when no audio device is available
-        if not PLAYBACK_AVAILABLE:
+        if not utils.PLAYBACK_AVAILABLE:
             return
         self.stop_player()
         self.player_process = subprocess.Popen(utils.play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

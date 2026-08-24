@@ -24,7 +24,6 @@ KOKORO_SECONDS = 0
 DEVICE = 'cpu'
 FORCE_CPU = False
 SPEAK_TEXT = TEXT
-PLAYBACK_AVAILABLE = True
 
 def main():
     # Load kokoro
@@ -36,7 +35,7 @@ def main():
     utils.print_system_info(perf_set, DEVICE, FORCE_CPU, torch)
 
     # Warn when audio playback is unavailable, generation still runs
-    check_ready()
+    utils.check_playback()
 
     # Run
     run_start = time.perf_counter()
@@ -110,7 +109,7 @@ def init():
     KOKORO_SECONDS = time.perf_counter() - kokoro_start
     DEVICE = utils.pick_device(FORCE_CPU, torch)
     torch.set_num_threads(utils.TORCH_THREADS)
-    print_import_timing()
+    utils.print_import_timing(KOKORO_SECONDS)
 
 # Generate audio for the text and play each chunk
 def generate_and_play(voice, text):
@@ -138,7 +137,7 @@ def generate_and_play(voice, text):
 
         # Play the wav when playback is available, else skip it
         play_start = time.perf_counter()
-        if PLAYBACK_AVAILABLE:
+        if utils.PLAYBACK_AVAILABLE:
             play_result = subprocess.run(utils.play_wav_command(wav_path), capture_output=True)
             if play_result.returncode != 0:
                 utils.exit_error(f'Audio playback failed, {utils.audio_player()} returned exit code {play_result.returncode}.')
@@ -171,18 +170,6 @@ def load_model_and_pipeline(voice):
     if load_result['error'] is not None:
         utils.exit_error(f'Model load failed: {utils.format_load_error(load_result["error"])}')
     return load_result['model'], load_result['pipeline']
-
-# Print kokoro import timing
-def print_import_timing():
-    utils.log_elapsed("Import kokoro", KOKORO_SECONDS)
-
-# Warn when audio playback is unavailable, generation still runs
-def check_ready():
-    global PLAYBACK_AVAILABLE
-    player_ok, player_error = utils.check_audio_player()
-    if not player_ok:
-        PLAYBACK_AVAILABLE = False
-        print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
 # Main
 if __name__ == '__main__':
