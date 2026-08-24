@@ -6,7 +6,7 @@
 #include "servos.h"
 
 // Third-party
-#include <nlohmann/json.hpp>
+#include "json.hpp"
 
 // C++ standard library
 #include <atomic>
