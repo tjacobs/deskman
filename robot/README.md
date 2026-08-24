@@ -7,6 +7,7 @@ C++ face, STS3215 servos, and camera tracking. Voice is Python in `../talk`.
 Needs CMake, a C++20 compiler, OpenCV, SDL2, SDL2_image, SDL2_ttf, and GStreamer.
 
 ```bash
+./install.sh
 mkdir -p build
 cd build
 cmake ..
@@ -20,3 +21,11 @@ make
 ```
 
 Starts the face window, servos, camera tracking, and `talk/talk.py`. `./robot --help` lists flags. `--no-talk` is face and neck only.
+
+## Service
+
+```bash
+./install_robot_service.sh
+./install_robot_service.sh --start
+./install_robot_service.sh --uninstall
+```

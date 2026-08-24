@@ -25,3 +25,11 @@ Optional anti-echo: `./install_anti_echo.sh`.
 ```
 
 `./teleport --help` lists flags. `--local` uses `ws://127.0.0.1:8080`. `--call teleport2` dials after login.
+
+## Service
+
+```bash
+./install_teleport_service.sh
+./install_teleport_service.sh --start
+./install_teleport_service.sh --uninstall
+```

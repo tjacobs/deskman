@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
-# Install the service that runs robot_service.sh.
-# Usage: ./robot_service_install.sh             (install, enable)
-#        ./robot_service_install.sh --start     (install, enable, start now)
-#        ./robot_service_install.sh --uninstall (uninstall)
+# Install the service that runs teleport.
+# Usage: ./install_teleport_service.sh             (install, enable)
+#        ./install_teleport_service.sh --start     (install, enable, start now)
+#        ./install_teleport_service.sh --uninstall (uninstall)
 
 # Stop on errors
 set -euo pipefail
 
 # Service config
-SERVICE_NAME="robot"
+SERVICE_NAME="teleport"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+PLUGIN_PATH="/usr/local/lib/deskman-gstreamer-1.0"
 
 # Paths
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LAUNCHER_SCRIPT="${PROJECT_DIR}/robot_service.sh"
-TALK_SCRIPT="${PROJECT_DIR}/talk.py"
-PYTHON_BIN="${PROJECT_DIR}/.venv/bin/python"
+TELEPORT_BIN="${PROJECT_DIR}/build/teleport"
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./robot_service_install.sh [--start|--uninstall]"
-    echo "  (no arg)     install and enable robot.service"
+    echo "Usage: ./install_teleport_service.sh [--start|--uninstall]"
+    echo "  (no arg)     install and enable teleport.service"
     echo "  --start      install, enable, and start now"
-    echo "  --uninstall  stop, disable, and remove robot.service"
+    echo "  --uninstall  stop, disable, and remove teleport.service"
 }
 
 # Help does not need root
@@ -51,44 +50,40 @@ main() {
     RUN_UID="$(id -u "${RUN_USER}")"
     RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
 
-    # Verify launcher, talk, and venv exist
-    if [[ ! -f "${LAUNCHER_SCRIPT}" ]]; then
-        echo "Error: ${LAUNCHER_SCRIPT} not found" >&2
-        exit 1
-    fi
-    if [[ ! -f "${TALK_SCRIPT}" ]]; then
-        echo "Error: ${TALK_SCRIPT} not found" >&2
-        exit 1
-    fi
-    if [[ ! -x "${PYTHON_BIN}" ]]; then
-        echo "Error: ${PYTHON_BIN} not found. Run ./install.sh --listen --talk first." >&2
+    # Verify the binary exists
+    if [[ ! -x "${TELEPORT_BIN}" ]]; then
+        echo "Error: ${TELEPORT_BIN} not found. Build with cmake and make first." >&2
         exit 1
     fi
 
     # Show what will be installed
     echo "Installing ${SERVICE_NAME}.service"
-    echo "  user:     ${RUN_USER}"
-    echo "  launcher: ${LAUNCHER_SCRIPT}"
-    echo "  talk:     ${TALK_SCRIPT}"
+    echo "  user:   ${RUN_USER}"
+    echo "  binary: ${TELEPORT_BIN}"
 
     # Write systemd unit file
     cat > "${SERVICE_FILE}" <<EOF
+# Programs connect to \$XDG_RUNTIME_DIR/teleport.interface.
+
 [Unit]
-Description=Robot service
-After=network.target sound.target graphical.target
+Description=Teleport
+After=display-manager.service network.target graphical.target
 Wants=graphical.target
 
 [Service]
 Type=simple
 User=${RUN_USER}
 Group=${RUN_GROUP}
-WorkingDirectory=${PROJECT_DIR}
+WorkingDirectory=${PROJECT_DIR}/build
 Environment=HOME=${RUN_HOME}
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/${RUN_UID}
-ExecStart=${LAUNCHER_SCRIPT}
+Environment=GST_PLUGIN_PATH=${PLUGIN_PATH}
+Environment=LIBCAMERA_LOG_LEVELS=*:ERROR
+ExecStart=${TELEPORT_BIN}
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=60
 StandardOutput=journal
 StandardError=journal
 KillMode=mixed
@@ -99,15 +94,7 @@ EOF
 
     # Set permissions
     chmod 644 "${SERVICE_FILE}"
-    chmod 755 "${LAUNCHER_SCRIPT}" "${TALK_SCRIPT}"
-
-    # Remove leftover talk.service from the old name
-    if [[ -f /etc/systemd/system/talk.service ]]; then
-        echo "Removing old talk.service"
-        systemctl stop talk.service 2>/dev/null || true
-        systemctl disable talk.service 2>/dev/null || true
-        rm -f /etc/systemd/system/talk.service
-    fi
+    chmod 755 "${TELEPORT_BIN}"
 
     # Enable on boot
     echo "Reloading systemd"
@@ -128,7 +115,6 @@ EOF
     echo "  sudo service ${SERVICE_NAME} stop"
     echo "  sudo service ${SERVICE_NAME} status"
     echo "  journalctl -u ${SERVICE_NAME} -f"
-    echo "  tail -f ${PROJECT_DIR}/log.txt"
 }
 
 # Uninstall

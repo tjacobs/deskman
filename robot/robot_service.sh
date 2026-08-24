@@ -1,30 +1,17 @@
 #!/usr/bin/env bash
-# Starts talk.py or Deskman robot.
+# Starts the Deskman robot, which starts talk.py.
 
 # Stop on errors
 set -euo pipefail
 
 # Paths
-SPEAK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TALK_SCRIPT="${SPEAK_DIR}/talk.py"
-TALK_PYTHON="${SPEAK_DIR}/.venv/bin/python"
-ROBOT_BIN=""
-ROBOT_CANDIDATES=(
-    "${SPEAK_DIR}/../robot/build/robot"
-)
-LOG_FILE="${SPEAK_DIR}/log.txt"
+ROBOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TALK_DIR="$(cd "${ROBOT_DIR}/../talk" && pwd)"
+ROBOT_BIN="${ROBOT_DIR}/build/robot"
+TALK_SCRIPT="${TALK_DIR}/talk.py"
+TALK_PYTHON="${TALK_DIR}/.venv/bin/python"
+LOG_FILE="${ROBOT_DIR}/log.txt"
 DISPLAY_DEFAULT=":0"
-
-# Pick the first built Deskman robot binary
-pick_robot_bin() {
-    for candidate in "${ROBOT_CANDIDATES[@]}"; do
-        if [[ -x "${candidate}" ]]; then
-            ROBOT_BIN="${candidate}"
-            return 0
-        fi
-    done
-    return 1
-}
 
 # Main
 main() {
@@ -38,17 +25,17 @@ main() {
     echo ""
     echo "=== robot_service $(date -Is) ==="
 
-    # Run Deskman robot, it starts talk.py itself
-    if pick_robot_bin; then
+    # Run the robot binary when it exists, it starts talk.py itself
+    if [[ -x "${ROBOT_BIN}" ]]; then
         echo "Starting Deskman robot ${ROBOT_BIN}..."
         export DISPLAY="${DISPLAY:-${DISPLAY_DEFAULT}}"
         cd "$(dirname "${ROBOT_BIN}")"
         exec "${ROBOT_BIN}"
     fi
 
-    # Start talk.py
+    # Start talk.py without the face
     echo "Starting talk.py..."
-    cd "${SPEAK_DIR}"
+    cd "${TALK_DIR}"
     exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}" --no-replay-robot
 }
 

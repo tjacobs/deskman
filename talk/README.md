@@ -120,13 +120,12 @@ By default it also plays back what was said to it, so you can hear what it heard
 
 ## robot service
 
-Install a systemd service that runs `robot_service.sh` on boot. That starts `talk.py`.
-If the robot binary exists at `robot/build/robot`, it starts that, which brings up the face UI and `talk.py`.
+Install a systemd service that runs `../robot/robot_service.sh` on boot.
 
 ```bash
-./robot_service_install.sh
-./robot_service_install.sh --start
-./robot_service_install.sh --uninstall
+../robot/install_robot_service.sh
+../robot/install_robot_service.sh --start
+../robot/install_robot_service.sh --uninstall
 ```
 
 ```bash

@@ -8,23 +8,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenCV REQUIRED)
 
 add_executable(${TARGET_NAME}
-    main.cpp
-    face.cpp
-    screen.cpp
-    fan.cpp
-    servos.cpp
-    control.cpp
-    renderer.cpp
-    tracker.cpp
-    camera.cpp
-    config.cpp
-    servos/SMS_STS.cpp
-    servos/SCS.cpp
-    servos/SCSerial.cpp
+    src/main.cpp
+    src/face.cpp
+    src/screen.cpp
+    src/fan.cpp
+    src/servos.cpp
+    src/control.cpp
+    src/renderer.cpp
+    src/tracker.cpp
+    src/camera.cpp
+    src/config.cpp
+    src/servos/SMS_STS.cpp
+    src/servos/SCS.cpp
+    src/servos/SCSerial.cpp
 )
 
 target_include_directories(${TARGET_NAME} PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
