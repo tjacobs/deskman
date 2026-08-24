@@ -79,7 +79,7 @@ def main():
             run_input_loop(engine, PHRASES)
 
         # Suggest microphone transcription next
-        print('Next: run ./speech_listen.py for microphone transcription.')
+        print('Next: run ./listen.py for microphone transcription.')
 
     # Done
     finally:

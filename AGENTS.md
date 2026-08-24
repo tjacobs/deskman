@@ -54,7 +54,7 @@ The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphon
 
 The Kokoro model and voices download into `talk/cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
 
-`talk/speech_listen.py` and `talk/talk.py` need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --talk` from `talk/`, where `--talk` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `talk/text/tests.py` needs that server running. Stop `llama-server` when done.
+`talk/listen.py` and `talk/talk.py` need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --talk` from `talk/`, where `--talk` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `talk/text/tests.py` needs that server running. Stop `llama-server` when done.
 
 When you start or use `talk/text/server.sh` / `llama-server` for testing, benches, or debugging:
 

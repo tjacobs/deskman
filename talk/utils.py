@@ -1,4 +1,4 @@
-# Shared helpers for speak.py, say.py, talk.py, and speech_listen.py.
+# Shared helpers for speak.py, say.py, talk.py, and listen.py.
 
 # Imports
 import os

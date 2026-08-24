@@ -41,7 +41,7 @@ BREW_PATHS=(/opt/homebrew/bin/brew /usr/local/bin/brew)
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 UV_BIN_DIR="${HOME}/.local/bin"
 
-# Config the ctranslate2 cuda build for speech_listen.py
+# Config the ctranslate2 cuda build for listen.py
 LIBS_DIR="${SCRIPT_DIR}/libs"
 FASTER_WHISPER_URL="https://github.com/SYSTRAN/faster-whisper.git"
 FASTER_WHISPER_DIR="${LIBS_DIR}/faster-whisper"
@@ -113,7 +113,7 @@ parse_args() {
 # Print usage help
 print_usage() {
     echo "Usage: ./install.sh [--listen] [--talk]"
-    echo "  --listen  also install speech to text for speech_listen.py and talk.py"
+    echo "  --listen  also install speech to text for listen.py and talk.py"
     echo "  --talk    also install llama.cpp and Gemma 4 E2B for talk.py"
     echo "  (no arg)  install text to speech for speak.py and say.py into .venv"
 }
@@ -287,9 +287,9 @@ verify_jetson_torch() {
     echo "CUDA OK on Jetson GPU."
 }
 
-# Install faster-whisper so speech_listen.py and talk.py can transcribe
+# Install faster-whisper so listen.py and talk.py can transcribe
 install_listen() {
-    # Install sox on mac, speech_listen.py records with it there
+    # Install sox on mac, listen.py records with it there
     if [[ "$(uname -s)" == "Darwin" ]]; then
         install_mac_packages "${MAC_LISTEN_PACKAGES[@]}"
         install_packages "${LISTEN_PACKAGES[@]}"
@@ -451,7 +451,7 @@ verify_text() {
 print_done() {
     echo "Done. Run ./speak.py to speak."
     if [[ "${INSTALL_LISTEN}" == true ]]; then
-        echo "Run ./speech_listen.py to transcribe from the microphone."
+        echo "Run ./listen.py to transcribe from the microphone."
     fi
     if [[ "${INSTALL_TALK}" == true ]]; then
         echo "Run ./talk.py to put speech and the local model together."
