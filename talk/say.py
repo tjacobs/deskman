@@ -1,31 +1,23 @@
 #!.venv/bin/python
 
 # Imports
-import glob
 import os
-import platform
-import queue
-import shutil
-import subprocess
 import sys
+import tty
+import time
+import queue
 import termios
 import threading
-import time
-import tty
-import warnings
+import subprocess
+import utils
 
-# Config voice
-REPO_ID = 'hexgrad/Kokoro-82M'
+# Config voice speed
 DEFAULT_SPEED = 1.5
 SPEED_STEP = 0.1
 SPEED_MIN = 0.5
 SPEED_MAX = 2.0
-VOICES = [
-    'af_heart', 'af_alloy', 'af_aoede', 'af_bella', 'af_jessica', 'af_kore', 'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
-    'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael', 'am_onyx', 'am_puck', 'am_santa',
-    'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
-    'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
-]
+
+# Config phrases
 PHRASES = {
     '1': 'hi there',
     '2': 'hello there',
@@ -38,15 +30,6 @@ PHRASES = {
     '9': 'no way!',
 }
 
-# Config dirs and env
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
-MODEL_CACHE_DIR = os.path.join(CACHE_DIR, 'models--hexgrad--Kokoro-82M', 'snapshots')
-AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
-os.environ['HF_HUB_CACHE'] = CACHE_DIR
-os.environ['HF_HUB_VERBOSITY'] = 'error'
-os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
-
 # Config timeouts
 LOAD_TIMEOUT_SECONDS = 60
 TEST_WAIT_SECONDS = 30
@@ -58,9 +41,6 @@ STATUS_VOICE_WIDTH = 11
 STATUS_SPEED_WIDTH = 4
 STATUS_REALTIME_WIDTH = 5
 
-# Config audio player
-PLAYER = 'afplay' if platform.system() == 'Darwin' else 'aplay'
-
 # Config device
 DEVICE = 'cpu'
 FORCE_CPU = False
@@ -70,19 +50,17 @@ KOKORO_SECONDS = 0
 TEST_MODE = False
 OUTPUT_LOCK = threading.Lock()
 PLAYBACK_AVAILABLE = True
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
 
 # Main
 def main():
-    # Check offline cache
-    #check_offline_cache()
-
     # Load kokoro
     init()
 
     # Set CPU mode to performance, restore when done
-    saved_cpu_mode = get_cpu_mode()
-    perf_set = set_cpu_mode('performance')
-    print_system_info(perf_set)
+    saved_cpu_mode = utils.get_cpu_mode()
+    perf_set = utils.set_cpu_mode('performance')
+    utils.print_system_info(perf_set, DEVICE, FORCE_CPU, torch)
 
     # Warn when audio playback is unavailable, generation still runs
     check_playback()
@@ -108,7 +86,7 @@ def main():
     finally:
         engine.stop()
         if saved_cpu_mode:
-            set_cpu_mode(saved_cpu_mode)
+            utils.set_cpu_mode(saved_cpu_mode)
 
 # Parse command line arguments
 def parse_args():
@@ -145,22 +123,17 @@ def init():
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
     # Enable offline mode when cached
-    if all_voices_cached():
-        os.environ['HF_HUB_OFFLINE'] = '1'
+    utils.enable_offline_if_voices_cached(utils.VOICES)
 
     # Limit torch thread pools before kokoro imports torch
-    os.environ['OMP_NUM_THREADS'] = '4'
-    os.environ['MKL_NUM_THREADS'] = '4'
-    os.environ['OPENBLAS_NUM_THREADS'] = '4'
+    utils.configure_torch_threads()
 
     # Print banner before heavy imports
     if not TEST_MODE:
         print_banner(PHRASES)
 
     # Suppress warnings
-    warnings.filterwarnings('ignore', category=UserWarning, module='torch.nn.modules.rnn')
-    warnings.filterwarnings('ignore', category=FutureWarning, module='torch.nn.utils.weight_norm')
-    warnings.filterwarnings('ignore', category=UserWarning, module='torch.cuda')
+    utils.suppress_torch_warnings()
 
     # Import kokoro and pick device
     print("Loading...")
@@ -170,8 +143,8 @@ def init():
     import torch
     import soundfile
     KOKORO_SECONDS = time.perf_counter() - kokoro_start
-    DEVICE = pick_device()
-    torch.set_num_threads(4)
+    DEVICE = utils.pick_device(FORCE_CPU, torch)
+    torch.set_num_threads(utils.TORCH_THREADS)
     print(f"Import kokoro: {KOKORO_SECONDS:.1f}s")
 
 # Queue two preset phrases and wait for speech to finish
@@ -283,31 +256,6 @@ def print_banner(phrases):
     print("  q  quit")
     print()
 
-# Print cpu, gpu, and device info
-def print_system_info(perf_set):
-    # Print the cpu name on mac, the scaling mode on linux
-    if platform.system() == 'Darwin':
-        print(f"CPU: {get_cpu_name()}")
-    else:
-        current_cpu_mode = get_cpu_mode() or 'unknown'
-        if perf_set and current_cpu_mode == 'performance':
-            print(f"CPU: {current_cpu_mode}")
-        else:
-            print(f"CPU: {current_cpu_mode} (run with sudo to change)")
-
-    # Print the gpu and the device in use
-    if DEVICE == 'cuda':
-        properties = torch.cuda.get_device_properties(0)
-        frequency = read_gpu_frequency_mhz()
-        clock_text = f"{frequency / 1000:.1f}GHz" if frequency else "unknown"
-        memory_gigabytes = properties.total_memory / 1024 / 1024 / 1024
-        print(f"GPU: {properties.name}, {memory_gigabytes:.1f}GB memory, clock {clock_text}")
-    elif FORCE_CPU:
-        print("GPU: disabled")
-    else:
-        print("GPU: not available")
-    print(f"Device: {'gpu' if DEVICE == 'cuda' else DEVICE}")
-
 # Format aligned status prefix
 def format_status(engine, message, state=None):
     state_label = state if state is not None else engine.state
@@ -362,123 +310,20 @@ def write_line(text):
         sys.stdout.write('\r\033[K' + text + '\n')
         sys.stdout.flush()
 
-# Return true when a card has a capture stream
-def card_has_capture(card_index):
-    stream_path = f'/proc/asound/card{card_index}/stream0'
-    if not os.path.isfile(stream_path):
-        return False
-    with open(stream_path) as stream_file:
-        return 'Capture:' in stream_file.read()
-
-# Return card index for the playback-only USB sound device
-def find_usb_card():
-    cards_path = '/proc/asound/cards'
-    if not os.path.isfile(cards_path):
-        return None
-
-    # Collect USB card indexes
-    usb_cards = []
-    with open(cards_path) as cards_file:
-        for line in cards_file:
-            if 'USB-Audio' not in line:
-                continue
-            card_index_text = line.strip().split(None, 1)[0]
-            if card_index_text.isdigit():
-                usb_cards.append(int(card_index_text))
-
-    # Prefer the speaker-only card, one without a mic
-    for card_index in usb_cards:
-        if not card_has_capture(card_index):
-            return card_index
-    if usb_cards:
-        return usb_cards[0]
-    return None
-
-# Build playback command for one wav file
-def play_wav_command(wav_path):
-    # Play through the default device, tools/audio.sh points that at the USB soundcard
-    # Naming the card takes it exclusively, which fails whenever pipewire holds it
-    return [PLAYER, wav_path]
-
-# Return true when audio player is available
-def check_audio_player():
-    if shutil.which(PLAYER) is None:
-        return False, f'{PLAYER} not found'
-    if PLAYER == 'aplay':
-        result = subprocess.run(['aplay', '-l'], capture_output=True)
-        if result.returncode != 0:
-            return False, 'no audio device found'
-        if find_usb_card() is None:
-            return False, 'no USB audio device found, plug one in and run ./tools/audio.sh'
-    return True, None
-
 # Set the playback flag, warn when no audio device is available
 def check_playback():
     global PLAYBACK_AVAILABLE
-    player_ok, player_error = check_audio_player()
+    player_ok, player_error = utils.check_audio_player()
     if not player_ok:
         PLAYBACK_AVAILABLE = False
         print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
 # Format exception text for status lines
 def format_error(error):
-    text = str(error).strip()
-    if 'offline mode is enabled' in text:
-        return 'voice not cached, run say once online to download voices'
-    if 'trying to locate the file on the Hub' in text:
-        return 'voice not cached, run say once online to download voices'
-    if 'Cannot reach' in text:
-        return 'network unavailable, voice not cached'
-    if len(text) > 80:
-        return text[:77] + '...'
-    return text
-
-# Read cpu scaling mode for the first core
-def get_cpu_mode():
-    scaling_file_path = '/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'
-    if not os.path.exists(scaling_file_path):
-        return None
-    with open(scaling_file_path) as scaling_file:
-        return scaling_file.read().strip()
-
-# Set cpu scaling mode for all cores, return true on success
-def set_cpu_mode(mode):
-    for cpu_index in range(64):
-        scaling_path = f'/sys/devices/system/cpu/cpu{cpu_index}/cpufreq/scaling_governor'
-        if not os.path.exists(scaling_path):
-            break
-        try:
-            with open(scaling_path, 'w') as scaling_file:
-                scaling_file.write(mode)
-        except OSError:
-            return False
-    return True
-
-# Read cpu name on mac
-def get_cpu_name():
-    result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True)
-    return result.stdout.strip() or 'unknown'
-
-# Read jetson gpu clock in mhz from sysfs
-def read_gpu_frequency_mhz():
-    frequency_paths = glob.glob('/sys/class/devfreq/*gpu*/cur_freq')
-    if not frequency_paths:
-        return None
-    with open(frequency_paths[0]) as frequency_file:
-        hertz = int(frequency_file.read().strip())
-    return hertz / 1_000_000
-
-# Pick cuda when available, else cpu
-def pick_device():
-    if FORCE_CPU:
-        return 'cpu'
-    if torch.cuda.is_available():
-        return 'cuda'
-    return 'cpu'
+    return utils.format_hub_error(error, 'voice not cached, run say once online to download voices', 'network unavailable, voice not cached')
 
 # Background speech engine with queue and playback control
 class SpeechEngine:
-
     # Create engine with default voice and speed
     def __init__(self):
         self.lock = threading.Lock()
@@ -488,8 +333,8 @@ class SpeechEngine:
         self.state = 'idle'
         self.player_process = None
         self.cancel_flag = threading.Event()
-        self.voice_index = VOICES.index('bm_fable')
-        self.voice = VOICES[self.voice_index]
+        self.voice_index = utils.VOICES.index(utils.DEFAULT_VOICE)
+        self.voice = utils.VOICES[self.voice_index]
         self.speed = DEFAULT_SPEED
         self.last_realtime_speed = None
         self.model = None
@@ -512,7 +357,7 @@ class SpeechEngine:
 
     # Start background worker thread
     def start(self):
-        os.makedirs(AUDIO_DIR, exist_ok=True)
+        os.makedirs(utils.AUDIO_DIR, exist_ok=True)
         self.running = True
         self.worker = threading.Thread(target=self.worker_loop, daemon=True)
         self.worker.start()
@@ -599,9 +444,9 @@ class SpeechEngine:
     # Cycle to next voice, return true on success
     def next_voice(self):
         start_index = self.voice_index
-        for offset in range(len(VOICES)):
-            index = (start_index + 1 + offset) % len(VOICES)
-            voice = VOICES[index]
+        for offset in range(len(utils.VOICES)):
+            index = (start_index + 1 + offset) % len(utils.VOICES)
+            voice = utils.VOICES[index]
             if self.try_load_voice(voice):
                 with self.lock:
                     self.voice_index = index
@@ -615,7 +460,7 @@ class SpeechEngine:
         if self.model is None:
             return None
         if lang_code not in self.pipelines:
-            self.pipelines[lang_code] = kokoro.KPipeline(lang_code=lang_code, repo_id=REPO_ID, model=self.model)
+            self.pipelines[lang_code] = kokoro.KPipeline(lang_code=lang_code, repo_id=utils.REPO_ID, model=self.model)
         return self.pipelines[lang_code]
 
     # Try to load a voice, return true when ready
@@ -664,7 +509,7 @@ class SpeechEngine:
     def load_model(self):
         try:
             self.state = 'loading'
-            self.model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(DEVICE).eval()
+            self.model = kokoro.KModel(repo_id=utils.REPO_ID, disable_complex=True).to(DEVICE).eval()
             lang_code = self.voice[0]
             self.pipeline = self.get_pipeline(lang_code)
             self.preload_voices()
@@ -680,14 +525,14 @@ class SpeechEngine:
 
     # Preload all voices so switching works offline later
     def preload_voices(self):
-        if not all_voices_cached():
+        if not utils.all_voices_cached(utils.VOICES):
             os.environ.pop('HF_HUB_OFFLINE', None)
 
         skipped = []
         voices_loaded = 0
         for lang_code in ('a', 'b'):
             pipeline = self.get_pipeline(lang_code)
-            for voice in VOICES:
+            for voice in utils.VOICES:
                 if voice[0] != lang_code:
                     continue
                 try:
@@ -706,7 +551,7 @@ class SpeechEngine:
                 write_line(f"  {voice}: {message}")
 
         # Use offline mode after voices are cached
-        if voices_loaded == len(VOICES):
+        if voices_loaded == len(utils.VOICES):
             os.environ['HF_HUB_OFFLINE'] = '1'
 
     # Generate and play one phrase
@@ -744,7 +589,7 @@ class SpeechEngine:
                 # Write wav file
                 wav_name = str(self.audio_counter).zfill(3) + '.wav'
                 self.audio_counter += 1
-                wav_path = os.path.join(AUDIO_DIR, wav_name)
+                wav_path = os.path.join(utils.AUDIO_DIR, wav_name)
                 soundfile.write(wav_path, audio, 24000)
 
                 # Play wav file
@@ -768,7 +613,7 @@ class SpeechEngine:
         if not PLAYBACK_AVAILABLE:
             return
         self.stop_player()
-        self.player_process = subprocess.Popen(play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.player_process = subprocess.Popen(utils.play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while True:
             if self.cancel_flag.is_set():
                 self.stop_player()
@@ -777,7 +622,7 @@ class SpeechEngine:
                 exit_code = self.player_process.returncode
                 self.player_process = None
                 if exit_code != 0:
-                    raise RuntimeError(f'{PLAYER} failed with exit code {exit_code}')
+                    raise RuntimeError(f'{utils.audio_player()} failed with exit code {exit_code}')
                 return
             time.sleep(0.05)
 
@@ -791,43 +636,9 @@ class SpeechEngine:
                 self.player_process.kill()
         self.player_process = None
 
-# Return path to a cached voice file when present
-def voice_cache_path(voice):
-    if not os.path.isdir(MODEL_CACHE_DIR):
-        return None
-    for snapshot_name in os.listdir(MODEL_CACHE_DIR):
-        voice_path = os.path.join(MODEL_CACHE_DIR, snapshot_name, 'voices', voice + '.pt')
-        if os.path.isfile(voice_path):
-            return voice_path
-    return None
-
-# Return true when every voice file is cached locally
-def all_voices_cached():
-    for voice in VOICES:
-        if voice_cache_path(voice) is None:
-            return False
-    return True
-
-
-# Return true when public internet responds to ping
-def network_available():
-    result = subprocess.run(['ping', '-c', '1', '-W', '2', '1.1.1.1'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return result.returncode == 0
-
-# Return true when downloads are not possible
-def is_offline():
-    if os.environ.get('HF_HUB_OFFLINE') == '1':
-        return True
-    return not network_available()
-
-# Use local cache only when all voices are already downloaded
-def enable_offline_if_cached():
-    if all_voices_cached():
-        os.environ['HF_HUB_OFFLINE'] = '1'
-
 # Quit early when offline without cached voices
 def check_offline_cache():
-    if is_offline() and not all_voices_cached():
+    if utils.is_offline() and not utils.all_voices_cached(utils.VOICES):
         print('Offline and voices not cached. Run once online to download, or run ./tools/offline.sh --fix.')
         sys.exit(1)
 

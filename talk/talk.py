@@ -10,24 +10,16 @@ import time
 import queue
 import shutil
 import traceback
-import warnings
-import platform
 import threading
 import subprocess
 import numpy as np
 import collections
 import urllib.error
 import urllib.request
+import utils
 
 # Config voice
-DEFAULT_VOICE = 'bm_fable'
 SPEECH_SPEED = 1.2
-VOICES = [
-    'af_heart', 'af_alloy', 'af_aoede', 'af_bella', 'af_jessica', 'af_kore', 'af_nicole', 'af_nova', 'af_river', 'af_sarah', 'af_sky',
-    'am_adam', 'am_echo', 'am_eric', 'am_fenrir', 'am_liam', 'am_michael', 'am_onyx', 'am_puck', 'am_santa',
-    'bf_alice', 'bf_emma', 'bf_isabella', 'bf_lily',
-    'bm_daniel', 'bm_fable', 'bm_george', 'bm_lewis',
-]
 
 # Config wake word and phrases
 WAKE_WORD = 'robot'
@@ -61,11 +53,6 @@ NO_REPLAY_WAKE_FLAG = f'--no-replay-{WAKE_WORD}'
 # Config whisper model size
 WHISPER_MODEL_SIZE = 'base'
 
-# Config audio recording
-SAMPLE_RATE = 16000
-MAC_RECORDER = 'rec'
-LINUX_RECORDER = 'arecord'
-
 # Config speech detection
 VAD_FRAME_SAMPLES = 512
 VAD_BLOCK_FRAMES = 8
@@ -78,7 +65,7 @@ MAX_UTTERANCE_SECONDS = 15
 # Config block sizes worked out from the frame size
 BLOCK_SAMPLES = VAD_FRAME_SAMPLES * VAD_BLOCK_FRAMES
 BLOCK_BYTES = BLOCK_SAMPLES * 2
-BLOCK_SECONDS = BLOCK_SAMPLES / SAMPLE_RATE
+BLOCK_SECONDS = BLOCK_SAMPLES / utils.SAMPLE_RATE
 PRE_ROLL_BLOCKS = round(PRE_ROLL_SECONDS / BLOCK_SECONDS)
 SILENCE_END_BLOCKS = round(SILENCE_END_SECONDS / BLOCK_SECONDS)
 MIN_SPEECH_BLOCKS = round(MIN_SPEECH_SECONDS / BLOCK_SECONDS)
@@ -87,30 +74,24 @@ MAX_QUEUED_SECONDS = 5.0
 MAX_QUEUED_BLOCKS = round(MAX_QUEUED_SECONDS / BLOCK_SECONDS)
 
 # Config voice
-REPO_ID = 'hexgrad/Kokoro-82M'
-VOICE = DEFAULT_VOICE
-MAC_PLAYER = 'afplay'
-LINUX_PLAYER = 'aplay'
+VOICE = utils.DEFAULT_VOICE
 
 # Config test question and text warm-up
 TEST_QUESTION = 'What is the time?'
 WARMUP_PROMPT = 'Say hello.'
 
 # Config dirs and env
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
-AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
-TALKS_DIR = os.path.join(SCRIPT_DIR, 'talks')
+TALKS_DIR = os.path.join(utils.SCRIPT_DIR, 'talks')
 SPOKEN_WAV = 'talk.wav'
 HEARD_WAV = 'heard.wav'
 WAKE_WAV = 'wake.wav'
-TEXT_DIR = os.path.join(SCRIPT_DIR, 'text')
+TEXT_DIR = os.path.join(utils.SCRIPT_DIR, 'text')
 TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
 TEXT_CUDA_LIBRARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'libggml-cuda.so')
 TEXT_UNAVAILABLE = 'The language model is not running.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
-TEXT_SERVER_LOG = os.path.join(SCRIPT_DIR, 'text_server.log')
+TEXT_SERVER_LOG = os.path.join(utils.SCRIPT_DIR, 'text_server.log')
 TEXT_SERVER_RESTART_TRIES = 3
 
 # Expected RAM use in gigabytes
@@ -120,10 +101,6 @@ KOKORO_EXPECTED_GB = 0.7
 SPEECH_MODELS_EXPECTED_GB = WHISPER_EXPECTED_GB + KOKORO_EXPECTED_GB
 SPEECH_STACK_EXPECTED_GB = TEXT_SERVER_EXPECTED_GB + SPEECH_MODELS_EXPECTED_GB
 MEMORY_LOW_GB = 0.5
-
-# Download flags
-os.environ['HF_HUB_CACHE'] = CACHE_DIR
-os.environ['HF_HUB_VERBOSITY'] = 'error'
 
 # State
 TEST_MODE = False
@@ -162,7 +139,7 @@ def main():
     warn_if_low_memory()
 
     # Build the record command
-    record = record_command()
+    record = utils.record_command()
 
     # Load speech first, then the text server
     try:
@@ -348,7 +325,7 @@ def make_reply(command):
 # Load whisper, vad, and kokoro
 def load_speech_models():
     # Silence onnxruntime GPU discovery warning from the VAD
-    import_onnxruntime_quietly()
+    utils.import_onnxruntime_quietly()
 
     # Load speech models
     whisper_model = load_whisper_model()
@@ -393,12 +370,8 @@ def load_kokoro_pipeline():
     print('Loading kokoro...', flush=True)
     warn_if_low_memory_for('kokoro', KOKORO_EXPECTED_GB)
     load_start = time.perf_counter()
-    os.environ['OMP_NUM_THREADS'] = '4'
-    os.environ['MKL_NUM_THREADS'] = '4'
-    os.environ['OPENBLAS_NUM_THREADS'] = '4'
-    warnings.filterwarnings('ignore', category=UserWarning, module='torch.nn.modules.rnn')
-    warnings.filterwarnings('ignore', category=FutureWarning, module='torch.nn.utils.weight_norm')
-    warnings.filterwarnings('ignore', category=UserWarning, module='torch.cuda')
+    utils.configure_torch_threads()
+    utils.suppress_torch_warnings()
 
     # Import kokoro and pick device
     try:
@@ -406,11 +379,11 @@ def load_kokoro_pipeline():
         import kokoro
         import torch
         import soundfile
-        torch.set_num_threads(4)
+        torch.set_num_threads(utils.TORCH_THREADS)
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # Load model and the default voice
-        kokoro_model = kokoro.KModel(repo_id=REPO_ID, disable_complex=True).to(device).eval()
+        kokoro_model = kokoro.KModel(repo_id=utils.REPO_ID, disable_complex=True).to(device).eval()
         pipeline = get_kokoro_pipeline(VOICE[0])
         pipeline.load_voice(VOICE)
     except Exception as error:
@@ -424,7 +397,7 @@ def load_kokoro_pipeline():
 def get_kokoro_pipeline(lang_code):
     if lang_code in kokoro_pipelines:
         return kokoro_pipelines[lang_code]
-    pipeline = kokoro.KPipeline(lang_code=lang_code, repo_id=REPO_ID, model=kokoro_model)
+    pipeline = kokoro.KPipeline(lang_code=lang_code, repo_id=utils.REPO_ID, model=kokoro_model)
     kokoro_pipelines[lang_code] = pipeline
     return pipeline
 
@@ -432,8 +405,8 @@ def get_kokoro_pipeline(lang_code):
 def set_voice(voice_name):
     global VOICE
     voice = normalize_voice_name(voice_name)
-    if voice not in VOICES:
-        names = ', '.join(voice_short_name(item) for item in VOICES)
+    if voice not in utils.VOICES:
+        names = ', '.join(voice_short_name(item) for item in utils.VOICES)
         return f'Unknown voice: {voice_name}. Available: {names}.'
     if kokoro_model is None:
         return 'Speech is not ready yet.'
@@ -450,7 +423,7 @@ def set_voice(voice_name):
 
 # List available speaking voices without language prefixes
 def list_voices(count=None):
-    names = [voice_short_name(voice) for voice in VOICES]
+    names = [voice_short_name(voice) for voice in utils.VOICES]
     current = voice_short_name(VOICE)
     if count is not None:
         count = max(1, min(len(names), int(count)))
@@ -467,7 +440,7 @@ def voice_short_name(voice):
 def normalize_voice_name(voice_name):
     text = str(voice_name or '').strip().lower()
     text = re.sub(r'[^a-z0-9]+', '_', text).strip('_')
-    if text in VOICES:
+    if text in utils.VOICES:
         return text
 
     # Drop a leading language gender prefix when present
@@ -477,7 +450,7 @@ def normalize_voice_name(voice_name):
             break
 
     # Match by the name after the language prefix
-    matches = [voice for voice in VOICES if voice.split('_', 1)[-1] == text]
+    matches = [voice for voice in utils.VOICES if voice.split('_', 1)[-1] == text]
     if len(matches) == 1:
         return matches[0]
     return text
@@ -659,11 +632,11 @@ def speak_muted(listener, kokoro_pipeline, text):
 
 # Generate speech and play it on the usb speaker
 def speak(kokoro_pipeline, text):
-    os.makedirs(AUDIO_DIR, exist_ok=True)
+    os.makedirs(utils.AUDIO_DIR, exist_ok=True)
     pipeline = get_kokoro_pipeline(VOICE[0])
     generator = pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
     for index, (graphemes, phonemes, audio) in enumerate(generator):
-        wav_path = os.path.join(AUDIO_DIR, SPOKEN_WAV)
+        wav_path = os.path.join(utils.AUDIO_DIR, SPOKEN_WAV)
         soundfile.write(wav_path, audio, 24000)
         play_wav(wav_path)
 
@@ -692,9 +665,9 @@ def fire_due_reminders(listener, kokoro_pipeline):
 # Play back the recording, mic muted so it does not hear it
 def replay(listener, audio):
     listener.mute()
-    os.makedirs(AUDIO_DIR, exist_ok=True)
-    wav_path = os.path.join(AUDIO_DIR, HEARD_WAV)
-    soundfile.write(wav_path, audio, SAMPLE_RATE)
+    os.makedirs(utils.AUDIO_DIR, exist_ok=True)
+    wav_path = os.path.join(utils.AUDIO_DIR, HEARD_WAV)
+    soundfile.write(wav_path, audio, utils.SAMPLE_RATE)
     play_wav(wav_path)
     listener.unmute()
 
@@ -707,12 +680,12 @@ def play_wake_tone(listener):
 # Build audio/wake.wav once, a soft two-note blip
 def ensure_wake_tone():
     import soundfile
-    wav_path = os.path.join(AUDIO_DIR, WAKE_WAV)
+    wav_path = os.path.join(utils.AUDIO_DIR, WAKE_WAV)
     if os.path.isfile(wav_path):
         return wav_path
 
     # Build each note with a short fade, then a small gap
-    os.makedirs(AUDIO_DIR, exist_ok=True)
+    os.makedirs(utils.AUDIO_DIR, exist_ok=True)
     parts = []
     fade = int(WAKE_TONE_RATE * WAKE_TONE_FADE_SECONDS)
     gap = np.zeros(int(WAKE_TONE_RATE * WAKE_TONE_GAP_SECONDS), dtype=np.float32)
@@ -730,7 +703,7 @@ def ensure_wake_tone():
 
 # Play one wav file on the speaker
 def play_wav(wav_path):
-    subprocess.run(play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(utils.play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # Keep the microphone open and hand out one utterance at a time
 class Listener:
@@ -739,7 +712,7 @@ class Listener:
         self.vad_model = vad_model
         self.blocks = queue.Queue(maxsize=MAX_QUEUED_BLOCKS)
         self.muted = False
-        self.recorder = start_recorder(record)
+        self.recorder = utils.start_recorder(record)
         self.reader = threading.Thread(target=self.read_blocks, daemon=True)
         self.reader.start()
 
@@ -840,97 +813,13 @@ class Listener:
 def speech_probability(vad_model, block):
     return float(vad_model(block).max())
 
-# Import onnxruntime with stderr muted, it warns during gpu discovery on jetson
-def import_onnxruntime_quietly():
-    stderr_fd = sys.stderr.fileno()
-    saved_fd = os.dup(stderr_fd)
-    with open(os.devnull, 'w') as devnull:
-        os.dup2(devnull.fileno(), stderr_fd)
-        try:
-            import onnxruntime
-            onnxruntime.set_default_logger_severity(3)
-        finally:
-            os.dup2(saved_fd, stderr_fd)
-            os.close(saved_fd)
-
-# Build the record command for this platform
-def record_command():
-    if platform.system() == 'Darwin':
-        return mac_record_command()
-    return linux_record_command()
-
-# Record from the default input device with sox
-def mac_record_command():
-    if shutil.which(MAC_RECORDER) is None:
-        print('sox not found. Run ./install.sh --listen to install it.')
-        sys.exit(1)
-    return [MAC_RECORDER, '-q', '-t', 'raw', '-b', '16', '-e', 'signed-integer', '-c', '1', '-r', str(SAMPLE_RATE), '-']
-
-# Record from the first usb microphone with arecord
-def linux_record_command():
-    card = find_capture_card()
-    if card is None:
-        print('No microphone found. Plug in a USB mic and try again.')
-        sys.exit(1)
-    return [LINUX_RECORDER, '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
-
-# Return card index for the USB microphone
-def find_capture_card():
-    # Collect USB cards that can record, skip cameras with no mic
-    result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
-    usb_cards = []
-    for line in result.stdout.splitlines():
-        if line.startswith('card') and 'USB' in line:
-            card_index = int(line.split(':')[0].split()[1])
-            if not card_is_camera(card_index):
-                usb_cards.append(card_index)
-
-    # Prefer the mic-only card, a speaker card records through a poor fallback mic
-    for card_index in usb_cards:
-        if not card_has_playback(card_index):
-            return card_index
-
-    # Otherwise take the first one
-    if usb_cards:
-        return usb_cards[0]
-    return None
-
-# Return true when this sound card is a camera, not a microphone
-def card_is_camera(card_index):
-    sound_link = f'/sys/class/sound/card{card_index}/device'
-    if not os.path.exists(sound_link):
-        return False
-    usb_device = os.path.dirname(os.path.realpath(sound_link))
-    video_dir = '/sys/class/video4linux'
-    if not os.path.isdir(video_dir):
-        return False
-    for video_name in os.listdir(video_dir):
-        video_link = os.path.join(video_dir, video_name, 'device')
-        if not os.path.exists(video_link):
-            continue
-        if os.path.dirname(os.path.realpath(video_link)) == usb_device:
-            return True
-    return False
-
-# Return true when a card has a playback stream
-def card_has_playback(card_index):
-    stream_path = f'/proc/asound/card{card_index}/stream0'
-    if not os.path.isfile(stream_path):
-        return False
-    with open(stream_path) as stream_file:
-        return 'Playback:' in stream_file.read()
-
-# Start the recorder streaming raw audio to stdout
-def start_recorder(command):
-    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-
 # Quit when audio playback is unavailable
 def check_ready():
-    player = audio_player()
+    player = utils.audio_player()
     if shutil.which(player) is None:
         print(f'Audio playback unavailable: {player} not found.')
         sys.exit(1)
-    if player == LINUX_PLAYER and find_usb_card() is None:
+    if player == utils.LINUX_PLAYER and utils.find_usb_card() is None:
         print('No USB speaker found. Plug one in and run ./tools/audio.sh.')
         sys.exit(1)
 
@@ -1094,48 +983,6 @@ def warm_text():
     text_ask.last_tool_log.clear()
     print(f'Started in {time.perf_counter() - load_start:.1f} sec', flush=True)
     print_memory('after warm text')
-
-# Return true when a card has a capture stream
-def card_has_capture(card_index):
-    stream_path = f'/proc/asound/card{card_index}/stream0'
-    if not os.path.isfile(stream_path):
-        return False
-    with open(stream_path) as stream_file:
-        return 'Capture:' in stream_file.read()
-
-# Return card index for the playback-only USB sound device
-def find_usb_card():
-    cards_path = '/proc/asound/cards'
-    if not os.path.isfile(cards_path):
-        return None
-
-    # Collect USB card indexes
-    usb_cards = []
-    with open(cards_path) as cards_file:
-        for line in cards_file:
-            if 'USB-Audio' not in line:
-                continue
-            card_index_text = line.strip().split(None, 1)[0]
-            if card_index_text.isdigit():
-                usb_cards.append(int(card_index_text))
-
-    # Prefer the speaker-only card, one without a mic
-    for card_index in usb_cards:
-        if not card_has_capture(card_index):
-            return card_index
-    if usb_cards:
-        return usb_cards[0]
-    return None
-
-# Build playback command for one wav file
-def play_wav_command(wav_path):
-    # Play through the default device, tools/audio.sh points that at the USB soundcard
-    # Naming the card takes it exclusively, which fails whenever pipewire holds it
-    return [audio_player(), wav_path]
-
-# Return audio player command for this platform
-def audio_player():
-    return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
 
 # Warn when free RAM is below the expected cost of loads that are not already up
 def warn_if_low_memory():

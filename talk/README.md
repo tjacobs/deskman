@@ -12,6 +12,7 @@ Four scripts:
 - `say.py` — speak phrases by pressing keys, with voice and speed control
 - `speech_listen.py` — live speech to text transcription from the microphone
 - `talk.py` — listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
+- `utils.py` — shared audio, cache, device, and microphone helpers for those scripts
 
 The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
 

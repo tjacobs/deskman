@@ -1,35 +1,26 @@
 #!.venv/bin/python
 
 # Imports
-import os
-import platform
-import shutil
-import subprocess
 import sys
-
 import numpy as np
+import utils
 
 # Config
 MODEL_SIZE = 'base'
-SAMPLE_RATE = 16000
 CHUNK_SECONDS = 3
-MAC_RECORDER = 'rec'
-LINUX_RECORDER = 'arecord'
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
-os.environ['HF_HUB_CACHE'] = CACHE_DIR
-os.environ['HF_HUB_VERBOSITY'] = 'error'
 
 # Main
 def main():
-    # Show help or reject unknown arguments
+    # Parse args
     parse_args()
 
     # Build the record command, quits when no microphone is available
-    command = record_command()
+    command = utils.record_command()
 
     # Silence onnxruntime GPU discovery warning from the VAD
-    import_onnxruntime_quietly()
+    if not utils.import_onnxruntime_quietly():
+        print('onnxruntime not found. Run ./install.sh --listen to install it.')
+        sys.exit(1)
 
     # Load model and transcribe the microphone until stopped
     model = load_model()
@@ -51,94 +42,6 @@ def print_usage():
     print('Usage: ./speech_listen.py')
     print(f'  (no arg)  transcribe the microphone with the whisper {MODEL_SIZE} model, CTRL-C to stop')
 
-# Build the record command for this platform
-def record_command():
-    if platform.system() == 'Darwin':
-        return mac_record_command()
-    return linux_record_command()
-
-# Record from the default input device with sox
-def mac_record_command():
-    if shutil.which(MAC_RECORDER) is None:
-        print('sox not found. Run ./install.sh --listen to install it.')
-        sys.exit(1)
-    return [MAC_RECORDER, '-q', '-t', 'raw', '-b', '16', '-e', 'signed-integer', '-c', '1', '-r', str(SAMPLE_RATE), '-']
-
-# Record from the first usb microphone with arecord
-def linux_record_command():
-    card = find_capture_card()
-    if card is None:
-        print('No microphone found. Plug in a USB mic and try again.')
-        sys.exit(1)
-    return [LINUX_RECORDER, '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
-
-# Return card index for the USB microphone
-def find_capture_card():
-    # Collect USB cards that can record, skip cameras with no mic
-    result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
-    usb_cards = []
-    for line in result.stdout.splitlines():
-        if line.startswith('card') and 'USB' in line:
-            card_index = int(line.split(':')[0].split()[1])
-            if not card_is_camera(card_index):
-                usb_cards.append(card_index)
-
-    # Prefer the mic-only card, a speaker card records through a poor fallback mic
-    for card_index in usb_cards:
-        if not card_has_playback(card_index):
-            return card_index
-
-    # Otherwise take the first one
-    if usb_cards:
-        return usb_cards[0]
-    return None
-
-# Return true when this sound card is a camera, not a microphone
-def card_is_camera(card_index):
-    sound_link = f'/sys/class/sound/card{card_index}/device'
-    if not os.path.exists(sound_link):
-        return False
-    usb_device = os.path.dirname(os.path.realpath(sound_link))
-    video_dir = '/sys/class/video4linux'
-    if not os.path.isdir(video_dir):
-        return False
-    for video_name in os.listdir(video_dir):
-        video_link = os.path.join(video_dir, video_name, 'device')
-        if not os.path.exists(video_link):
-            continue
-        if os.path.dirname(os.path.realpath(video_link)) == usb_device:
-            return True
-    return False
-
-# Return true when a card has a playback stream
-def card_has_playback(card_index):
-    stream_path = f'/proc/asound/card{card_index}/stream0'
-    if not os.path.isfile(stream_path):
-        return False
-    with open(stream_path) as stream_file:
-        return 'Playback:' in stream_file.read()
-
-# Import onnxruntime with stderr muted, it warns during gpu discovery on jetson
-def import_onnxruntime_quietly():
-    stderr_fd = sys.stderr.fileno()
-    saved_fd = os.dup(stderr_fd)
-    with open(os.devnull, 'w') as devnull:
-        os.dup2(devnull.fileno(), stderr_fd)
-        try:
-            import onnxruntime
-            onnxruntime.set_default_logger_severity(3)
-            import_failed = False
-        except ImportError:
-            import_failed = True
-        finally:
-            os.dup2(saved_fd, stderr_fd)
-            os.close(saved_fd)
-
-    # Quit with install help when the listen deps are missing
-    if import_failed:
-        print('onnxruntime not found. Run ./install.sh --listen to install it.')
-        sys.exit(1)
-
 # Load whisper model on gpu when available
 def load_model():
     # Pick device
@@ -156,8 +59,8 @@ def load_model():
 
 # Record chunks from the microphone and print transcripts
 def run_transcribe_loop(model, command):
-    recorder = start_recorder(command)
-    chunk_bytes = SAMPLE_RATE * 2 * CHUNK_SECONDS
+    recorder = utils.start_recorder(command)
+    chunk_bytes = utils.SAMPLE_RATE * 2 * CHUNK_SECONDS
     print('Listening, speak now, CTRL-C to stop.', flush=True)
     try:
         while True:
@@ -178,10 +81,6 @@ def run_transcribe_loop(model, command):
 
     # Suggest the full talk loop next
     print('Next: put it all together with ./talk.py.')
-
-# Start the recorder streaming raw audio to stdout
-def start_recorder(command):
-    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 # Main
 if __name__ == '__main__':
