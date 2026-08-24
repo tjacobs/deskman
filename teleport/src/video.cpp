@@ -1,0 +1,1409 @@
+/*
+ * Video
+ *
+*/
+
+// Includes
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <climits>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <sys/stat.h>
+#include <thread>
+#include <vector>
+
+#ifdef __linux__
+#include <fcntl.h>
+#include <linux/videodev2.h>
+#include <pthread.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
+// Local
+#include "video.h"
+#include "audio.h"
+#include "call.h"
+#include "interface.h"
+
+// Namespace
+using namespace std;
+using namespace ix;
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+
+// GStreamer
+#include <gst/gst.h>
+#include <gst/sdp/sdp.h>
+#include <gst/video/video.h>
+#include <gst/webrtc/webrtc.h>
+#include <json-glib/json-glib.h>
+
+#ifdef HAVE_X11_FULLSCREEN
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#endif
+
+#endif
+
+// Track video state
+WebSocket* videoWebSocket = NULL;
+bool videoRunning = false;
+bool callMode = false;
+bool createOfferPending = false;
+bool includeAudioInPipeline = false;
+string activeCameraPath;
+string activeCameraView;
+string videoDeviceName;
+const char* CAMERA_VIEW_LEFT = "left";
+const char* CAMERA_VIEW_RIGHT = "right";
+const char* CAMERA_VIEW_FULL = "full";
+
+// Declare shared functions
+string getCameraView(string cameraView);
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+
+// Track GStreamer state
+GMainLoop* videoLoop = NULL;
+GstElement* videoPipeline = NULL;
+GstElement* videoWebrtc = NULL;
+thread videoLoopThread;
+bool videoBackendReady = false;
+bool videoCameraAvailable = true;
+int videoPayloadType = 103;
+bool remoteDescriptionSet = false;
+vector<string> pendingVideoAddresses;
+guint iceDisconnectTimerId = 0;
+const int ICE_DISCONNECT_HANGOVER_MS = 3000;
+#ifdef HAVE_X11_FULLSCREEN
+Display* videoDisplay = NULL;
+Window videoWindow = 0;
+#endif
+const int VIDEO_WIDTH = 1920;
+const int VIDEO_HEIGHT = 1080;
+const int VIDEO_PORTRAIT_WIDTH_RATIO = 9;
+const int VIDEO_PORTRAIT_HEIGHT_RATIO = 16;
+const int VIDEO_FRAMERATE = 30;
+const int VIDEO_BITRATE = 2000;
+const int LIBCAMERA_WIDTH = VIDEO_WIDTH;
+const int LIBCAMERA_HEIGHT = VIDEO_HEIGHT;
+const int LIBCAMERA_FRAMERATE = 30;
+const int VIDEO_STATE_TIMEOUT_SECONDS = 2;
+const char* VIDEO_DEFAULT_CAMERA_PATH = "0";
+const char* VIDEO_PREFERRED_CAMERA_PATH = "/dev/video6";
+const int VIDEO_MAX_INDEX = 8;
+
+// Describe camera capture format
+struct CameraFormat {
+    bool available;
+    string caps;
+    string name;
+    int width;
+    int height;
+    int framerate;
+    int widthDistance;
+    int heightDistance;
+    int framerateDistance;
+};
+
+// Declare functions
+bool initVideoBackend();
+bool isVideoCameraAvailable();
+void runVideoLoop();
+void startVideoPipeline();
+bool startParsedVideoPipeline(string pipelineString);
+string createPipelineString(bool withAudio);
+string createVideoSourceString();
+string getCameraDevice();
+CameraFormat getCameraFormat();
+string createCameraCropString(CameraFormat cameraFormat);
+CameraFormat makeDefaultCameraFormat();
+string getVideoEncoderString();
+bool isVideoHardwareEncoderAvailable();
+bool isGStreamerElementAvailable(string name);
+#ifdef __linux__
+void evaluateCameraFrameSize(int fileDescriptor, __u32 pixelFormat, string caps, string name, CameraFormat& bestFormat);
+bool isBetterCameraFormat(CameraFormat candidateFormat, CameraFormat bestFormat);
+int getIntervalFramerate(v4l2_fract interval);
+string getCameraPixelCaps(__u32 pixelFormat);
+string getCameraPixelName(__u32 pixelFormat);
+#endif
+void printCameraFormats();
+string shellQuote(string value);
+void stopVideoPipeline();
+void handleVideoOffer(string payload);
+void handleVideoAnswer(string payload);
+void handleVideoAddress(string payload);
+void applyPendingVideoAddresses();
+void createVideoOffer();
+int findH264PayloadType(const char* sdpText);
+void sendVideoDescription(GstWebRTCSessionDescription* description);
+void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidate, gpointer userData);
+void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData);
+void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData);
+gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData);
+GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer userData);
+gboolean stopVideoFromMainLoop(gpointer userData);
+void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userData);
+#ifdef HAVE_X11_FULLSCREEN
+Window ensureFullscreenVideoWindow();
+void destroyFullscreenVideoWindow();
+#endif
+void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer userData);
+gboolean iceDisconnectHangup(gpointer userData);
+void cancelIceDisconnectTimer();
+void logVideoSignalingState(GObject* object, GParamSpec* spec, gpointer userData);
+void onVideoOfferSet(GstPromise* promise, gpointer userData);
+void onVideoAnswerCreated(GstPromise* promise, gpointer userData);
+void onVideoOfferCreated(GstPromise* promise, gpointer userData);
+void onVideoAnswerSet(GstPromise* promise, gpointer userData);
+const char* videoConnectionStateName(GstWebRTCPeerConnectionState state);
+const char* videoSignalingStateName(GstWebRTCSignalingState state);
+string encodeJson(JsonObject* object);
+JsonObject* decodeJson(string payload);
+bool videoFileExists(string path);
+
+#endif
+
+// Initialize video
+void initVideoCamera(WebSocket* webSocketPointer, string deviceNameValue) {
+    // Store websocket
+    videoWebSocket = webSocketPointer;
+    videoDeviceName = deviceNameValue;
+}
+
+// Check video camera
+void checkVideoCamera(string cameraPath) {
+    // Save camera path
+    activeCameraPath = cameraPath;
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+    // Check device presence only, starting the pipeline here races libcamerasrc
+    if (!initVideoBackend()) return;
+    if (isGStreamerElementAvailable("libcamerasrc")) {
+        videoCameraAvailable = true;
+        return;
+    }
+    isVideoCameraAvailable();
+#else
+    // Log missing backend
+    cout << "GStreamer WebRTC backend is not compiled in." << endl;
+#endif
+}
+
+// Start video
+void startVideo(string cameraPath, string cameraView) {
+    // Keep the overlay in-call first so the idle loop does not stop this start
+    showCallInProgress();
+
+    // Keep the live sender, the web client and server both repeat StartVideo
+    if (videoRunning && videoPipeline) return;
+
+    // Save camera settings for web viewer path
+    activeCameraPath = cameraPath;
+    activeCameraView = getCameraView(cameraView);
+    callMode = false;
+    createOfferPending = false;
+    includeAudioInPipeline = false;
+    videoRunning = true;
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+    // Start send-only video
+    cout << "StartVideo: starting pipeline, view=" << activeCameraView << endl;
+    startVideoPipeline();
+#else
+    // Log missing backend
+    cout << "GStreamer WebRTC backend is not compiled in." << endl;
+#endif
+}
+
+// Start robot-to-robot call
+bool startCall(string cameraPath, bool createOffer) {
+    // Ignore duplicate Call messages from symmetric server relay
+    if (videoRunning && callMode) {
+        cout << "Already in a call." << endl;
+        return true;
+    }
+
+    // Save call settings
+    activeCameraPath = cameraPath;
+    activeCameraView = CAMERA_VIEW_FULL;
+    callMode = true;
+    createOfferPending = createOffer;
+    includeAudioInPipeline = true;
+    videoRunning = true;
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+    // Start bidirectional session
+    cout << (createOffer ? "Starting call as caller." : "Starting call as callee.") << endl;
+    startVideoPipeline();
+    return videoRunning && callMode;
+#else
+    failCallWithoutOffer("Call not sent");
+    return false;
+#endif
+}
+
+// True when a web view or robot call is using the camera
+bool isVideoRunning() {
+    return videoRunning;
+}
+
+// Stop video
+void stopVideo() {
+    bool sendStop = videoRunning;
+    videoRunning = false;
+    callMode = false;
+    createOfferPending = false;
+    includeAudioInPipeline = false;
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+    stopVideoPipeline();
+#endif
+
+    resumeInterfaceAfterCall();
+    showCallIdle();
+
+    if (sendStop) {
+        cout << "Stopping WebRTC video." << endl;
+        if (videoWebSocket) videoWebSocket->send(videoDeviceName + " VIDEO_STOP");
+    }
+}
+
+// Handle video signaling
+void handleVideoMessage(string command, string payload) {
+    // Handle offer
+    if (command == "VIDEO_OFFER") {
+#ifdef HAVE_GSTREAMER_WEBRTC
+        handleVideoOffer(payload);
+#else
+        cout << "Ignoring video offer, GStreamer WebRTC backend is not compiled in." << endl;
+#endif
+    }
+
+    // Handle answer
+    else if (command == "VIDEO_ANSWER") {
+#ifdef HAVE_GSTREAMER_WEBRTC
+        handleVideoAnswer(payload);
+#endif
+    }
+
+    // Handle ICE candidate
+    else if (command == "VIDEO_ADDRESS") {
+#ifdef HAVE_GSTREAMER_WEBRTC
+        handleVideoAddress(payload);
+#endif
+    }
+
+    // Stop video
+    else if (command == "VIDEO_STOP") {
+        stopVideo();
+    }
+}
+
+// Get requested camera view
+string getCameraView(string cameraView) {
+    if (cameraView == CAMERA_VIEW_LEFT || cameraView == CAMERA_VIEW_RIGHT || cameraView == CAMERA_VIEW_FULL) return cameraView;
+    if (cameraView == "both") return CAMERA_VIEW_FULL;
+    return CAMERA_VIEW_FULL;
+}
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+
+// Initialize video backend
+bool initVideoBackend() {
+    // Skip repeated init
+    if (videoBackendReady) return true;
+
+    // Initialize GStreamer
+    GError* error = NULL;
+    gboolean result = gst_init_check(NULL, NULL, &error);
+    if (!result) {
+        cout << "Failed to initialize GStreamer: " << error->message << endl;
+        g_error_free(error);
+        return false;
+    }
+
+    // Quiet expected audio setup noise
+    quietCallAudioLog();
+
+    // Check WebRTC ICE plugin
+    if (!gst_element_factory_find("nicesrc")) {
+        cout << "Missing GStreamer nice plugin. On macOS run: brew install libnice-gstreamer" << endl;
+        cout << "On Linux run: sudo apt install gstreamer1.0-nice" << endl;
+        return false;
+    }
+
+    // Start callback loop
+    videoLoop = g_main_loop_new(NULL, FALSE);
+    videoLoopThread = thread(runVideoLoop);
+    videoLoopThread.detach();
+    videoBackendReady = true;
+    return true;
+}
+
+// Run video loop
+void runVideoLoop() {
+#ifdef __linux__
+    // Name thread for htop
+    pthread_setname_np(pthread_self(), "robot_video");
+#endif
+
+    // Run GStreamer callbacks
+    g_main_loop_run(videoLoop);
+}
+
+// Stop the call without sending a VIDEO_OFFER
+static void failCallWithoutOffer(string message) {
+    cout << message << endl;
+    showCallFailed(message);
+    createOfferPending = false;
+    videoRunning = false;
+    callMode = false;
+    includeAudioInPipeline = false;
+}
+
+// Start video pipeline
+void startVideoPipeline() {
+    // Initialize backend
+    if (!initVideoBackend()) {
+        failCallWithoutOffer("Call not sent");
+        return;
+    }
+
+    // Check camera
+    if (!isVideoCameraAvailable()) {
+        failCallWithoutOffer("No camera, call not sent");
+        return;
+    }
+
+    // Let the interface peer drop the camera and speaker before we open them
+    pauseInterfaceForCall();
+
+    // Stop old pipeline
+    stopVideoPipeline();
+
+    // Prefer audio in call mode, fall back to video-only if ALSA fails
+    bool wantAudio = includeAudioInPipeline;
+    if (wantAudio && !startParsedVideoPipeline(createPipelineString(true))) {
+        cout << "***WARNING***: Call audio failed, continuing with video only." << endl;
+        wantAudio = false;
+        includeAudioInPipeline = false;
+        if (!startParsedVideoPipeline(createPipelineString(false))) {
+            resumeInterfaceAfterCall();
+            showCallFailed("Call not sent");
+            return;
+        }
+    } else if (!wantAudio) {
+        if (!startParsedVideoPipeline(createPipelineString(false))) {
+            resumeInterfaceAfterCall();
+            showCallFailed("Call not sent");
+            return;
+        }
+    }
+
+    // Caller creates the offer after the pipeline is up
+    if (createOfferPending && videoWebrtc) {
+        createOfferPending = false;
+        createVideoOffer();
+    }
+    showCallInProgress();
+}
+
+// Parse, wire, and play a pipeline string
+bool startParsedVideoPipeline(string pipelineString) {
+    // Create pipeline
+    GError* error = NULL;
+    videoPipeline = gst_parse_launch(pipelineString.c_str(), &error);
+    if (error) {
+        cout << "Failed to start video pipeline: " << error->message << endl;
+        printCameraFormats();
+        g_error_free(error);
+        videoPipeline = NULL;
+        return false;
+    }
+
+    // Get WebRTC element
+    videoWebrtc = gst_bin_get_by_name(GST_BIN(videoPipeline), "sendrecv");
+    if (!videoWebrtc) {
+        cout << "Failed to find WebRTC element." << endl;
+        stopVideoPipeline();
+        return false;
+    }
+
+    // Log pipeline messages, and catch prepare-window-handle for fullscreen
+    GstBus* bus = gst_pipeline_get_bus(GST_PIPELINE(videoPipeline));
+    gst_bus_add_watch(bus, handleVideoBusMessage, NULL);
+    gst_bus_set_sync_handler(bus, handleVideoBusSync, NULL, NULL);
+    gst_object_unref(bus);
+
+    // Add AEC probe and half duplex before PLAYING
+    attachCallAudio(videoPipeline, videoLoop);
+
+    // Register signaling callbacks
+    g_signal_connect(videoWebrtc, "on-ice-candidate", G_CALLBACK(sendVideoAddress), NULL);
+    g_signal_connect(videoWebrtc, "notify::connection-state", G_CALLBACK(logVideoConnectionState), NULL);
+    g_signal_connect(videoWebrtc, "notify::ice-connection-state", G_CALLBACK(logVideoIceConnectionState), NULL);
+    g_signal_connect(videoWebrtc, "notify::signaling-state", G_CALLBACK(logVideoSignalingState), NULL);
+
+    // Receive remote media on robot calls
+    if (callMode) g_signal_connect(videoWebrtc, "pad-added", G_CALLBACK(onIncomingStream), NULL);
+
+    // Start pipeline
+    GstStateChangeReturn result = gst_element_set_state(videoPipeline, GST_STATE_PLAYING);
+    if (result == GST_STATE_CHANGE_FAILURE) {
+        cout << "Failed to play video pipeline." << endl;
+        printCameraFormats();
+        stopVideoPipeline();
+        return false;
+    }
+
+    // Wait briefly so camera startup errors appear immediately
+    GstState state;
+    GstState pendingState;
+    result = gst_element_get_state(videoPipeline, &state, &pendingState, VIDEO_STATE_TIMEOUT_SECONDS * GST_SECOND);
+    if (result == GST_STATE_CHANGE_FAILURE) {
+        cout << "Failed while starting video pipeline." << endl;
+        printCameraFormats();
+        stopVideoPipeline();
+        return false;
+    }
+
+    // Pipeline is running
+    cout << "Video pipeline playing." << endl;
+    return true;
+}
+
+// Check if video camera is available
+bool isVideoCameraAvailable() {
+#ifdef __APPLE__
+    // Assume AVFoundation can resolve camera index
+    videoCameraAvailable = true;
+    return true;
+#else
+    // Check V4L2 camera path
+    string cameraDevice = getCameraDevice();
+    cout << "Call camera:  " << cameraDevice << endl;
+    videoCameraAvailable = videoFileExists(cameraDevice);
+    if (!videoCameraAvailable) cout << "***WARNING***: No camera connected at " << cameraDevice << "." << endl;
+    return videoCameraAvailable;
+#endif
+}
+
+// Create pipeline string
+string createPipelineString(bool withAudio) {
+    // Build webrtcbin with local video, and optional mic audio
+    string pipeline = "webrtcbin bundle-policy=max-bundle name=sendrecv latency=20 stun-server=stun://stun.l.google.com:19302 "
+        + createVideoSourceString();
+    if (withAudio) pipeline += " " + createAudioSourceString();
+    return pipeline;
+}
+
+// Create local video source branch
+string createVideoSourceString() {
+#ifdef __APPLE__
+    // Use Mac webcam
+    string cameraIndex = activeCameraPath == "/dev/video0" ? "0" : activeCameraPath;
+    string payloadType = to_string(videoPayloadType);
+    string encoder = getVideoEncoderString();
+    return "avfvideosrc name=robotcam device-index=" + cameraIndex + " ! videoconvert name=robotconvert ! " + encoder + " ! video/x-h264,profile=baseline ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + " ! sendrecv.";
+#else
+    string payloadType = to_string(videoPayloadType);
+    string encoder = getVideoEncoderString();
+
+    // Pi cameras use libcamera; discrete V4L2 JPEG is unavailable on Pi 5
+    if (isGStreamerElementAvailable("libcamerasrc")) {
+        CameraFormat cameraFormat = {true, "video/x-raw", "libcamera", LIBCAMERA_WIDTH, LIBCAMERA_HEIGHT, LIBCAMERA_FRAMERATE, 0, 0, 0};
+        string cameraCrop = createCameraCropString(cameraFormat);
+        cout << "Using libcamerasrc for WebRTC video at " << LIBCAMERA_WIDTH << "x" << LIBCAMERA_HEIGHT << "." << endl;
+        return "libcamerasrc name=robotcam ! video/x-raw,format=RGB,width=" + to_string(LIBCAMERA_WIDTH) + ",height=" + to_string(LIBCAMERA_HEIGHT) + ",framerate=" + to_string(LIBCAMERA_FRAMERATE) + "/1 ! "
+            + cameraCrop +
+            "videoconvert name=robotconvert ! " + encoder + " ! "
+            "h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! "
+            "application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + " ! sendrecv.";
+    }
+
+    // Use MJPEG or YUYV V4L2 camera and encode H264
+    string cameraDevice = getCameraDevice();
+    CameraFormat cameraFormat = getCameraFormat();
+    string cameraCrop = createCameraCropString(cameraFormat);
+    string decoder = cameraFormat.caps == "image/jpeg" ? "jpegdec name=robotjpeg ! " : "";
+    return "v4l2src name=robotcam device=" + cameraDevice + " ! " + cameraFormat.caps + ",width=" + to_string(cameraFormat.width) + ",height=" + to_string(cameraFormat.height) + ",framerate=" + to_string(cameraFormat.framerate) + "/1 ! " + decoder + cameraCrop + "videoconvert name=robotconvert ! " + encoder + " ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + " ! sendrecv.";
+#endif
+}
+
+// Get camera device path
+string getCameraDevice() {
+#ifndef __APPLE__
+    // Prefer video6, then the first present /dev/videoN, when using the default camera
+    if (activeCameraPath == VIDEO_DEFAULT_CAMERA_PATH) {
+        if (videoFileExists(VIDEO_PREFERRED_CAMERA_PATH)) return VIDEO_PREFERRED_CAMERA_PATH;
+        for (int index = 0; index <= VIDEO_MAX_INDEX; index++) {
+            string path = "/dev/video" + to_string(index);
+            if (videoFileExists(path)) return path;
+        }
+    }
+#endif
+
+    // Resolve numeric camera values
+    return activeCameraPath.find("/") == string::npos ? "/dev/video" + activeCameraPath : activeCameraPath;
+}
+
+// Get closest supported camera format
+CameraFormat getCameraFormat() {
+    // Start with requested format
+    CameraFormat bestFormat = makeDefaultCameraFormat();
+
+#ifdef __linux__
+    // Open camera device
+    string cameraDevice = getCameraDevice();
+    int fileDescriptor = open(cameraDevice.c_str(), O_RDONLY | O_NONBLOCK);
+    if (fileDescriptor < 0) return bestFormat;
+
+    // Enumerate pixel formats
+    v4l2_fmtdesc pixelFormat;
+    memset(&pixelFormat, 0, sizeof(pixelFormat));
+    pixelFormat.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    while (ioctl(fileDescriptor, VIDIOC_ENUM_FMT, &pixelFormat) == 0) {
+        string caps = getCameraPixelCaps(pixelFormat.pixelformat);
+        string name = getCameraPixelName(pixelFormat.pixelformat);
+        if (!caps.empty()) evaluateCameraFrameSize(fileDescriptor, pixelFormat.pixelformat, caps, name, bestFormat);
+        pixelFormat.index++;
+    }
+
+    // Close camera device
+    close(fileDescriptor);
+
+    // Log selected format
+    if (bestFormat.available) {
+        cout << "Selected camera format: " << bestFormat.name << " " << bestFormat.width << "x" << bestFormat.height << " @" << bestFormat.framerate << " fps." << endl;
+    } else {
+        cout << "No suitable enumerated camera format found, requesting default format." << endl;
+    }
+#endif
+
+    // Return selected format
+    return bestFormat;
+}
+
+// Create camera crop pipeline
+string createCameraCropString(CameraFormat cameraFormat) {
+    int width = cameraFormat.width;
+    int height = cameraFormat.height;
+    string crop;
+
+    // Crop side by side stereo frames only when the image is two views wide
+    int cameraSideWidth = cameraFormat.width / 2;
+    bool stereoFrame = cameraFormat.width >= cameraFormat.height * 2;
+    if (stereoFrame && activeCameraView == CAMERA_VIEW_LEFT) {
+        crop += "videocrop name=robotcrop right=" + to_string(cameraSideWidth) + " ! video/x-raw,width=" + to_string(cameraSideWidth) + ",height=" + to_string(height) + " ! ";
+        width = cameraSideWidth;
+    } else if (stereoFrame && activeCameraView == CAMERA_VIEW_RIGHT) {
+        crop += "videocrop name=robotcrop left=" + to_string(cameraSideWidth) + " ! video/x-raw,width=" + to_string(cameraSideWidth) + ",height=" + to_string(height) + " ! ";
+        width = cameraSideWidth;
+    }
+
+    // Center crop landscape frames to portrait, cameras do not offer a tall mode
+    if (width > height) {
+        int cropWidth = height * VIDEO_PORTRAIT_WIDTH_RATIO / VIDEO_PORTRAIT_HEIGHT_RATIO;
+        cropWidth = cropWidth & ~1;
+        if (cropWidth < 2) cropWidth = 2;
+        if (cropWidth < width) {
+            int extra = width - cropWidth;
+            int left = (extra / 2) & ~1;
+            int right = width - cropWidth - left;
+            crop += "videocrop name=robotportrait left=" + to_string(left) + " right=" + to_string(right) + " ! video/x-raw,width=" + to_string(cropWidth) + ",height=" + to_string(height) + " ! ";
+            cout << "Portrait crop " << cropWidth << "x" << height << " from " << width << "x" << height << endl;
+        }
+    }
+    return crop;
+}
+
+// Make requested camera format
+CameraFormat makeDefaultCameraFormat() {
+    // Build default format
+    CameraFormat format;
+    format.available = false;
+    format.caps = "image/jpeg";
+    format.name = "MJPG";
+    format.width = VIDEO_WIDTH;
+    format.height = VIDEO_HEIGHT;
+    format.framerate = VIDEO_FRAMERATE;
+    format.widthDistance = INT_MAX;
+    format.heightDistance = INT_MAX;
+    format.framerateDistance = INT_MAX;
+    return format;
+}
+
+// Get H264 encoder pipeline
+string getVideoEncoderString() {
+#ifdef __APPLE__
+    // Use software H264 encoding on Mac
+    cout << "Using software H264 encoder x264enc." << endl;
+    return "x264enc name=robotenc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=" + to_string(VIDEO_BITRATE);
+#else
+    // Prefer Jetson hardware H264 encoding
+    if (isVideoHardwareEncoderAvailable()) {
+        cout << "Using hardware H264 encoder nvv4l2h264enc." << endl;
+        return "video/x-raw,format=I420 ! nvvidconv name=robotnvconvert ! video/x-raw(memory:NVMM),format=NV12 ! nvv4l2h264enc name=robotenc insert-sps-pps=true iframeinterval=30 bitrate=" + to_string(VIDEO_BITRATE * 1000) + " ! video/x-h264,stream-format=byte-stream,profile=baseline";
+    }
+
+    // Prefer x264, then OpenH264 on boards without x264enc
+    if (isGStreamerElementAvailable("x264enc")) {
+        cout << "Using software H264 encoder x264enc." << endl;
+        return "video/x-raw,format=I420 ! x264enc name=robotenc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=" + to_string(VIDEO_BITRATE) + " ! video/x-h264,profile=baseline";
+    }
+    cout << "Using software H264 encoder openh264enc." << endl;
+    return "video/x-raw,format=I420 ! openh264enc name=robotenc bitrate=" + to_string(VIDEO_BITRATE * 1000) + " ! video/x-h264,profile=baseline";
+#endif
+}
+
+// Check hardware encoder plugin
+bool isVideoHardwareEncoderAvailable() {
+#ifdef __linux__
+    // Check Jetson H264 encoder elements
+    return isGStreamerElementAvailable("nvv4l2h264enc") && isGStreamerElementAvailable("nvvidconv");
+#else
+    // Hardware encoder is only configured for Linux
+    return false;
+#endif
+}
+
+// Check GStreamer element
+bool isGStreamerElementAvailable(string name) {
+    // Query element factory
+    GstElementFactory* factory = gst_element_factory_find(name.c_str());
+    if (!factory) return false;
+    gst_object_unref(factory);
+    return true;
+}
+
+#ifdef __linux__
+
+// Evaluate camera frame sizes
+void evaluateCameraFrameSize(int fileDescriptor, __u32 pixelFormat, string caps, string name, CameraFormat& bestFormat) {
+    // Enumerate frame sizes
+    v4l2_frmsizeenum frameSize;
+    memset(&frameSize, 0, sizeof(frameSize));
+    frameSize.pixel_format = pixelFormat;
+    while (ioctl(fileDescriptor, VIDIOC_ENUM_FRAMESIZES, &frameSize) == 0) {
+        if (frameSize.type == V4L2_FRMSIZE_TYPE_DISCRETE) {
+            // Enumerate frame intervals
+            v4l2_frmivalenum frameInterval;
+            memset(&frameInterval, 0, sizeof(frameInterval));
+            frameInterval.pixel_format = pixelFormat;
+            frameInterval.width = frameSize.discrete.width;
+            frameInterval.height = frameSize.discrete.height;
+            while (ioctl(fileDescriptor, VIDIOC_ENUM_FRAMEINTERVALS, &frameInterval) == 0) {
+                int framerate = frameInterval.type == V4L2_FRMIVAL_TYPE_DISCRETE ? getIntervalFramerate(frameInterval.discrete) : VIDEO_FRAMERATE;
+                CameraFormat candidateFormat = {true, caps, name, (int)frameSize.discrete.width, (int)frameSize.discrete.height, framerate, abs((int)frameSize.discrete.width - VIDEO_WIDTH), abs((int)frameSize.discrete.height - VIDEO_HEIGHT), abs(framerate - VIDEO_FRAMERATE)};
+                if (isBetterCameraFormat(candidateFormat, bestFormat)) bestFormat = candidateFormat;
+                frameInterval.index++;
+            }
+        }
+        frameSize.index++;
+    }
+}
+
+// Compare camera formats
+bool isBetterCameraFormat(CameraFormat candidateFormat, CameraFormat bestFormat) {
+    // Prefer the closest requested framerate
+    if (!bestFormat.available) return true;
+    if (candidateFormat.framerateDistance != bestFormat.framerateDistance) return candidateFormat.framerateDistance < bestFormat.framerateDistance;
+    if (candidateFormat.widthDistance != bestFormat.widthDistance) return candidateFormat.widthDistance < bestFormat.widthDistance;
+    if (candidateFormat.heightDistance != bestFormat.heightDistance) return candidateFormat.heightDistance < bestFormat.heightDistance;
+    if (candidateFormat.caps != bestFormat.caps) return candidateFormat.caps == "image/jpeg";
+    return false;
+}
+
+// Convert frame interval to framerate
+int getIntervalFramerate(v4l2_fract interval) {
+    // Round frames per second
+    if (!interval.numerator) return VIDEO_FRAMERATE;
+    return (interval.denominator + interval.numerator / 2) / interval.numerator;
+}
+
+// Get GStreamer caps for pixel format
+string getCameraPixelCaps(__u32 pixelFormat) {
+    // Map supported formats
+    if (pixelFormat == V4L2_PIX_FMT_MJPEG) return "image/jpeg";
+    if (pixelFormat == V4L2_PIX_FMT_YUYV) return "video/x-raw,format=YUY2";
+    return "";
+}
+
+// Get readable pixel format name
+string getCameraPixelName(__u32 pixelFormat) {
+    // Map supported formats
+    if (pixelFormat == V4L2_PIX_FMT_MJPEG) return "MJPG";
+    if (pixelFormat == V4L2_PIX_FMT_YUYV) return "YUYV";
+    return "unknown";
+}
+
+#endif
+
+// Stop video pipeline
+void cancelIceDisconnectTimer() {
+    if (iceDisconnectTimerId) {
+        g_source_remove(iceDisconnectTimerId);
+        iceDisconnectTimerId = 0;
+    }
+}
+
+void stopVideoPipeline() {
+    // Stop pipeline
+    cancelIceDisconnectTimer();
+    stopCallAudio();
+    if (videoPipeline) gst_element_set_state(videoPipeline, GST_STATE_NULL);
+    if (videoWebrtc) gst_object_unref(videoWebrtc);
+    if (videoPipeline) gst_object_unref(videoPipeline);
+    videoWebrtc = NULL;
+    videoPipeline = NULL;
+    remoteDescriptionSet = false;
+    pendingVideoAddresses.clear();
+
+#ifdef HAVE_X11_FULLSCREEN
+    // Close the fullscreen remote video window
+    destroyFullscreenVideoWindow();
+#endif
+}
+
+// Handle video offer
+void handleVideoOffer(string payload) {
+    // Decode offer
+    JsonObject* object = decodeJson(payload);
+    const char* type = json_object_get_string_member(object, "type");
+    const char* sdpText = json_object_get_string_member(object, "sdp");
+    if (!type || !sdpText || !g_str_equal(type, "offer")) {
+        cout << "Ignoring non-offer video description." << endl;
+        json_object_unref(object);
+        return;
+    }
+
+    // Match browser H264 payload type for web viewers
+    videoPayloadType = findH264PayloadType(sdpText);
+
+    // Skip if camera is unavailable
+    if (!videoCameraAvailable) {
+        cout << "VIDEO_OFFER ignored, camera unavailable." << endl;
+        json_object_unref(object);
+        return;
+    }
+
+    // A new browser offer needs a fresh webrtcbin, keep the first StartVideo from tearing the camera down twice
+    if (videoPipeline && remoteDescriptionSet) stopVideoPipeline();
+    if (!videoPipeline) startVideoPipeline();
+    if (!videoWebrtc) {
+        cout << "VIDEO_OFFER ignored, no webrtcbin." << endl;
+        json_object_unref(object);
+        return;
+    }
+
+    // Parse SDP
+    GstSDPMessage* sdp = NULL;
+    gst_sdp_message_new(&sdp);
+    gst_sdp_message_parse_buffer((guint8*)sdpText, strlen(sdpText), sdp);
+
+    // Set remote offer
+    GstWebRTCSessionDescription* offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
+    GstPromise* promise = gst_promise_new_with_change_func(onVideoOfferSet, NULL, NULL);
+    g_signal_emit_by_name(videoWebrtc, "set-remote-description", offer, promise);
+    gst_webrtc_session_description_free(offer);
+    json_object_unref(object);
+}
+
+// Handle video answer
+void handleVideoAnswer(string payload) {
+    // Decode answer
+    JsonObject* object = decodeJson(payload);
+    const char* type = json_object_get_string_member(object, "type");
+    const char* sdpText = json_object_get_string_member(object, "sdp");
+    if (!type || !sdpText || !g_str_equal(type, "answer")) {
+        cout << "Ignoring non-answer video description." << endl;
+        json_object_unref(object);
+        return;
+    }
+
+    // Need an active caller pipeline
+    if (!videoWebrtc) {
+        cout << "VIDEO_ANSWER ignored, no webrtcbin." << endl;
+        json_object_unref(object);
+        return;
+    }
+
+    // Parse SDP
+    GstSDPMessage* sdp = NULL;
+    gst_sdp_message_new(&sdp);
+    gst_sdp_message_parse_buffer((guint8*)sdpText, strlen(sdpText), sdp);
+
+    // Set remote answer
+    GstWebRTCSessionDescription* answer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_ANSWER, sdp);
+    GstPromise* promise = gst_promise_new_with_change_func(onVideoAnswerSet, NULL, NULL);
+    g_signal_emit_by_name(videoWebrtc, "set-remote-description", answer, promise);
+    gst_webrtc_session_description_free(answer);
+    json_object_unref(object);
+}
+
+// Create local offer as call caller
+void createVideoOffer() {
+    // Need an active pipeline
+    if (!videoWebrtc) return;
+
+    // Create offer
+    GstPromise* promise = gst_promise_new_with_change_func(onVideoOfferCreated, NULL, NULL);
+    g_signal_emit_by_name(videoWebrtc, "create-offer", NULL, promise);
+}
+
+// Find H264 payload type
+int findH264PayloadType(const char* sdpText) {
+    // Read SDP text
+    string sdp = sdpText;
+    string marker = "a=rtpmap:";
+    string codec = " H264/90000";
+    size_t codecPosition = sdp.find(codec);
+    if (codecPosition == string::npos) return videoPayloadType;
+
+    // Find payload type line
+    size_t lineStart = sdp.rfind(marker, codecPosition);
+    if (lineStart == string::npos) return videoPayloadType;
+    lineStart += marker.size();
+
+    // Parse payload type
+    size_t lineEnd = sdp.find(" ", lineStart);
+    string payloadType = sdp.substr(lineStart, lineEnd - lineStart);
+    return atoi(payloadType.c_str());
+}
+
+// Handle video address
+void handleVideoAddress(string payload) {
+    // Decode candidate
+    JsonObject* object = decodeJson(payload);
+    const char* candidate = json_object_get_string_member(object, "candidate");
+    int mediaLineIndex = json_object_get_int_member(object, "sdpMLineIndex");
+
+    if (!candidate || !candidate[0]) {
+        json_object_unref(object);
+        return;
+    }
+
+    // Hold addresses until the remote description is on this webrtcbin
+    if (!videoWebrtc || !remoteDescriptionSet) {
+        pendingVideoAddresses.push_back(payload);
+        json_object_unref(object);
+        return;
+    }
+
+    g_signal_emit_by_name(videoWebrtc, "add-ice-candidate", mediaLineIndex, candidate);
+    json_object_unref(object);
+}
+
+// Add addresses that arrived before the remote description
+void applyPendingVideoAddresses() {
+    if (!videoWebrtc || !remoteDescriptionSet) return;
+    vector<string> addresses = pendingVideoAddresses;
+    pendingVideoAddresses.clear();
+    for (const string& address : addresses) handleVideoAddress(address);
+}
+
+// Send video description
+void sendVideoDescription(GstWebRTCSessionDescription* description) {
+    // Build description
+    gchar* sdpText = gst_sdp_message_as_text(description->sdp);
+    const char* typeName = description->type == GST_WEBRTC_SDP_TYPE_OFFER ? "offer" : "answer";
+    const char* command = description->type == GST_WEBRTC_SDP_TYPE_OFFER ? "VIDEO_OFFER" : "VIDEO_ANSWER";
+    JsonObject* object = json_object_new();
+    json_object_set_string_member(object, "type", typeName);
+    json_object_set_string_member(object, "sdp", sdpText);
+
+    // Send offer or answer
+    string payload = encodeJson(object);
+    if (videoWebSocket) videoWebSocket->send(videoDeviceName + " " + command + " " + payload);
+    json_object_unref(object);
+    g_free(sdpText);
+}
+
+// Handle remote WebRTC stream pad
+void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData) {
+    // Ignore unused values
+    (void)element;
+    (void)userData;
+
+    // Only link source pads once
+    if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC) return;
+    if (gst_pad_is_linked(pad)) return;
+
+    // Decode remote RTP with decodebin
+    GstElement* decodebin = gst_element_factory_make("decodebin", NULL);
+    if (!decodebin) {
+        cout << "Failed to create decodebin for remote stream." << endl;
+        return;
+    }
+    gst_bin_add(GST_BIN(videoPipeline), decodebin);
+    g_signal_connect(decodebin, "pad-added", G_CALLBACK(onDecodedStream), NULL);
+    gst_element_sync_state_with_parent(decodebin);
+
+    // Link webrtcbin pad into decodebin
+    GstPad* sinkPad = gst_element_get_static_pad(decodebin, "sink");
+    GstPadLinkReturn linkResult = gst_pad_link(pad, sinkPad);
+    gst_object_unref(sinkPad);
+    if (linkResult != GST_PAD_LINK_OK) cout << "Failed to link remote WebRTC pad." << endl;
+}
+
+// Handle decoded remote audio or video
+void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
+    // Ignore unused values
+    (void)decodebin;
+    (void)userData;
+
+    // Read media type from caps
+    GstCaps* caps = gst_pad_get_current_caps(pad);
+    if (!caps) caps = gst_pad_query_caps(pad, NULL);
+    if (!caps) return;
+    const GstStructure* structure = gst_caps_get_structure(caps, 0);
+    const gchar* mediaName = gst_structure_get_name(structure);
+    bool isVideo = g_str_has_prefix(mediaName, "video/");
+    bool isAudio = g_str_has_prefix(mediaName, "audio/");
+    gst_caps_unref(caps);
+    if (!isVideo && !isAudio) return;
+
+    // Play remote video fullscreen on the local display
+    if (isVideo) {
+        GstElement* queue = gst_element_factory_make("queue", NULL);
+        GstElement* convert = NULL;
+        GstElement* sink = NULL;
+
+        // Prefer Jetson NVMM sink, X video otherwise
+        if (isGStreamerElementAvailable("nv3dsink") && isGStreamerElementAvailable("nvvidconv")) {
+            convert = gst_element_factory_make("nvvidconv", NULL);
+            sink = gst_element_factory_make("nv3dsink", "remotesink");
+            cout << "Using nv3dsink for remote video." << endl;
+        } else {
+            convert = gst_element_factory_make("videoconvert", NULL);
+            sink = gst_element_factory_make("xvimagesink", "remotesink");
+            if (!sink) sink = gst_element_factory_make("ximagesink", "remotesink");
+            if (!sink) sink = gst_element_factory_make("autovideosink", "remotesink");
+        }
+        if (!queue || !convert || !sink) {
+            cout << "Failed to create remote video sink." << endl;
+            return;
+        }
+        g_object_set(queue, "max-size-buffers", 2, "max-size-time", 0, "max-size-bytes", 0, "leaky", 2, NULL);
+        g_object_set(sink, "sync", FALSE, NULL);
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "force-aspect-ratio")) {
+            g_object_set(sink, "force-aspect-ratio", TRUE, NULL);
+        }
+        gst_bin_add_many(GST_BIN(videoPipeline), queue, convert, sink, NULL);
+        gst_element_sync_state_with_parent(queue);
+        gst_element_sync_state_with_parent(convert);
+        gst_element_sync_state_with_parent(sink);
+        gst_element_link_many(queue, convert, sink, NULL);
+        GstPad* sinkPad = gst_element_get_static_pad(queue, "sink");
+        gst_pad_link(pad, sinkPad);
+        gst_object_unref(sinkPad);
+        cout << "Linked remote video stream." << endl;
+        return;
+    }
+
+    linkRemoteAudioPad(videoPipeline, pad);
+}
+
+// Send video address
+void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidate, gpointer userData) {
+    // Ignore unused values
+    (void)element;
+    (void)userData;
+
+    // Build candidate
+    JsonObject* object = json_object_new();
+    json_object_set_string_member(object, "candidate", candidate);
+    json_object_set_int_member(object, "sdpMLineIndex", mediaLineIndex);
+    json_object_set_string_member(object, "sdpMid", "0");
+
+    // Send candidate
+    string payload = encodeJson(object);
+    if (videoWebSocket) videoWebSocket->send(videoDeviceName + " VIDEO_ADDRESS " + payload);
+    json_object_unref(object);
+}
+
+#ifdef HAVE_X11_FULLSCREEN
+// Create or reuse a fullscreen X11 window for remote video
+Window ensureFullscreenVideoWindow() {
+    // Open the local display
+    if (!videoDisplay) videoDisplay = XOpenDisplay(NULL);
+    if (!videoDisplay) {
+        cout << "Failed to open X11 display for fullscreen video." << endl;
+        return 0;
+    }
+    if (videoWindow) return videoWindow;
+
+    // Create a black window covering the screen
+    int screen = DefaultScreen(videoDisplay);
+    int width = DisplayWidth(videoDisplay, screen);
+    int height = DisplayHeight(videoDisplay, screen);
+    videoWindow = XCreateSimpleWindow(videoDisplay, RootWindow(videoDisplay, screen), 0, 0, width, height, 0, BlackPixel(videoDisplay, screen), BlackPixel(videoDisplay, screen));
+    XStoreName(videoDisplay, videoWindow, "Teleport");
+
+    // Ask the window manager for fullscreen
+    Atom wmState = XInternAtom(videoDisplay, "_NET_WM_STATE", False);
+    Atom wmFullscreen = XInternAtom(videoDisplay, "_NET_WM_STATE_FULLSCREEN", False);
+    XChangeProperty(videoDisplay, videoWindow, wmState, XA_ATOM, 32, PropModeReplace, (unsigned char*)&wmFullscreen, 1);
+
+    // Show the window
+    XMapRaised(videoDisplay, videoWindow);
+    XSync(videoDisplay, False);
+    cout << "Remote video fullscreen " << width << "x" << height << endl;
+    return videoWindow;
+}
+
+// Destroy the fullscreen remote video window
+void destroyFullscreenVideoWindow() {
+    if (!videoDisplay || !videoWindow) return;
+    XDestroyWindow(videoDisplay, videoWindow);
+    XSync(videoDisplay, False);
+    videoWindow = 0;
+}
+#endif
+
+// Catch prepare-window-handle so remote video renders into our fullscreen window
+GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer userData) {
+    (void)bus;
+    (void)userData;
+
+#ifdef HAVE_X11_FULLSCREEN
+    // Bind the video sink to the fullscreen X11 window
+    if (gst_is_video_overlay_prepare_window_handle_message(message)) {
+        Window window = ensureFullscreenVideoWindow();
+        if (window) {
+            gst_video_overlay_set_window_handle(GST_VIDEO_OVERLAY(GST_MESSAGE_SRC(message)), (guintptr)window);
+            gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(GST_MESSAGE_SRC(message)), 0, 0, -1, -1);
+        }
+        gst_message_unref(message);
+        return GST_BUS_DROP;
+    }
+#endif
+
+    return GST_BUS_PASS;
+}
+
+// Handle video bus message
+gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData) {
+    // Ignore unused values
+    (void)bus;
+    (void)userData;
+
+    // Element messages need no handling
+    if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ELEMENT) return TRUE;
+
+    // Log errors
+    if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_ERROR) {
+        GError* error = NULL;
+        gchar* debug = NULL;
+        gst_message_parse_error(message, &error, &debug);
+        string errorMessage = error ? error->message : "";
+        string debugMessage = debug ? debug : "";
+
+        // USB sound card unplugged or bumped loose, log once and skip camera dump
+        if (isCallAudioDisconnectMessage(errorMessage, debugMessage)) {
+            if (shouldLogCallAudioDisconnect()) cout << "Audio device disconnected." << endl;
+        } else if (errorMessage.find("Cannot identify device") != string::npos || debugMessage.find("No such file or directory") != string::npos) {
+            cout << "No camera connected." << endl;
+            printCameraFormats();
+        } else {
+            cout << "GStreamer error: " << errorMessage << endl;
+            if (debug) cout << "GStreamer debug: " << debug << endl;
+        }
+        g_clear_error(&error);
+        g_free(debug);
+    }
+
+    // Log warnings, skip expected mic backlog and audio-disconnect repeats
+    else if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_WARNING) {
+        GError* error = NULL;
+        gchar* debug = NULL;
+        gst_message_parse_warning(message, &error, &debug);
+        string warningMessage = error ? error->message : "";
+        string debugMessage = debug ? debug : "";
+        bool skipWarning = warningMessage.find("Can't record audio fast enough") != string::npos ||
+            isCallAudioDisconnectMessage(warningMessage, debugMessage);
+        if (!skipWarning) {
+            cout << "GStreamer warning: " << warningMessage << endl;
+            if (debug) cout << "GStreamer debug: " << debug << endl;
+        }
+        g_clear_error(&error);
+        g_free(debug);
+    }
+
+    // Keep watch active
+    return TRUE;
+}
+
+// Stop video from the GStreamer main loop after the peer drops
+gboolean stopVideoFromMainLoop(gpointer userData) {
+    (void)userData;
+    if (!videoRunning) return G_SOURCE_REMOVE;
+    cout << "Remote peer disconnected, closing video." << endl;
+    stopVideo();
+    return G_SOURCE_REMOVE;
+}
+
+// Log connection state
+void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userData) {
+    // Ignore unused values
+    (void)spec;
+    (void)userData;
+
+    // Read state
+    GstWebRTCPeerConnectionState state;
+    g_object_get(object, "connection-state", &state, NULL);
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED ||
+        state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED ||
+        state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED) {
+        cout << "WebRTC connection " << videoConnectionStateName(state) << endl;
+        g_idle_add(stopVideoFromMainLoop, NULL);
+    }
+}
+
+// Log ICE connection state
+gboolean iceDisconnectHangup(gpointer userData) {
+    (void)userData;
+    iceDisconnectTimerId = 0;
+    if (!videoRunning) return G_SOURCE_REMOVE;
+    cout << "WebRTC ICE disconnected, closing video." << endl;
+    stopVideo();
+    return G_SOURCE_REMOVE;
+}
+
+void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer userData) {
+    (void)spec;
+    (void)userData;
+
+    GstWebRTCICEConnectionState state;
+    g_object_get(object, "ice-connection-state", &state, NULL);
+
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED ||
+        state == GST_WEBRTC_ICE_CONNECTION_STATE_COMPLETED) {
+        cancelIceDisconnectTimer();
+        return;
+    }
+
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_FAILED ||
+        state == GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED) {
+        cout << "WebRTC ICE failed." << endl;
+        g_idle_add(stopVideoFromMainLoop, NULL);
+        return;
+    }
+
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED && videoRunning && videoLoop && !iceDisconnectTimerId) {
+        GSource* source = g_timeout_source_new(ICE_DISCONNECT_HANGOVER_MS);
+        g_source_set_callback(source, iceDisconnectHangup, NULL, NULL);
+        iceDisconnectTimerId = g_source_attach(source, g_main_loop_get_context(videoLoop));
+        g_source_unref(source);
+    }
+}
+
+// Log signaling state
+void logVideoSignalingState(GObject* object, GParamSpec* spec, gpointer userData) {
+    // Ignore unused values
+    (void)spec;
+    (void)userData;
+
+    // Read state
+    GstWebRTCSignalingState state;
+    g_object_get(object, "signaling-state", &state, NULL);
+    if (state == GST_WEBRTC_SIGNALING_STATE_CLOSED) cout << "WebRTC signaling closed." << endl;
+}
+
+// Name peer connection state
+const char* videoConnectionStateName(GstWebRTCPeerConnectionState state) {
+    // Map state
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_NEW) return "new";
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTING) return "connecting";
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED) return "connected";
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED) return "disconnected";
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED) return "failed";
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED) return "closed";
+    return "unknown";
+}
+
+// Name signaling state
+const char* videoSignalingStateName(GstWebRTCSignalingState state) {
+    // Map state
+    if (state == GST_WEBRTC_SIGNALING_STATE_STABLE) return "stable";
+    if (state == GST_WEBRTC_SIGNALING_STATE_HAVE_LOCAL_OFFER) return "have-local-offer";
+    if (state == GST_WEBRTC_SIGNALING_STATE_HAVE_REMOTE_OFFER) return "have-remote-offer";
+    if (state == GST_WEBRTC_SIGNALING_STATE_HAVE_LOCAL_PRANSWER) return "have-local-pranswer";
+    if (state == GST_WEBRTC_SIGNALING_STATE_HAVE_REMOTE_PRANSWER) return "have-remote-pranswer";
+    if (state == GST_WEBRTC_SIGNALING_STATE_CLOSED) return "closed";
+    return "unknown";
+}
+
+// Handle offer set
+void onVideoOfferSet(GstPromise* promise, gpointer userData) {
+    // Ignore unused value
+    (void)userData;
+
+    // Log offer
+    remoteDescriptionSet = true;
+    applyPendingVideoAddresses();
+
+    // Create answer
+    gst_promise_unref(promise);
+    promise = gst_promise_new_with_change_func(onVideoAnswerCreated, NULL, NULL);
+    g_signal_emit_by_name(videoWebrtc, "create-answer", NULL, promise);
+}
+
+// Handle answer created
+void onVideoAnswerCreated(GstPromise* promise, gpointer userData) {
+    // Ignore unused value
+    (void)userData;
+
+    // Read answer
+    GstWebRTCSessionDescription* answer = NULL;
+    const GstStructure* reply = gst_promise_get_reply(promise);
+    if (reply) gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
+    gst_promise_unref(promise);
+    if (!answer) {
+        cout << "Failed to create video answer." << endl;
+        return;
+    }
+
+    // Set local answer
+    promise = gst_promise_new();
+    g_signal_emit_by_name(videoWebrtc, "set-local-description", answer, promise);
+    gst_promise_interrupt(promise);
+    gst_promise_unref(promise);
+
+    sendVideoDescription(answer);
+    gst_webrtc_session_description_free(answer);
+}
+
+// Handle offer created
+void onVideoOfferCreated(GstPromise* promise, gpointer userData) {
+    // Ignore unused value
+    (void)userData;
+
+    // Read offer
+    GstWebRTCSessionDescription* offer = NULL;
+    const GstStructure* reply = gst_promise_get_reply(promise);
+    if (reply) gst_structure_get(reply, "offer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &offer, NULL);
+    gst_promise_unref(promise);
+    if (!offer) {
+        cout << "Failed to create video offer." << endl;
+        return;
+    }
+
+    // Set local offer
+    promise = gst_promise_new();
+    g_signal_emit_by_name(videoWebrtc, "set-local-description", offer, promise);
+    gst_promise_interrupt(promise);
+    gst_promise_unref(promise);
+
+    sendVideoDescription(offer);
+    gst_webrtc_session_description_free(offer);
+}
+
+// Handle remote answer set
+void onVideoAnswerSet(GstPromise* promise, gpointer userData) {
+    // Ignore unused value
+    (void)userData;
+
+    // Log answer
+    remoteDescriptionSet = true;
+    applyPendingVideoAddresses();
+    gst_promise_unref(promise);
+}
+
+// Encode JSON
+string encodeJson(JsonObject* object) {
+    // Serialize JSON
+    JsonNode* root = json_node_init_object(json_node_alloc(), object);
+    JsonGenerator* generator = json_generator_new();
+    json_generator_set_root(generator, root);
+    gchar* text = json_generator_to_data(generator, NULL);
+
+    // Encode JSON
+    gchar* encoded = g_base64_encode((guchar*)text, strlen(text));
+    string payload = encoded;
+
+    // Release JSON
+    g_free(encoded);
+    g_free(text);
+    g_object_unref(generator);
+    json_node_free(root);
+    return payload;
+}
+
+// Decode JSON
+JsonObject* decodeJson(string payload) {
+    // Decode payload
+    gsize length = 0;
+    guchar* text = g_base64_decode(payload.c_str(), &length);
+
+    // Parse JSON
+    JsonParser* parser = json_parser_new();
+    GError* error = NULL;
+    json_parser_load_from_data(parser, (const gchar*)text, length, &error);
+    if (error) {
+        cout << "Failed to parse signaling JSON: " << error->message << endl;
+        g_error_free(error);
+        g_free(text);
+        g_object_unref(parser);
+        return json_object_new();
+    }
+
+    // Copy object
+    JsonNode* root = json_parser_get_root(parser);
+    JsonObject* object = json_object_ref(json_node_get_object(root));
+
+    // Release parser
+    g_free(text);
+    g_object_unref(parser);
+    return object;
+}
+
+// Print supported camera formats
+void printCameraFormats() {
+#ifdef __linux__
+    // Run V4L2 format query
+    string cameraDevice = getCameraDevice();
+    string command = "v4l2-ctl --device=" + shellQuote(cameraDevice) + " --list-formats-ext 2>&1";
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        cout << "Unable to list camera formats with v4l2-ctl." << endl;
+        return;
+    }
+
+    // Print query output
+    cout << "Camera formats for " << cameraDevice << ":" << endl;
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe)) cout << buffer;
+    pclose(pipe);
+#else
+    // Log unsupported platform
+    cout << "Camera format listing is only supported on Linux." << endl;
+#endif
+}
+
+// Quote shell argument
+string shellQuote(string value) {
+    // Build single quoted string
+    string quoted = "'";
+    for (char character : value) {
+        if (character == '\'') quoted += "'\\''";
+        else quoted += character;
+    }
+    quoted += "'";
+    return quoted;
+}
+
+// Check file exists
+bool videoFileExists(string path) {
+    // Stat file
+    struct stat status;
+    return stat(path.c_str(), &status) == 0;
+}
+
+#endif

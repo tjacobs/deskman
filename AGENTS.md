@@ -44,6 +44,8 @@ Talk setup is `cd talk && ./install.sh`, which installs `uv` into `~/.local/bin`
 
 Robot build: `cd robot && mkdir -p build && cd build && cmake .. && make`, then `./robot`. `--no-talk` skips spawning `talk/talk.py`. `--camera` shows the tracking preview.
 
+Teleport build: `cd teleport && mkdir -p build && cd build && cmake .. && make`, then `./teleport`.
+
 Run talk scripts from `talk/`. Shebangs are relative, `#!.venv/bin/python`, so `./speak.py` only resolves from that directory. Otherwise use `talk/.venv/bin/python talk/speak.py`.
 
 The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Kernel modules and `/dev/snd` are absent and `/proc/asound` cannot be created, so no real or dummy ALSA card can be loaded.
