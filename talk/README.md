@@ -1,4 +1,4 @@
-# Speak
+# Talk
 
 Speech to text, LLM inference, and text to speech generation.
 
