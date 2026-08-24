@@ -38,8 +38,8 @@ static const int TALK_EARLY_POLL_MS = 100;
 static const int TALK_STOP_WAIT_MS = 200;
 static const int TALK_STOP_POLL_MS = 50;
 static const int MAX_FPS = 30;
-static const char* TALK_PYTHON_REL = "speak/talk/.venv/bin/python";
-static const char* TALK_SCRIPT_REL = "speak/talk/talk.py";
+static const char* TALK_PYTHON_REL = "Deskman/talk/.venv/bin/python";
+static const char* TALK_SCRIPT_REL = "Deskman/talk/talk.py";
 static const char* TALK_SCRIPT_NAME = "talk.py";
 
 bool show_window = true;

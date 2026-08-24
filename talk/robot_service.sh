@@ -32,7 +32,7 @@ main() {
     # Tell the user where output goes
     mkdir -p "$(dirname "${LOG_FILE}")"
     echo "Writing ${LOG_FILE}"
-    echo "Run: tail -f ~/speak/log.txt"
+    echo "Run: tail -f ~/Deskman/talk/log.txt"
 
     # Append all to log
     exec >> "${LOG_FILE}" 2>&1

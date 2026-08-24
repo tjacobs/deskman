@@ -5,6 +5,7 @@ A desk robot: a face on a screen, a neck that looks around, local voice, and vid
 - `talk/` — voice interaction. Wake word, speech to text, a local LLM, and speech back.
 - `robot/` — the face and STS3215 servos, plus camera face tracking. C++.
 - `teleport/` — video calling. C++.
+- `website/` — product site, deployed to GitHub Pages.
 
 Voice stays in Python. The C++ robot owns the display and the servos. `talk.py` and Teleport look commands move the head over `/tmp/robot.socket`.
 
@@ -38,3 +39,8 @@ mkdir -p build && cd build && cmake .. && make
 ```
 
 See `teleport/README.md`.
+
+## Website
+
+Static site in `website/`. Push to `main` deploys GitHub Pages from that folder.
+

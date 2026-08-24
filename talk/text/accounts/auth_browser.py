@@ -144,7 +144,7 @@ def run_browser_auth(provider, options):
         return "Google did not return a refresh token. Revoke prior access and retry."
     accounts_store.upsert_account(account, load=options["accounts_path"], save=options["accounts_path"])
     smoke = smoke_check(provider, options["account_id"])
-    hint = f"If this Mac is not the robot, copy with: scp {options['accounts_path']} pi:~/speak/accounts.json"
+    hint = f"If this Mac is not the robot, copy with: scp {options['accounts_path']} pi:~/Deskman/talk/accounts.json"
     return f"Saved {provider} account {options['account_id']} to {options['accounts_path']}.\n{smoke}\n{hint}"
 
 # Wait on localhost for the OAuth redirect code

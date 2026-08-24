@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deskman — Desktop AI Robot for Developers</title>
+  <meta name="description" content="Deskman is a hackable desktop AI robot for developers. Jetson Orin Nano, camera, mic, speakers, touchscreen, and three actuated joints. Local AI, no cloud required." />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="nav__inner">
+      <a class="brand" href="#top">
+        <span class="brand__face" aria-hidden="true"><span class="eye"></span><span class="eye"></span></span>
+        Deskman
+      </a>
+      <nav class="nav__links">
+        <a href="#build">Build</a>
+        <a href="#specs">Specs</a>
+        <a href="#software">Software</a>
+        <a class="btn btn--primary btn--sm" href="https://www.tindie.com/products/teleport/deskman/" target="_blank" rel="noopener">Buy on Tindie</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero__copy">
+        <p class="eyebrow">Desktop AI Robot for Developers</p>
+        <h1>Bring AI <span class="wiggle">out of the screen</span> and onto your desk.</h1>
+        <p class="lede">
+          Deskman is a hackable desktop robot for developers, makers, AI
+          researchers, and roboticists — a compact physical AI platform you can
+          talk to, program, and completely rebuild.
+        </p>
+        <div class="hero__cta">
+          <a class="btn btn--primary btn--lg" href="https://www.tindie.com/products/teleport/deskman/" target="_blank" rel="noopener">Buy on Tindie</a>
+          <a class="btn btn--ghost btn--lg" href="https://github.com/tjacobs/Deskman" target="_blank" rel="noopener">View the code ↗</a>
+        </div>
+        <p class="hero__meta">Arrives assembled and ready to develop on.</p>
+      </div>
+
+      <div class="hero__stage">
+        <!-- CSS/SVG Deskman mascot — stands in until real photos are added -->
+        <div class="deskman" role="img" aria-label="Deskman robot">
+          <div class="deskman__head">
+            <div class="deskman__cam"></div>
+            <div class="deskman__screen">
+              <div class="deskman__eyes">
+                <span class="deskman__eye"></span>
+                <span class="deskman__eye"></span>
+              </div>
+            </div>
+            <div class="deskman__speaker"></div>
+          </div>
+          <div class="deskman__neck"></div>
+          <div class="deskman__base">
+            <div class="deskman__badge"><span>Hello</span>my name is<strong>Deskman</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Local trio -->
+    <section class="trio">
+      <div class="trio__inner">
+        <div class="pill"><strong>No cloud</strong><span>required</span></div>
+        <div class="pill"><strong>No subscription</strong><span>required</span></div>
+        <div class="pill"><strong>No internet</strong><span>required</span></div>
+      </div>
+    </section>
+
+    <!-- What can you build -->
+    <section id="build" class="build">
+      <h2 class="section-title">What can you build?</h2>
+      <p class="section-sub">
+        Just about anything. You get a ready-to-program physical robot instead of
+        a pile of dev boards, servos, cameras, speakers, and cables — log in and
+        start building.
+      </p>
+      <div class="tags">
+        <span>Local voice assistants</span>
+        <span>Robot personalities</span>
+        <span>Vision-language models</span>
+        <span>Local LLMs</span>
+        <span>Computer vision</span>
+        <span>Face &amp; person tracking</span>
+        <span>Human-robot interaction</span>
+        <span>Home automation</span>
+        <span>Embodied AI</span>
+        <span>Telepresence</span>
+        <span>AI agents with a body</span>
+        <span>Your own experiments</span>
+      </div>
+    </section>
+
+    <!-- Local AI pipeline -->
+    <section class="local">
+      <div class="local__inner">
+        <div class="local__copy">
+          <p class="eyebrow eyebrow--light">Local AI</p>
+          <h2>The whole pipeline runs on the robot.</h2>
+          <p>
+            Powered by an <strong>NVIDIA Jetson Orin Nano 8GB</strong> with CUDA
+            acceleration and a 256GB SSD. The full conversational loop runs
+            locally — no API connection required. Swap in any model you like.
+          </p>
+        </div>
+        <div class="pipeline">
+          <span>Microphone</span><i>→</i>
+          <span>Speech-to-Text</span><i>→</i>
+          <span>LLM</span><i>→</i>
+          <span>Text-to-Speech</span><i>→</i>
+          <span>Speaker</span>
+        </div>
+        <p class="local__note">As open-source AI improves, Deskman improves with it.</p>
+      </div>
+    </section>
+
+    <!-- Hack it -->
+    <section class="feature feature--split">
+      <div class="feature__text">
+        <h2>A robot you can hack</h2>
+        <p>
+          Deskman isn't a sealed consumer assistant — it's designed to be modified.
+          The software runs on <strong>Linux and Python</strong>, and the hardware
+          is accessible, so you can change how it behaves, replace models, modify
+          the motion system, add sensors, or use it as the starting point for your
+          own robot. The body is <strong>3D printed</strong>, so it's easy to
+          remix mechanically too.
+        </p>
+      </div>
+      <div class="feature__card feature__card--code">
+        <div class="term">
+          <div class="term__bar"><span></span><span></span><span></span></div>
+          <pre><code><span class="c">$</span> ssh deskman@deskman.local
+<span class="g">deskman@deskman:~$</span> cd speak
+<span class="g">deskman@deskman:~/Deskman/talk$</span> ./talk.py
+<span class="o">Loading whisper...
+Loaded on GPU in 5.7 sec
+Loading kokoro...
+Loaded on GPU in 10.0 sec, voice bm_fable
+Loading text model server...
+Started in 7.5 sec on GPU. Model: gemma-4-e2b
+Starting text model inference...
+Started in 4.5 sec</span>
+<span class="dim">Robot ready and listening. Say "Robot" to talk.</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Movement + Vision -->
+    <section class="twoup">
+      <article class="twoup__card">
+        <div class="twoup__icon twoup__icon--blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
+            <path d="M12 6.2V3M9.8 4.6 12 3l2.2 1.6" />
+            <path d="M12 17.8V21M9.8 19.4 12 21l2.2-1.6" />
+            <path d="M6.2 12H3M4.6 9.8 3 12l1.6 2.2" />
+            <path d="M17.8 12H21M19.4 9.8 21 12l-1.6 2.2" />
+          </svg>
+        </div>
+        <h3>Movement</h3>
+        <p>
+          Three actuated degrees of freedom on Waveshare bus servos. The head moves
+          in <strong>pitch and yaw</strong> to turn toward people and react during
+          conversation. A third actuator moves the <strong>hat</strong>, covering
+          and revealing the camera and display. Drive it all from your own Python.
+        </p>
+      </article>
+      <article class="twoup__card">
+        <div class="twoup__icon twoup__icon--teal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2.5 12S6.5 5 12 5s9.5 7 9.5 7-4 7-9.5 7-9.5-7-9.5-7Z" />
+            <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+          </svg>
+        </div>
+        <h3>Vision</h3>
+        <p>
+          An Arducam camera gives Deskman sight — <strong>face tracking</strong>
+          (out of the box), person and object detection, and visual interaction.
+          The software pairs vision with the actuated head, so Deskman physically
+          orients toward the people it sees.
+        </p>
+      </article>
+    </section>
+
+    <!-- Photo gallery -->
+    <section class="gallery">
+      <h2 class="section-title">Meet Deskman</h2>
+      <p class="section-sub">A real, hackable robot that lives on your desk — or wherever you put him.</p>
+      <div class="gallery__grid">
+        <figure class="shot"><img src="images/deskman_hero.jpg" alt="Deskman close-up on a desk" loading="lazy" /></figure>
+        <figure class="shot"><img src="images/deskman_kitchen.jpg" alt="Deskman on a kitchen counter" loading="lazy" /></figure>
+      </div>
+    </section>
+
+    <!-- Watch -->
+    <section id="watch" class="watch">
+      <h2 class="section-title">See Deskman in action</h2>
+      <p class="section-sub">A couple of clips of Deskman doing its thing.</p>
+      <div class="watch__grid">
+        <a class="vid" href="https://www.youtube.com/watch?v=luznl6VUY04" target="_blank" rel="noopener" aria-label="Watch Deskman video">
+          <img src="https://img.youtube.com/vi/luznl6VUY04/maxresdefault.jpg" onerror="this.onerror=null;this.src='https://img.youtube.com/vi/luznl6VUY04/hqdefault.jpg'" alt="Deskman video thumbnail" loading="lazy" />
+          <span class="vid__play" aria-hidden="true">▶</span>
+        </a>
+        <a class="vid" href="https://www.youtube.com/watch?v=Xb3BSRsD0Rc" target="_blank" rel="noopener" aria-label="Watch Deskman video">
+          <img src="https://img.youtube.com/vi/Xb3BSRsD0Rc/maxresdefault.jpg" onerror="this.onerror=null;this.src='https://img.youtube.com/vi/Xb3BSRsD0Rc/hqdefault.jpg'" alt="Deskman video thumbnail" loading="lazy" />
+          <span class="vid__play" aria-hidden="true">▶</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- Hardware specs -->
+    <section id="specs" class="specs">
+      <h2 class="section-title">What's inside</h2>
+      <div class="specs__grid">
+        <div class="spec">NVIDIA Jetson Orin Nano 8GB</div>
+        <div class="spec">256GB M.2 SSD</div>
+        <div class="spec">7" IPS touchscreen</div>
+        <div class="spec">Arducam camera</div>
+        <div class="spec">3× ST3215 bus servos</div>
+        <div class="spec">Servo controller</div>
+        <div class="spec">Speaker + audio amplifier</div>
+        <div class="spec">USB audio interface</div>
+        <div class="spec">Microphone</div>
+        <div class="spec">5,800mAh Li-ion battery + charger</div>
+        <div class="spec">3D-printed body, head &amp; hat</div>
+        <div class="spec">Foldable keyboard + trackpad</div>
+      </div>
+    </section>
+
+    <!-- Software -->
+    <section id="software" class="software">
+      <div class="software__inner">
+        <p class="eyebrow eyebrow--light">Software</p>
+        <h2>Open. Yours to change.</h2>
+        <p>
+          Runs on Linux and Python, with CUDA accelerating speech-to-text, the LLM,
+          and text-to-speech. Compatible with modern open-source STT, TTS, computer
+          vision, and local language models — swap components as new models arrive.
+          You're not locked into a proprietary AI service.
+        </p>
+        <p class="software__links">
+          <a class="btn btn--primary" href="https://github.com/tjacobs/Deskman" target="_blank" rel="noopener">github.com/tjacobs/Deskman</a>
+        </p>
+        <p class="software__tag">Use the models you want. Modify the code. Build something weird.</p>
+      </div>
+    </section>
+
+    <!-- Why physical -->
+    <section class="why">
+      <div class="why__inner">
+        <h2>Why a physical robot?</h2>
+        <p>
+          Talking to AI on a screen is useful. Talking to a robot sitting on your
+          desk feels different. Deskman gives AI a physical presence — it can turn
+          toward you, make eye contact, speak naturally, and serve as a platform
+          for experimenting with embodied AI and human-robot interaction.
+        </p>
+        <div class="perfect">
+          <span>Makers</span><span>Hackers</span><span>Students</span>
+          <span>Researchers</span><span>AI developers</span>
+          <span>Robotics developers</span><span>Future-builders</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Final CTA -->
+    <section class="cta">
+      <div class="cta__card">
+        <h2>Put a robot on your desk.<br />SSH in. Start hacking.</h2>
+        <p>Deskman arrives assembled and ready to develop on.</p>
+        <div class="cta__buttons">
+          <a class="btn btn--primary btn--lg" href="https://www.tindie.com/products/teleport/deskman/" target="_blank" rel="noopener">Buy on Tindie</a>
+          <a class="btn btn--ghost btn--lg" href="https://github.com/tjacobs/Deskman" target="_blank" rel="noopener">Browse the code ↗</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Designed by <a href="https://www.tindie.com/stores/teleport/" target="_blank" rel="noopener">Teleport Devices</a> in the USA</span>
+    <span>© <span id="year"></span> Teleport Devices</span>
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    // Click the logo or the robot → his head does an excited wiggle
+    (function () {
+      var brand = document.querySelector('.brand');
+      var deskman = document.querySelector('.deskman');
+      if (!brand || !deskman) return;
+      function excite() {
+        deskman.classList.remove('is-excited');
+        void deskman.offsetWidth; // restart the animation
+        deskman.classList.add('is-excited');
+      }
+      brand.addEventListener('click', function (e) { e.preventDefault(); excite(); });
+      deskman.addEventListener('click', excite);
+      deskman.addEventListener('animationend', function (e) {
+        if (e.animationName === 'head-look') deskman.classList.remove('is-excited');
+      });
+    })();
+  </script>
+</body>
+</html>

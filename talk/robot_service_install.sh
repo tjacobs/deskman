@@ -128,7 +128,7 @@ EOF
     echo "  sudo service ${SERVICE_NAME} stop"
     echo "  sudo service ${SERVICE_NAME} status"
     echo "  journalctl -u ${SERVICE_NAME} -f"
-    echo "  tail -f ~/speak/log.txt"
+    echo "  tail -f ~/Deskman/talk/log.txt"
 }
 
 # Uninstall

@@ -1,0 +1,6 @@
+# Large photo originals — only the web-optimized versions are used by the site
+images/deskman_1.jpeg
+images/deskman_2.png
+
+# Raw videos (too large for git; convert to web MP4 before adding to the site)
+videos/

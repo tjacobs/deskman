@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sample memory and talk-related processes into a log.
-# Cron every 5 minutes: */5 * * * * /home/deskman/speak/tools/memory.sh
+# Cron every 5 minutes: */5 * * * * /home/deskman/Deskman/talk/tools/memory.sh
 # Usage: ./tools/memory.sh
 #        ./tools/memory.sh --cron
 
