@@ -112,7 +112,6 @@ TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
 TEXT_SERVER_LOG = os.path.join(SCRIPT_DIR, 'text_server.log')
 TEXT_SERVER_RESTART_TRIES = 3
-ALLOW_MULTIPLE_INSTANCES = False
 
 # Expected RAM use in gigabytes
 TEXT_SERVER_EXPECTED_GB = 2.0
@@ -153,8 +152,8 @@ def main():
     global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, text_server_process
     TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE = parse_args()
 
-    # Exit if another talk.py is already running
-    ensure_single_instance()
+    # Make sure only one running
+    check_already_running()
 
     # Exit if audio playback is unavailable
     check_ready()
@@ -1149,39 +1148,37 @@ def warn_if_low_memory_for(name, expected_gb):
     if memory_is_low(available_gb, expected_gb):
         print(f'Warning: only {format_gigabytes(available_gb)} available before {name}, expect about {format_gigabytes(expected_gb)}.', flush=True)
 
-# Quit when another talk.py process is already alive
-def ensure_single_instance():
-    # Temp: allow a second talk.py so memory pressure can be reproduced
-    if ALLOW_MULTIPLE_INSTANCES:
-        other_pid = find_other_talk_pid()
-        if other_pid is not None:
-            print(f'Warning: talk.py already running, pid {other_pid}, continuing anyway.', flush=True)
-        return
-
-    other_pid = find_other_talk_pid()
+# Make sure only one running
+def check_already_running():
+    other_pid = find_other_running()
     if other_pid is not None:
-        print(f'talk.py is already running, pid {other_pid}.')
-        print('Stop it with: sudo service robot stop')
+        print(f'talk.py already running, pid {other_pid}.')
+        print('sudo service robot stop')
         sys.exit(1)
 
-# Return the pid of another talk.py process, or None
-def find_other_talk_pid():
+# Find another process
+def find_other_running():
     my_pid = os.getpid()
-    result = subprocess.run(['ps', 'ax', '-o', 'pid=,command='], capture_output=True, text=True)
-    for line in result.stdout.splitlines():
-        parts = line.strip().split(None, 1)
-        if len(parts) < 2:
+    result = subprocess.run(['ps', 'aux'], capture_output=True, text=True)
+    lines = result.stdout.splitlines()
+    if not lines:
+        return None
+
+    # Skip the ps header, then parse pid and command
+    for line in lines[1:]:
+        parts = line.split(None, 10)
+        if len(parts) < 11:
             continue
-        pid = int(parts[0])
+        pid = int(parts[1])
         if pid == my_pid:
             continue
 
-        # Only match python running talk.py, not shells or timeout wrappers that mention both
-        tokens = parts[1].split()
-        executable = os.path.basename(tokens[0])
-        if not executable.startswith('python'):
+        # Match python talk.py or a shebang ./talk.py, not shells that mention it
+        tokens = parts[10].split()
+        if not tokens:
             continue
-        if any(token.endswith('talk.py') for token in tokens):
+        executable = os.path.basename(tokens[0])
+        if executable == 'talk.py' or (executable.startswith('python') and any(token.endswith('talk.py') for token in tokens)):
             return pid
     return None
 
