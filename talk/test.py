@@ -206,11 +206,34 @@ def microphone_available():
     if platform.system() == 'Darwin':
         return shutil.which(MAC_RECORDER) is not None
 
-    # Look for a USB capture card on linux
+    # Look for a USB capture card on linux, skip cameras with no mic
     if shutil.which(LINUX_RECORDER) is None:
         return False
     result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
-    return any(line.startswith('card') and 'USB' in line for line in result.stdout.splitlines())
+    for line in result.stdout.splitlines():
+        if not (line.startswith('card') and 'USB' in line):
+            continue
+        card_index = int(line.split(':')[0].split()[1])
+        if not card_is_camera(card_index):
+            return True
+    return False
+
+# Return true when this sound card is a camera, not a microphone
+def card_is_camera(card_index):
+    sound_link = f'/sys/class/sound/card{card_index}/device'
+    if not os.path.exists(sound_link):
+        return False
+    usb_device = os.path.dirname(os.path.realpath(sound_link))
+    video_dir = '/sys/class/video4linux'
+    if not os.path.isdir(video_dir):
+        return False
+    for video_name in os.listdir(video_dir):
+        video_link = os.path.join(video_dir, video_name, 'device')
+        if not os.path.exists(video_link):
+            continue
+        if os.path.dirname(os.path.realpath(video_link)) == usb_device:
+            return True
+    return False
 
 # Return expected output for the device talk.py loads on
 def talk_device():

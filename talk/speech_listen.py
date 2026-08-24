@@ -74,12 +74,14 @@ def linux_record_command():
 
 # Return card index for the USB microphone
 def find_capture_card():
-    # Collect every USB card that can record
+    # Collect USB cards that can record, skip cameras with no mic
     result = subprocess.run([LINUX_RECORDER, '-l'], capture_output=True, text=True)
     usb_cards = []
     for line in result.stdout.splitlines():
         if line.startswith('card') and 'USB' in line:
-            usb_cards.append(int(line.split(':')[0].split()[1]))
+            card_index = int(line.split(':')[0].split()[1])
+            if not card_is_camera(card_index):
+                usb_cards.append(card_index)
 
     # Prefer the mic-only card, a speaker card records through a poor fallback mic
     for card_index in usb_cards:
@@ -90,6 +92,23 @@ def find_capture_card():
     if usb_cards:
         return usb_cards[0]
     return None
+
+# Return true when this sound card is a camera, not a microphone
+def card_is_camera(card_index):
+    sound_link = f'/sys/class/sound/card{card_index}/device'
+    if not os.path.exists(sound_link):
+        return False
+    usb_device = os.path.dirname(os.path.realpath(sound_link))
+    video_dir = '/sys/class/video4linux'
+    if not os.path.isdir(video_dir):
+        return False
+    for video_name in os.listdir(video_dir):
+        video_link = os.path.join(video_dir, video_name, 'device')
+        if not os.path.exists(video_link):
+            continue
+        if os.path.dirname(os.path.realpath(video_link)) == usb_device:
+            return True
+    return False
 
 # Return true when a card has a playback stream
 def card_has_playback(card_index):

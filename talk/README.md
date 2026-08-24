@@ -79,7 +79,7 @@ Live transcription from the microphone. Speak into your microphone, and text lin
 
 On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.
 
-Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the USB microphone on linux, preferring a mic-only card over a speaker card's fallback mic, and with sox from the default input device on mac.
+Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the USB microphone on linux, preferring a mic-only card over a speaker card's fallback mic, skipping camera cards that advertise capture with no mic, and with sox from the default input device on mac.
 
 ## talk.py
 
