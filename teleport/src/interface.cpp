@@ -1,5 +1,5 @@
 /*
- * Unix socket for other programs to drive calls and receive pause/resume.
+ * Connect to robot.interface to pause the camera, resume it, and receive menu taps.
 */
 
 #include "interface.h"
@@ -23,13 +23,12 @@
 using namespace std;
 using namespace std::chrono;
 
-const char* INTERFACE_SOCKET_NAME = "teleport.interface";
+static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 const int INTERFACE_TIMEOUT_SECONDS = 10;
-const int INTERFACE_ACCEPT_SECONDS = 1;
+const int INTERFACE_RECONNECT_SECONDS = 2;
 
 static mutex interfaceMutex;
 static condition_variable interfaceReplyCv;
-static int listenSocketFd = -1;
 static int clientSocketFd = -1;
 static atomic<bool> interfaceRunning{false};
 static thread interfaceThread;
@@ -38,17 +37,15 @@ static bool waitingReply = false;
 static string lastReply;
 static string pendingCommand;
 static string pendingPeer;
-static string interfaceSocketPath;
 
-static string interfacePath();
-static bool openListenSocket();
-static void closeListenSocket();
+static string robotInterfacePath();
+static bool connectRobot();
 static void closeClient();
 static void runInterface();
 static bool writeInterfaceLine(string line);
 static void handleInterfaceLine(string line);
 static bool waitInterfaceOk();
-static void serveClient(int clientFd);
+static void logError(const string& message);
 
 void startInterface() {
     if (interfaceRunning.load()) return;
@@ -59,7 +56,6 @@ void startInterface() {
 void stopInterface() {
     interfaceRunning = false;
     closeClient();
-    closeListenSocket();
     if (interfaceThread.joinable()) interfaceThread.join();
 }
 
@@ -68,12 +64,28 @@ bool isInterfaceConnected() {
     return clientSocketFd >= 0;
 }
 
+static void logError(const string& message) {
+    if (isatty(STDERR_FILENO)) {
+        cerr << "\033[1;31m*** ERROR *** : " << message << "\033[0m" << endl;
+        return;
+    }
+
+    // systemd strips this prefix and colors the line when priority is err
+    cerr << "<3>*** ERROR *** : " << message << endl;
+}
+
 void pauseInterfaceForCall() {
     if (interfacePaused) return;
 
-    // Pause Deskman when it is listening, skip quietly if it is not
-    if (!writeInterfaceLine("{\"command\":\"pause\"}")) return;
-    if (!waitInterfaceOk()) return;
+    // Ask robot to drop the camera before this program opens it
+    if (!writeInterfaceLine("{\"command\":\"pause\"}")) {
+        logError("Could not request the camera, robot not connected.");
+        return;
+    }
+    if (!waitInterfaceOk()) {
+        logError("Could not request the camera, robot did not pause.");
+        return;
+    }
     interfacePaused = true;
 }
 
@@ -94,54 +106,14 @@ bool takeInterfaceCommand(string& command, string& peer) {
     return true;
 }
 
-static string interfacePath() {
+static string robotInterfacePath() {
     string directory;
     const char* runtime = getenv("XDG_RUNTIME_DIR");
     if (runtime && runtime[0]) directory = runtime;
     else directory = string("/run/user/") + to_string(getuid());
     struct stat info;
     if (stat(directory.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) directory = "/tmp";
-    return directory + "/" + INTERFACE_SOCKET_NAME;
-}
-
-static bool openListenSocket() {
-    interfaceSocketPath = interfacePath();
-    unlink(interfaceSocketPath.c_str());
-    int socketFd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (socketFd < 0) return false;
-    sockaddr_un address;
-    memset(&address, 0, sizeof(address));
-    address.sun_family = AF_UNIX;
-    if (interfaceSocketPath.size() >= sizeof(address.sun_path)) {
-        close(socketFd);
-        return false;
-    }
-    strncpy(address.sun_path, interfaceSocketPath.c_str(), sizeof(address.sun_path) - 1);
-    if (bind(socketFd, (sockaddr*)&address, sizeof(address)) < 0) {
-        close(socketFd);
-        return false;
-    }
-    chmod(interfaceSocketPath.c_str(), 0600);
-    if (listen(socketFd, 4) < 0) {
-        close(socketFd);
-        unlink(interfaceSocketPath.c_str());
-        return false;
-    }
-    listenSocketFd = socketFd;
-    cout << "Interface:    " << interfaceSocketPath << endl;
-    return true;
-}
-
-static void closeListenSocket() {
-    if (listenSocketFd >= 0) {
-        shutdown(listenSocketFd, SHUT_RDWR);
-        close(listenSocketFd);
-        listenSocketFd = -1;
-    }
-    if (!interfaceSocketPath.empty()) {
-        unlink(interfaceSocketPath.c_str());
-        interfaceSocketPath.clear();
-    }
+    return directory + "/" + ROBOT_INTERFACE_NAME;
 }
 
 static void closeClient() {
@@ -205,21 +177,61 @@ static void handleInterfaceLine(string line) {
     pendingPeer = peer;
 }
 
-static void serveClient(int clientFd) {
+static bool connectRobot() {
+    int socketFd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (socketFd < 0) return false;
+    string path = robotInterfacePath();
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    if (path.size() >= sizeof(address.sun_path)) {
+        close(socketFd);
+        return false;
+    }
+    strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
+    if (connect(socketFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+        close(socketFd);
+        return false;
+    }
+    lock_guard<mutex> lock(interfaceMutex);
+    if (clientSocketFd >= 0) close(clientSocketFd);
+    clientSocketFd = socketFd;
+    cout << "Connected to robot interface." << endl;
+    return true;
+}
+
+static void runInterface() {
+    cout << "Robot interface: " << robotInterfacePath() << endl;
     string buffer;
     while (interfaceRunning.load()) {
+        int clientFd;
+        {
+            lock_guard<mutex> lock(interfaceMutex);
+            clientFd = clientSocketFd;
+        }
+        if (clientFd < 0) {
+            if (!connectRobot()) {
+                sleep(INTERFACE_RECONNECT_SECONDS);
+                continue;
+            }
+            buffer.clear();
+            continue;
+        }
+
         fd_set readSet;
         FD_ZERO(&readSet);
         FD_SET(clientFd, &readSet);
         timeval timeout;
-        timeout.tv_sec = INTERFACE_ACCEPT_SECONDS;
+        timeout.tv_sec = 1;
         timeout.tv_usec = 0;
         int ready = select(clientFd + 1, &readSet, NULL, NULL, &timeout);
-        if (ready < 0) break;
-        if (ready == 0) continue;
+        if (ready <= 0) continue;
+
         char chunk[1024];
         ssize_t n = read(clientFd, chunk, sizeof(chunk));
-        if (n <= 0) break;
+        if (n <= 0) {
+            closeClient();
+            continue;
+        }
         buffer.append(chunk, (size_t)n);
         size_t pos;
         while ((pos = buffer.find('\n')) != string::npos) {
@@ -228,32 +240,4 @@ static void serveClient(int clientFd) {
             if (!line.empty()) handleInterfaceLine(line);
         }
     }
-}
-
-static void runInterface() {
-    if (!openListenSocket()) {
-        cout << "Interface socket failed." << endl;
-        return;
-    }
-    while (interfaceRunning.load()) {
-        fd_set readSet;
-        FD_ZERO(&readSet);
-        FD_SET(listenSocketFd, &readSet);
-        timeval timeout;
-        timeout.tv_sec = INTERFACE_ACCEPT_SECONDS;
-        timeout.tv_usec = 0;
-        int ready = select(listenSocketFd + 1, &readSet, NULL, NULL, &timeout);
-        if (ready <= 0) continue;
-        int clientFd = accept(listenSocketFd, NULL, NULL);
-        if (clientFd < 0) continue;
-        {
-            lock_guard<mutex> lock(interfaceMutex);
-            if (clientSocketFd >= 0) close(clientSocketFd);
-            clientSocketFd = clientFd;
-        }
-        cout << "Interface client connected." << endl;
-        serveClient(clientFd);
-        closeClient();
-    }
-    closeListenSocket();
 }

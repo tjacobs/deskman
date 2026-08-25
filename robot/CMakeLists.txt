@@ -13,11 +13,11 @@ add_executable(${TARGET_NAME}
     src/screen.cpp
     src/fan.cpp
     src/servos.cpp
-    src/control.cpp
     src/renderer.cpp
     src/tracker.cpp
     src/camera.cpp
     src/config.cpp
+    src/interface.cpp
     src/servos/SMS_STS.cpp
     src/servos/SCS.cpp
     src/servos/SCSerial.cpp

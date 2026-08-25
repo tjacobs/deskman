@@ -4,10 +4,10 @@
 #include "face.h"
 #include "screen.h"
 #include "servos.h"
-#include "control.h"
 #include "renderer.h"
 #include "tracker.hpp"
 #include "config.h"
+#include "interface.h"
 #include "fan.h"
 #include <iostream>
 #include <thread>
@@ -50,6 +50,8 @@ volatile bool g_quit = false;
 static pid_t g_talk_pid = -1;
 static bool g_no_talk = false;
 static bool g_cold_talk = false;
+static bool g_call_paused = false;
+static bool g_call_had_talk = false;
 
 VectorRenderer vectorRenderer;
 
@@ -64,6 +66,7 @@ static void reap_talk_process();
 static void wait_for_talk_early_exit();
 static void signalHandler(int signal);
 static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
+static void apply_call_handoff(FaceTracker& faceTracker);
 
 int main(int argc, char **argv) {
     setup_display_env();
@@ -132,8 +135,8 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // Local socket so talk.py can move the head
-    start_control();
+    // Listen so other programs can move the head and pause the camera
+    start_interface();
 
     // Create face tracker after args so --camera / --no-camera apply
     FaceTracker faceTracker(show_camera, use_camera);
@@ -160,7 +163,7 @@ int main(int argc, char **argv) {
     g_quit = true;
     cout << "Quit" << endl;
     stop_talk_process();
-    stop_control();
+    stop_interface();
     stop_servo_position_log();
     faceTracker.stopTracking();
     relax_servos();
@@ -223,6 +226,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
     while (!quit && !g_quit) {
         reap_talk_process();
         check_fan();
+        apply_call_handoff(faceTracker);
 
         // Process keyboard input on the main thread when a window exists
         while (show_window && SDL_PollEvent(&event) != 0) {
@@ -254,6 +258,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             }
 
             handle_servo_keyboard_input(&event, &face);
+            handle_call_event(event);
         }
 
         // Point eyes and head at the tracked face
@@ -298,6 +303,34 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             sleep_for(milliseconds(1000 / MAX_FPS));
         }
     }
+}
+
+// Pause camera and talk for other programs, or restore them after
+static void apply_call_handoff(FaceTracker& faceTracker) {
+    int command = take_call_handoff();
+    if (command == CALL_HANDOFF_NONE) return;
+
+    if (command == CALL_HANDOFF_PAUSE) {
+        if (!g_call_paused) {
+            faceTracker.stopCamera();
+            g_call_had_talk = !g_no_talk && g_talk_pid > 0;
+            if (g_call_had_talk) stop_talk_process();
+            g_call_paused = true;
+            cout << "Paused camera and talk." << endl;
+        }
+        complete_call_handoff(true);
+        return;
+    }
+
+    if (g_call_paused) {
+        if (use_camera && faceTracker.initializeCamera()) faceTracker.startTracking();
+        if (g_call_had_talk) start_talk_process(g_cold_talk);
+        g_call_paused = false;
+        g_call_had_talk = false;
+        setStatus("");
+        cout << "Resumed camera and talk." << endl;
+    }
+    complete_call_handoff(true);
 }
 
 static void setup_display_env() {

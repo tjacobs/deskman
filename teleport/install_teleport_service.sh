@@ -63,7 +63,7 @@ main() {
 
     # Write systemd unit file
     cat > "${SERVICE_FILE}" <<EOF
-# Programs connect to \$XDG_RUNTIME_DIR/teleport.interface.
+# Programs connect to \$XDG_RUNTIME_DIR/robot.interface to move the head and pause the camera.
 
 [Unit]
 Description=Teleport

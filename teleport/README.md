@@ -2,7 +2,7 @@
 
 Video calling. Logs into the Teleport websocket server and handles WebRTC signaling.
 
-Web look commands move the Deskman head over `/tmp/robot.socket`.
+Web look commands move the Deskman head over `$XDG_RUNTIME_DIR/robot.interface`.
 
 ## Compile
 

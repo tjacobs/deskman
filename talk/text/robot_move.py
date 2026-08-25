@@ -8,7 +8,6 @@ import os
 import socket
 
 # Config
-SOCKET_PATH = os.environ.get("ROBOT_SOCK", "/tmp/robot.socket")
 LOOK_DEFAULT_DEGREES = 90
 LOOK_MAX_DEGREES = 90
 HEAD_PERCENT_MAX = 100
@@ -106,7 +105,7 @@ def send_command(payload):
     raw = (json.dumps(payload) + "\n").encode("utf-8")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.settimeout(CONNECT_TIMEOUT_SEC)
-        sock.connect(SOCKET_PATH)
+        sock.connect(robot_interface_path())
         sock.settimeout(READ_TIMEOUT_SEC)
         sock.sendall(raw)
         data = b""
@@ -119,6 +118,20 @@ def send_command(payload):
     if not line:
         return {"ok": False, "error": "empty reply from robot"}
     return json.loads(line[0])
+
+# ROBOT_SOCK override, else $XDG_RUNTIME_DIR/robot.interface
+def robot_interface_path():
+    override = os.environ.get("ROBOT_SOCK")
+    if override:
+        return override
+
+    # Match teleport.interface under the per-user runtime dir
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        runtime = f"/run/user/{os.getuid()}"
+    if not os.path.isdir(runtime):
+        runtime = "/tmp"
+    return os.path.join(runtime, "robot.interface")
 
 # Main
 if __name__ == "__main__":

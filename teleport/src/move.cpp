@@ -5,10 +5,12 @@
 #include "move.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -16,7 +18,7 @@
 using namespace std;
 using namespace std::chrono;
 
-const char* HEAD_SOCKET_PATH = "/tmp/robot.socket";
+static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 const int HEAD_STEP = 8;
 const int HEAD_HAT_STEP = 20;
 const int HEAD_REPEAT_MS = 100;
@@ -33,6 +35,7 @@ static steady_clock::time_point lastMoveHat;
 static bool connectHead();
 static void closeHead();
 static bool writeHeadLine(const string& line);
+static string robot_interface_path();
 
 // Send web x, y, and hat to Deskman as one pan, tilt, or hat nudge
 void move(const string& command, int value) {
@@ -92,7 +95,12 @@ static bool connectHead() {
 
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    strncpy(address.sun_path, HEAD_SOCKET_PATH, sizeof(address.sun_path) - 1);
+    string path = robot_interface_path();
+    if (path.size() >= sizeof(address.sun_path)) {
+        close(socketFd);
+        return false;
+    }
+    strncpy(address.sun_path, path.c_str(), sizeof(address.sun_path) - 1);
     if (connect(socketFd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
         close(socketFd);
         return false;
@@ -125,4 +133,15 @@ static bool writeHeadLine(const string& line) {
     char reply[256];
     ssize_t size = read(headSocketFd, reply, sizeof(reply));
     return size > 0;
+}
+
+// Same runtime directory robot uses for robot.interface
+static string robot_interface_path() {
+    string directory;
+    const char* runtime = getenv("XDG_RUNTIME_DIR");
+    if (runtime && runtime[0]) directory = runtime;
+    else directory = string("/run/user/") + to_string(getuid());
+    struct stat info;
+    if (stat(directory.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) directory = "/tmp";
+    return directory + "/" + ROBOT_INTERFACE_NAME;
 }
