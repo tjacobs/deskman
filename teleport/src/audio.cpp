@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,6 +17,7 @@
 #include <vector>
 
 #ifdef HAVE_GSTREAMER_WEBRTC
+#include <gst/app/gstappsrc.h>
 #include <gst/fft/gstfftf32.h>
 #endif
 
@@ -60,6 +60,8 @@ bool videoMuteMic = false;
 
 #ifdef HAVE_GSTREAMER_WEBRTC
 bool audioDisconnectLogged = false;
+GstElement* remotePcmPipeline = NULL;
+GstElement* remotePcmSrc = NULL;
 GstElement* micToneTapElement = NULL;
 GstFFTF32* toneFft = NULL;
 float toneWindow[TONE_FFT_SIZE];
@@ -249,8 +251,87 @@ void setVideoMuteMic(bool muteMic) {
     videoMuteMic = muteMic;
 }
 
-#ifdef HAVE_GSTREAMER_WEBRTC
+// Size, rate, and volume for remote websocket PCM, header is audi as int16 char codes
+const int REMOTE_PCM_HEADER_BYTES = 8;
+const int REMOTE_PCM_RATE = 48000;
+const double REMOTE_PCM_VOLUME = 0.20;
+const unsigned char REMOTE_PCM_HEADER[] = { 'a', 0, 'u', 0, 'd', 0, 'i', 0 };
 
+// Open a speaker pipeline for raw PCM from any peer
+void startRemotePcmPlayback() {
+#ifdef HAVE_GSTREAMER_WEBRTC
+    if (remotePcmPipeline) return;
+    gst_init(NULL, NULL);
+
+    // Play S16LE mono PCM on the USB speaker at 20 percent
+    string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
+    string pipelineString = "appsrc name=pcmspeak is-live=true format=time do-timestamp=true block=false max-bytes=32768 ! "
+        "queue leaky=downstream max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 ! "
+        "audioconvert ! audioresample ! audio/x-raw,rate=" + to_string(REMOTE_PCM_RATE) + ",channels=1 ! "
+        "volume volume=" + to_string(REMOTE_PCM_VOLUME) + " ! "
+        + sinkElement + " name=pcmsink device=" + videoSpeakerDevice + " sync=false buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
+    GError* error = NULL;
+    remotePcmPipeline = gst_parse_launch(pipelineString.c_str(), &error);
+    if (error) {
+        cout << "Failed to start remote PCM playback: " << error->message << endl;
+        g_error_free(error);
+        if (remotePcmPipeline) gst_object_unref(remotePcmPipeline);
+        remotePcmPipeline = NULL;
+        return;
+    }
+
+    // Match the peer's raw PCM
+    remotePcmSrc = gst_bin_get_by_name(GST_BIN(remotePcmPipeline), "pcmspeak");
+    GstCaps* caps = gst_caps_new_simple("audio/x-raw", "format", G_TYPE_STRING, "S16LE", "layout", G_TYPE_STRING, "interleaved", "rate", G_TYPE_INT, REMOTE_PCM_RATE, "channels", G_TYPE_INT, 1, NULL);
+    g_object_set(remotePcmSrc, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
+    // Start the speaker
+    GstStateChangeReturn result = gst_element_set_state(remotePcmPipeline, GST_STATE_PLAYING);
+    if (result == GST_STATE_CHANGE_FAILURE) {
+        cout << "Failed to play remote PCM on " << videoSpeakerDevice << endl;
+        stopRemotePcmPlayback();
+        return;
+    }
+    cout << "Remote PCM playback on " << videoSpeakerDevice << endl;
+#endif
+}
+
+// Stop PCM playback from a remote peer
+void stopRemotePcmPlayback() {
+#ifdef HAVE_GSTREAMER_WEBRTC
+    if (!remotePcmPipeline) return;
+    gst_element_set_state(remotePcmPipeline, GST_STATE_NULL);
+    if (remotePcmSrc) gst_object_unref(remotePcmSrc);
+    gst_object_unref(remotePcmPipeline);
+    remotePcmSrc = NULL;
+    remotePcmPipeline = NULL;
+#endif
+}
+
+// Play one websocket PCM packet, header is 4 little-endian int16 char codes for audi
+bool playRemotePcmPacket(const char* data, size_t size) {
+    if (!data || size < REMOTE_PCM_HEADER_BYTES + 2) return false;
+    if (memcmp(data, REMOTE_PCM_HEADER, REMOTE_PCM_HEADER_BYTES) != 0) return false;
+#ifdef HAVE_GSTREAMER_WEBRTC
+    if (!remotePcmPipeline) startRemotePcmPlayback();
+    if (!remotePcmSrc) return true;
+
+    // Push the PCM after the audi header into the speaker pipeline
+    size_t pcmBytes = size - REMOTE_PCM_HEADER_BYTES;
+    GstBuffer* buffer = gst_buffer_new_allocate(NULL, pcmBytes, NULL);
+    gst_buffer_fill(buffer, 0, data + REMOTE_PCM_HEADER_BYTES, pcmBytes);
+    GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(remotePcmSrc), buffer);
+    if (flow != GST_FLOW_OK && flow != GST_FLOW_FLUSHING) {
+        cout << "Remote PCM playback stalled, flow " << (int)flow << "." << endl;
+    }
+#else
+    (void)size;
+#endif
+    return true;
+}
+
+#ifdef HAVE_GSTREAMER_WEBRTC
 // True when call audio should go through Pulse
 bool isPulseAudioDevice(const string& device) {
     return device.find("alsa_input") == 0 || device.find("alsa_output") == 0;

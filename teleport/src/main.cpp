@@ -360,9 +360,9 @@ void handleWebSocketMessage(const WebSocketMessagePtr& message) {
         handleTextMessage(message->str);
     }
 
-    // Log binary messages
+    // Play remote PCM on the USB speaker
     else if (message->type == WebSocketMessageType::Message) {
-        cout << "Binary message received, " << message->str.size() << " bytes" << endl;
+        playRemotePcmPacket(message->str.data(), message->str.size());
     }
 }
 
@@ -477,6 +477,16 @@ void handleCommand(const string& command, const string& commandArgument, const s
     // Start video
     else if (command == "StartVideo") {
         startVideo(cameraPath, commandArgument);
+    }
+
+    // Play remote PCM on the USB speaker
+    else if (command == "StartMic") {
+        startRemoteMic();
+    }
+
+    // Stop playing remote PCM
+    else if (command == "StopMic") {
+        stopRemoteMic();
     }
 
     // Stop video

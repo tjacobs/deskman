@@ -19,7 +19,7 @@ target_link_libraries(teleport ixwebsocket)
 # Add WebRTC video backend
 find_package(PkgConfig)
 if(PKG_CONFIG_FOUND)
-  pkg_check_modules(GST_WEBRTC QUIET gstreamer-1.0 gstreamer-webrtc-1.0 gstreamer-sdp-1.0 gstreamer-video-1.0 gstreamer-fft-1.0 json-glib-1.0)
+  pkg_check_modules(GST_WEBRTC QUIET gstreamer-1.0 gstreamer-app-1.0 gstreamer-webrtc-1.0 gstreamer-sdp-1.0 gstreamer-video-1.0 gstreamer-fft-1.0 json-glib-1.0)
 else()
   message(STATUS "PkgConfig not found, GStreamer WebRTC disabled")
 endif()
