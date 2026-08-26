@@ -81,6 +81,7 @@ bool autoAnswerPending = false;
 steady_clock::time_point autoAnswerAt;
 steady_clock::time_point ringTimeoutAt;
 string pendingVideoOffer;
+vector<string> heldVideoAddresses;
 string pendingCameraView;
 TeleportConfig settings;
 vector<string> listedPeers;
@@ -109,6 +110,7 @@ void pollAutoAnswer();
 void pollRingTimeout();
 void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraView);
 void acceptIncomingCall();
+void replayHeldVideoSignaling();
 void cancelIncomingCall();
 
 // Main
@@ -546,6 +548,12 @@ void handleCommand(const string& command, const string& commandArgument, const s
             cout << "Holding remote offer until Accept." << endl;
             return;
         }
+
+        // Hold the caller's ICE candidates here, a starting pipeline clears its own queue
+        if (command == "VIDEO_ADDRESS" && holdIncomingCall) {
+            heldVideoAddresses.push_back(commandArgument);
+            return;
+        }
         handleVideoMessage(command, commandArgument);
         if (command == "VIDEO_STOP") {
             cancelIncomingCall();
@@ -651,25 +659,36 @@ void acceptIncomingCall() {
     if (incomingWebCall) {
         incomingWebCall = false;
         startVideo(cameraPath, pendingCameraView);
-        if (!pendingVideoOffer.empty()) {
-            handleVideoMessage("VIDEO_OFFER", pendingVideoOffer);
-            pendingVideoOffer.clear();
-        }
+        replayHeldVideoSignaling();
         return;
     }
 
     // A robot call runs both ways
     if (startCall(cameraPath, false)) {
-        if (!pendingVideoOffer.empty()) {
-            handleVideoMessage("VIDEO_OFFER", pendingVideoOffer);
-            pendingVideoOffer.clear();
-        }
+        replayHeldVideoSignaling();
         showCallInProgress();
     } else {
         pendingVideoOffer.clear();
+        heldVideoAddresses.clear();
         webSocket.send(deviceName + " VIDEO_STOP");
         showCallFailed("Call not sent");
     }
+}
+
+// Feed the pipeline the offer and candidates that arrived while it was ringing
+void replayHeldVideoSignaling() {
+    // The offer has to land before any candidate can be added
+    if (!pendingVideoOffer.empty()) {
+        handleVideoMessage("VIDEO_OFFER", pendingVideoOffer);
+        pendingVideoOffer.clear();
+    }
+
+    // Candidates queue again inside the pipeline until the offer is set
+    for (size_t index = 0; index < heldVideoAddresses.size(); index++) {
+        handleVideoMessage("VIDEO_ADDRESS", heldVideoAddresses[index]);
+    }
+    if (!heldVideoAddresses.empty()) cout << "Replayed " << heldVideoAddresses.size() << " held ICE candidates." << endl;
+    heldVideoAddresses.clear();
 }
 
 // Drop a ringing incoming call
@@ -678,6 +697,7 @@ void cancelIncomingCall() {
     incomingWebCall = false;
     autoAnswerPending = false;
     pendingVideoOffer.clear();
+    heldVideoAddresses.clear();
     stopRingtone();
 }
 
