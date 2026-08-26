@@ -3,6 +3,7 @@
 */
 
 #include "call.h"
+#include "video.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -69,6 +70,9 @@ static void layoutButtons();
 static void drawOverlay();
 static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill, SDL_Color text);
 static void drawLabel(const char* text, int x, int y, SDL_Color color);
+static void fillCircle(int centerX, int centerY, int radius, SDL_Color color);
+static void fillRoundedRect(int x, int y, int width, int height, int radius, SDL_Color color);
+static void drawCameraIcon(int x, int y, bool recording);
 static void handleOverlayEvent(const SDL_Event& event);
 static void handleTap(int x, int y);
 static void pollXTaps();
@@ -255,7 +259,14 @@ static bool ensureOverlayWindow() {
             windowWidth = DisplayWidth(overlayDisplay, screen);
             windowHeight = DisplayHeight(overlayDisplay, screen);
         }
-        overlayXWindow = XCreateSimpleWindow(overlayDisplay, RootWindow(overlayDisplay, screen), 0, 0, windowWidth, windowHeight, 0, BlackPixel(overlayDisplay, screen), WhitePixel(overlayDisplay, screen));
+        Colormap colormap = DefaultColormap(overlayDisplay, screen);
+        XColor barColor;
+        barColor.red = 44461;
+        barColor.green = 55512;
+        barColor.blue = 59110;
+        barColor.flags = DoRed | DoGreen | DoBlue;
+        XAllocColor(overlayDisplay, colormap, &barColor);
+        overlayXWindow = XCreateSimpleWindow(overlayDisplay, RootWindow(overlayDisplay, screen), 0, 0, windowWidth, windowHeight, 0, barColor.pixel, barColor.pixel);
         XSetWindowAttributes attributes;
         attributes.override_redirect = True;
         attributes.event_mask = ExposureMask | ButtonPressMask | ButtonReleaseMask | StructureNotifyMask;
@@ -291,6 +302,9 @@ static void mapOverlay(int y, int height) {
         XMapRaised(overlayDisplay, overlayXWindow);
         XGrabPointer(overlayDisplay, overlayXWindow, True, ButtonPressMask | ButtonReleaseMask, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
         XFlush(overlayDisplay);
+
+        // Match SDL to the X strip, or the camera icon is drawn off the visible bar
+        if (callWindow) SDL_SetWindowSize(callWindow, windowWidth, height);
         overlayMapped = true;
         return;
     }
@@ -375,7 +389,9 @@ static void drawOverlay() {
     SDL_Color green = {30, 140, 70, 255};
     SDL_Color red = {180, 40, 40, 255};
     SDL_Color gray = {60, 60, 60, 255};
-    SDL_SetRenderDrawColor(callRenderer, 245, 245, 245, 255);
+    SDL_Color lightBlue = {173, 216, 230, 255};
+    if (view == CALL_INTERFACE_IN_CALL) SDL_SetRenderDrawColor(callRenderer, lightBlue.r, lightBlue.g, lightBlue.b, lightBlue.a);
+    else SDL_SetRenderDrawColor(callRenderer, 245, 245, 245, 255);
     SDL_RenderClear(callRenderer);
     if (view == CALL_INTERFACE_DIRECTORY) {
         drawButton(backButton, "Close", gray, white);
@@ -390,7 +406,11 @@ static void drawOverlay() {
         drawButton(acceptButton, "Accept", green, white);
         drawButton(declineButton, "Decline", red, white);
     } else if (view == CALL_INTERFACE_IN_CALL) {
-        drawButton(hangupButton, "Hang up", red, white);
+        drawButton(hangupButton, "Hang up", lightBlue, black);
+
+        // Camera icon in the visible strip, not centered on a full-screen hangup rect
+        int iconY = (HANGUP_STRIP_HEIGHT - 58) / 2;
+        drawCameraIcon(24, iconY, isVideoRunning());
     }
     SDL_RenderPresent(callRenderer);
 }
@@ -408,6 +428,71 @@ static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill
     SDL_RenderCopy(callRenderer, texture, NULL, &dest);
     SDL_FreeSurface(surface);
     SDL_DestroyTexture(texture);
+}
+
+static void fillCircle(int centerX, int centerY, int radius, SDL_Color color) {
+    SDL_SetRenderDrawColor(callRenderer, color.r, color.g, color.b, color.a);
+    for (int offsetY = -radius; offsetY <= radius; offsetY++) {
+        int span = 0;
+        while (span * span + offsetY * offsetY <= radius * radius) span++;
+        span--;
+        if (span < 0) continue;
+        SDL_RenderDrawLine(callRenderer, centerX - span, centerY + offsetY, centerX + span, centerY + offsetY);
+    }
+}
+
+// Fill a rounded rectangle with corner circles
+static void fillRoundedRect(int x, int y, int width, int height, int radius, SDL_Color color) {
+    if (radius * 2 > width) radius = width / 2;
+    if (radius * 2 > height) radius = height / 2;
+    SDL_SetRenderDrawColor(callRenderer, color.r, color.g, color.b, color.a);
+    SDL_Rect center = {x + radius, y, width - radius * 2, height};
+    SDL_Rect left = {x, y + radius, radius, height - radius * 2};
+    SDL_Rect right = {x + width - radius, y + radius, radius, height - radius * 2};
+    SDL_RenderFillRect(callRenderer, &center);
+    SDL_RenderFillRect(callRenderer, &left);
+    SDL_RenderFillRect(callRenderer, &right);
+    fillCircle(x + radius, y + radius, radius, color);
+    fillCircle(x + width - radius - 1, y + radius, radius, color);
+    fillCircle(x + radius, y + height - radius - 1, radius, color);
+    fillCircle(x + width - radius - 1, y + height - radius - 1, radius, color);
+}
+
+// Front-facing camera, iPhone camera glyph
+static void drawCameraIcon(int x, int y, bool recording) {
+    SDL_Color body = {36, 40, 48, 255};
+    SDL_Color ring = {230, 232, 236, 255};
+    SDL_Color glass = {48, 110, 175, 255};
+    SDL_Color pupil = {18, 22, 28, 255};
+    SDL_Color flash = {248, 248, 244, 255};
+    SDL_Color glint = {210, 230, 255, 255};
+    SDL_Color dot = {220, 30, 40, 255};
+    int bodyWidth = 78;
+    int bodyHeight = 48;
+    int viewfinderWidth = 20;
+    int viewfinderHeight = 10;
+    int bodyY = y + viewfinderHeight - 2;
+    int lensX = x + bodyWidth / 2;
+    int lensY = bodyY + bodyHeight / 2;
+
+    // Viewfinder bump on top
+    fillRoundedRect(x + (bodyWidth - viewfinderWidth) / 2, y, viewfinderWidth, viewfinderHeight + 6, 4, body);
+
+    // Body facing the viewer
+    fillRoundedRect(x, bodyY, bodyWidth, bodyHeight, 11, body);
+
+    // Flash
+    fillRoundedRect(x + 10, bodyY + 10, 11, 8, 2, flash);
+
+    // Lens rings
+    fillCircle(lensX, lensY, 16, ring);
+    fillCircle(lensX, lensY, 14, pupil);
+    fillCircle(lensX, lensY, 10, glass);
+    fillCircle(lensX, lensY, 4, pupil);
+    fillCircle(lensX - 4, lensY - 4, 2, glint);
+
+    // Recording lamp when the camera is live
+    if (recording) fillCircle(x + bodyWidth - 12, bodyY + 12, 5, dot);
 }
 
 static void drawLabel(const char* text, int x, int y, SDL_Color color) {

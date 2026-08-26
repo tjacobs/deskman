@@ -86,6 +86,9 @@ guint iceDisconnectTimerId = 0;
 int iceDisconnectSessionId = 0;
 int videoSessionId = 0;
 const int ICE_DISCONNECT_HANGOVER_MS = 3000;
+GstElement* remoteVideoSink = NULL;
+int remoteVideoWidth = 0;
+int remoteVideoHeight = 0;
 #ifdef HAVE_X11_FULLSCREEN
 Display* videoDisplay = NULL;
 Window videoWindow = 0;
@@ -165,6 +168,9 @@ void sendVideoDescription(GstWebRTCSessionDescription* description);
 void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidate, gpointer userData);
 void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData);
 void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData);
+bool remoteSinkKeepsAspect(GstElement* sink);
+void applyRemoteVideoLetterbox();
+GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData);
 GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer userData);
 GstPadProbeReturn logFirstCameraBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
@@ -813,6 +819,9 @@ void stopVideoPipeline() {
     if (videoPipeline) gst_object_unref(videoPipeline);
     videoWebrtc = NULL;
     videoPipeline = NULL;
+    remoteVideoSink = NULL;
+    remoteVideoWidth = 0;
+    remoteVideoHeight = 0;
     remoteDescriptionSet = false;
     pendingVideoAddresses.clear();
 
@@ -1219,8 +1228,12 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
         GstElement* convert = NULL;
         GstElement* sink = NULL;
 
-        // Prefer Jetson NVMM sink, X video otherwise
-        if (isGStreamerElementAvailable("nv3dsink") && isGStreamerElementAvailable("nvvidconv")) {
+        // Prefer Jetson EGL sink so aspect ratio is kept, nv3dsink stretches to fill
+        if (isGStreamerElementAvailable("nveglglessink") && isGStreamerElementAvailable("nvvidconv")) {
+            convert = gst_element_factory_make("nvvidconv", NULL);
+            sink = gst_element_factory_make("nveglglessink", "remotesink");
+            cout << "Using nveglglessink for remote video." << endl;
+        } else if (isGStreamerElementAvailable("nv3dsink") && isGStreamerElementAvailable("nvvidconv")) {
             convert = gst_element_factory_make("nvvidconv", NULL);
             sink = gst_element_factory_make("nv3dsink", "remotesink");
             cout << "Using nv3dsink for remote video." << endl;
@@ -1239,6 +1252,15 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
         if (g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "force-aspect-ratio")) {
             g_object_set(sink, "force-aspect-ratio", TRUE, NULL);
         }
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "create-window")) {
+            g_object_set(sink, "create-window", FALSE, NULL);
+        }
+        remoteVideoSink = sink;
+        GstPad* overlayPad = gst_element_get_static_pad(sink, "sink");
+        if (overlayPad) {
+            gst_pad_add_probe(overlayPad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, onRemoteVideoCaps, NULL, NULL);
+            gst_object_unref(overlayPad);
+        }
         gst_bin_add_many(GST_BIN(videoPipeline), queue, convert, sink, NULL);
         gst_element_sync_state_with_parent(queue);
         gst_element_sync_state_with_parent(convert);
@@ -1252,6 +1274,57 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
     }
 
     linkRemoteAudioPad(videoPipeline, pad);
+}
+
+// True when the sink letterboxes instead of stretching
+bool remoteSinkKeepsAspect(GstElement* sink) {
+    if (!sink) return false;
+    return g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "force-aspect-ratio") != NULL;
+}
+
+// Fit remote video into the fullscreen window without stretching
+void applyRemoteVideoLetterbox() {
+#ifdef HAVE_X11_FULLSCREEN
+    if (!remoteVideoSink || !GST_IS_VIDEO_OVERLAY(remoteVideoSink)) return;
+    if (remoteSinkKeepsAspect(remoteVideoSink)) return;
+    if (!videoDisplay || remoteVideoWidth < 1 || remoteVideoHeight < 1) return;
+    int screen = DefaultScreen(videoDisplay);
+    int windowWidth = DisplayWidth(videoDisplay, screen);
+    int windowHeight = DisplayHeight(videoDisplay, screen);
+    if (windowWidth < 1 || windowHeight < 1) return;
+    int scaledWidth = windowWidth;
+    int scaledHeight = remoteVideoHeight * windowWidth / remoteVideoWidth;
+    if (scaledHeight > windowHeight) {
+        scaledHeight = windowHeight;
+        scaledWidth = remoteVideoWidth * windowHeight / remoteVideoHeight;
+    }
+    scaledWidth &= ~1;
+    scaledHeight &= ~1;
+    if (scaledWidth < 2) scaledWidth = 2;
+    if (scaledHeight < 2) scaledHeight = 2;
+    int x = (windowWidth - scaledWidth) / 2;
+    int y = (windowHeight - scaledHeight) / 2;
+    gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(remoteVideoSink), x, y, scaledWidth, scaledHeight);
+    cout << "Remote video letterbox " << scaledWidth << "x" << scaledHeight << " in " << windowWidth << "x" << windowHeight << endl;
+#endif
+}
+
+// Read decoded frame size so Jetson can letterbox
+GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
+    (void)pad;
+    (void)userData;
+    if ((GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM) == 0) return GST_PAD_PROBE_OK;
+    GstEvent* event = gst_pad_probe_info_get_event(info);
+    if (!event || GST_EVENT_TYPE(event) != GST_EVENT_CAPS) return GST_PAD_PROBE_OK;
+    GstCaps* caps = NULL;
+    gst_event_parse_caps(event, &caps);
+    if (!caps) return GST_PAD_PROBE_OK;
+    GstVideoInfo videoInfo;
+    if (!gst_video_info_from_caps(&videoInfo, caps)) return GST_PAD_PROBE_OK;
+    remoteVideoWidth = GST_VIDEO_INFO_WIDTH(&videoInfo);
+    remoteVideoHeight = GST_VIDEO_INFO_HEIGHT(&videoInfo);
+    applyRemoteVideoLetterbox();
+    return GST_PAD_PROBE_OK;
 }
 
 // Send video address
@@ -1332,8 +1405,13 @@ GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer us
     if (gst_is_video_overlay_prepare_window_handle_message(message)) {
         Window window = ensureFullscreenVideoWindow();
         if (window) {
+            remoteVideoSink = GST_ELEMENT(GST_MESSAGE_SRC(message));
             gst_video_overlay_set_window_handle(GST_VIDEO_OVERLAY(GST_MESSAGE_SRC(message)), (guintptr)window);
-            gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(GST_MESSAGE_SRC(message)), 0, 0, -1, -1);
+            if (remoteSinkKeepsAspect(remoteVideoSink)) {
+                gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(remoteVideoSink), 0, 0, -1, -1);
+            } else {
+                applyRemoteVideoLetterbox();
+            }
         }
         gst_message_unref(message);
         return GST_BUS_DROP;
