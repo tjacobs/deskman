@@ -372,12 +372,19 @@ static int incomingStripHeight() {
     return height;
 }
 
-// Tom's robots are teleport1 and teleport3, browsers log in as webNNNNNN
+// Browsers log in with a name like web57152, robots log in as teleportN
+bool isWebPeer(const string& name) {
+    string lower;
+    for (unsigned char character : name) lower.push_back((char)tolower(character));
+    return lower.find(WEB_PEER_PREFIX) == 0;
+}
+
+// Tom's robots are teleport1 and teleport3
 static string incomingCallTitle(const string& peer) {
     string lower;
     for (unsigned char character : peer) lower.push_back((char)tolower(character));
     if (lower == "teleport1" || lower == "teleport3") return "Tom calling...";
-    if (lower.find(WEB_PEER_PREFIX) == 0) return "Web calling...";
+    if (isWebPeer(peer)) return "Web calling...";
     if (peer.empty()) return "Incoming call";
     return peer + " calling...";
 }

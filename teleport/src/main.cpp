@@ -108,7 +108,7 @@ void handleCommand(const string& command, const string& commandArgument, const s
 void pollInterfaceCommands();
 void pollAutoAnswer();
 void pollRingTimeout();
-void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraView);
+void beginIncomingCall(const string& peer, const string& cameraView);
 void acceptIncomingCall();
 void replayHeldVideoSignaling();
 void cancelIncomingCall();
@@ -489,26 +489,30 @@ void handleCommand(const string& command, const string& commandArgument, const s
         setCallPeers(listedPeers);
     }
 
+    // Ring for a caller, both robots and browsers announce with Call
     else if (command == "Call") {
-        if (holdIncomingCall) return;
+        if (holdIncomingCall || isVideoRunning()) return;
         string peer = commandArgument;
         if (peer.empty() && target != deviceName) peer = target;
-        beginIncomingCall(peer, false, "");
+        beginIncomingCall(peer, "");
     }
 
     // Ignore our own ringing notice coming back from the server
     else if (command == "RINGING") {
     }
 
-    // Start video, a web viewer asking to watch is an incoming call
+    // Start video, a viewer asking to watch only wants one way video
     else if (command == "StartVideo") {
-        // Keep the view a ringing caller asked for, they repeat StartVideo
+        // Keep the view a ringing caller asked for, and mark them as a viewer
         if (holdIncomingCall) {
             pendingCameraView = commandArgument;
+            incomingWebCall = true;
             return;
         }
+
+        // Ring for an old browser that watches without announcing a Call first
         if (!isVideoRunning()) {
-            beginIncomingCall(target, true, commandArgument);
+            beginIncomingCall(target, commandArgument);
             return;
         }
         startVideo(cameraPath, commandArgument);
@@ -540,7 +544,7 @@ void handleCommand(const string& command, const string& commandArgument, const s
         // Ring for an offer that arrived without a Call or StartVideo first
         if (command == "VIDEO_OFFER" && !holdIncomingCall && !isVideoRunning()) {
             pendingVideoOffer = commandArgument;
-            beginIncomingCall(target, true, "");
+            beginIncomingCall(target, "");
             return;
         }
         if (command == "VIDEO_OFFER" && holdIncomingCall) {
@@ -623,12 +627,14 @@ void pollRingTimeout() {
 }
 
 // Ring the speaker and show the incoming bar until someone answers
-void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraView) {
+void beginIncomingCall(const string& peer, const string& cameraView) {
     // Hold the caller off until Accept, or until the auto-answer wait runs out
     string caller = peer.empty() ? "peer" : peer;
     holdIncomingCall = true;
-    incomingWebCall = fromWeb;
     pendingCameraView = cameraView;
+
+    // A caller named webNNNNNN, or one asking for a camera view, only wants to watch
+    incomingWebCall = isWebPeer(peer) || !cameraView.empty();
     ringTimeoutAt = steady_clock::now() + seconds(RING_TIMEOUT_SECONDS);
 
     // Arm the auto-answer, or wait for a tap when it is switched off
