@@ -13,6 +13,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #ifdef __linux__
@@ -75,9 +76,12 @@ thread videoLoopThread;
 bool videoBackendReady = false;
 bool videoCameraAvailable = true;
 int videoPayloadType = 103;
+string videoProfileLevelId;
 bool remoteDescriptionSet = false;
 vector<string> pendingVideoAddresses;
 guint iceDisconnectTimerId = 0;
+int iceDisconnectSessionId = 0;
+int videoSessionId = 0;
 const int ICE_DISCONNECT_HANGOVER_MS = 3000;
 #ifdef HAVE_X11_FULLSCREEN
 Display* videoDisplay = NULL;
@@ -93,6 +97,9 @@ const int LIBCAMERA_WIDTH = VIDEO_WIDTH;
 const int LIBCAMERA_HEIGHT = VIDEO_HEIGHT;
 const int LIBCAMERA_FRAMERATE = 30;
 const int VIDEO_STATE_TIMEOUT_SECONDS = 2;
+const char* CONSTRAINED_BASELINE_PROFILE = "42e01f";
+const int CAMERA_CAPS_WAIT_MS = 8000;
+const int CAMERA_CAPS_POLL_MS = 50;
 const char* VIDEO_DEFAULT_CAMERA_PATH = "0";
 const char* VIDEO_PREFERRED_CAMERA_PATH = "/dev/video6";
 const int VIDEO_MAX_INDEX = 8;
@@ -118,6 +125,7 @@ void startVideoPipeline();
 bool startParsedVideoPipeline(string pipelineString);
 string createPipelineString(bool withAudio);
 string createVideoSourceString();
+string createVideoProfileString();
 string getCameraDevice();
 CameraFormat getCameraFormat();
 string createCameraCropString(CameraFormat cameraFormat);
@@ -140,13 +148,19 @@ void handleVideoAnswer(string payload);
 void handleVideoAddress(string payload);
 void applyPendingVideoAddresses();
 void createVideoOffer();
-int findH264PayloadType(const char* sdpText);
+void chooseVideoCodec(const char* sdpText);
+string summarizeSdp(const char* sdpText);
+void logGStreamerError(const string& message);
+void waitForCameraCaps();
+void prepareVideoTransceiver();
+void applyRemoteVideoOffer(const char* sdpText);
 void sendVideoDescription(GstWebRTCSessionDescription* description);
 void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidate, gpointer userData);
 void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData);
 void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData);
 gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData);
 GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer userData);
+GstPadProbeReturn logFirstCameraBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 gboolean stopVideoFromMainLoop(gpointer userData);
 void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userData);
 #ifdef HAVE_X11_FULLSCREEN
@@ -162,6 +176,7 @@ void onVideoAnswerCreated(GstPromise* promise, gpointer userData);
 void onVideoOfferCreated(GstPromise* promise, gpointer userData);
 void onVideoAnswerSet(GstPromise* promise, gpointer userData);
 const char* videoConnectionStateName(GstWebRTCPeerConnectionState state);
+const char* videoConnectionStateName(GstWebRTCICEConnectionState state);
 const char* videoSignalingStateName(GstWebRTCSignalingState state);
 string encodeJson(JsonObject* object);
 JsonObject* decodeJson(string payload);
@@ -212,9 +227,8 @@ void startVideo(string cameraPath, string cameraView) {
     videoRunning = true;
 
 #ifdef HAVE_GSTREAMER_WEBRTC
-    // Start send-only video
-    cout << "StartVideo: starting pipeline, view=" << activeCameraView << endl;
-    startVideoPipeline();
+    // Wait for the browser offer so the H264 payload type matches before encoding
+    cout << "StartVideo: waiting for offer, view=" << activeCameraView << endl;
 #else
     // Log missing backend
     cout << "GStreamer WebRTC backend is not compiled in." << endl;
@@ -446,6 +460,7 @@ bool startParsedVideoPipeline(string pipelineString) {
         stopVideoPipeline();
         return false;
     }
+    videoSessionId++;
 
     // Log pipeline messages, and catch prepare-window-handle for fullscreen
     GstBus* bus = gst_pipeline_get_bus(GST_PIPELINE(videoPipeline));
@@ -462,8 +477,8 @@ bool startParsedVideoPipeline(string pipelineString) {
     g_signal_connect(videoWebrtc, "notify::ice-connection-state", G_CALLBACK(logVideoIceConnectionState), NULL);
     g_signal_connect(videoWebrtc, "notify::signaling-state", G_CALLBACK(logVideoSignalingState), NULL);
 
-    // Receive remote media on robot calls
-    if (callMode) g_signal_connect(videoWebrtc, "pad-added", G_CALLBACK(onIncomingStream), NULL);
+    // Receive remote audio from the web client, and remote video on robot calls
+    g_signal_connect(videoWebrtc, "pad-added", G_CALLBACK(onIncomingStream), NULL);
 
     // Start pipeline
     GstStateChangeReturn result = gst_element_set_state(videoPipeline, GST_STATE_PLAYING);
@@ -487,6 +502,16 @@ bool startParsedVideoPipeline(string pipelineString) {
 
     // Pipeline is running
     cout << "Video pipeline playing." << endl;
+
+    // Log the first camera packet into webrtcbin
+    GstPad* webrtcSink = gst_element_get_static_pad(videoWebrtc, "sink_0");
+    if (webrtcSink) {
+        gst_pad_add_probe(webrtcSink, GST_PAD_PROBE_TYPE_BUFFER, logFirstCameraBuffer, NULL, NULL);
+        gst_object_unref(webrtcSink);
+    }
+    else {
+        cout << "No webrtcbin sink_0 yet." << endl;
+    }
     return true;
 }
 
@@ -536,7 +561,7 @@ string createVideoSourceString() {
             + cameraCrop +
             "videoconvert name=robotconvert ! " + encoder + " ! "
             "h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! "
-            "application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + " ! sendrecv.";
+            "application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + createVideoProfileString() + " ! sendrecv.";
     }
 
     // Use MJPEG or YUYV V4L2 camera and encode H264
@@ -544,8 +569,14 @@ string createVideoSourceString() {
     CameraFormat cameraFormat = getCameraFormat();
     string cameraCrop = createCameraCropString(cameraFormat);
     string decoder = cameraFormat.caps == "image/jpeg" ? "jpegdec name=robotjpeg ! " : "";
-    return "v4l2src name=robotcam device=" + cameraDevice + " ! " + cameraFormat.caps + ",width=" + to_string(cameraFormat.width) + ",height=" + to_string(cameraFormat.height) + ",framerate=" + to_string(cameraFormat.framerate) + "/1 ! " + decoder + cameraCrop + "videoconvert name=robotconvert ! " + encoder + " ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + " ! sendrecv.";
+    return "v4l2src name=robotcam device=" + cameraDevice + " ! " + cameraFormat.caps + ",width=" + to_string(cameraFormat.width) + ",height=" + to_string(cameraFormat.height) + ",framerate=" + to_string(cameraFormat.framerate) + "/1 ! " + decoder + cameraCrop + "videoconvert name=robotconvert ! " + encoder + " ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + createVideoProfileString() + " ! sendrecv.";
 #endif
+}
+
+// Declare the profile the browser offered, x264enc says 42c01f and webrtcbin then finds no match
+string createVideoProfileString() {
+    if (videoProfileLevelId.empty()) return "";
+    return " ! capssetter name=robotprofile caps=\"application/x-rtp,profile-level-id=(string)" + videoProfileLevelId + "\"";
 }
 
 // Get camera device path
@@ -766,7 +797,8 @@ void cancelIceDisconnectTimer() {
 }
 
 void stopVideoPipeline() {
-    // Stop pipeline
+    // Ignore hangups from the webrtcbin we are about to drop
+    videoSessionId++;
     cancelIceDisconnectTimer();
     stopCallAudio();
     if (videoPipeline) gst_element_set_state(videoPipeline, GST_STATE_NULL);
@@ -795,8 +827,9 @@ void handleVideoOffer(string payload) {
         return;
     }
 
-    // Match browser H264 payload type for web viewers
-    videoPayloadType = findH264PayloadType(sdpText);
+    // Match the browser H264 payload type and profile for web viewers
+    chooseVideoCodec(sdpText);
+    cout << "VIDEO_OFFER " << summarizeSdp(sdpText) << " h264_pt=" << videoPayloadType << " profile=" << (videoProfileLevelId.empty() ? "encoder" : videoProfileLevelId) << endl;
 
     // Skip if camera is unavailable
     if (!videoCameraAvailable) {
@@ -805,25 +838,24 @@ void handleVideoOffer(string payload) {
         return;
     }
 
-    // A new browser offer needs a fresh webrtcbin, keep the first StartVideo from tearing the camera down twice
-    if (videoPipeline && remoteDescriptionSet) stopVideoPipeline();
+    // Keep the live webrtcbin, a second offer from Unmute adds audio
+    if (videoWebrtc) {
+        if (remoteDescriptionSet) cout << "Applying offer to the live WebRTC session." << endl;
+        applyRemoteVideoOffer(sdpText);
+        json_object_unref(object);
+        return;
+    }
+
+    // Start send-only video, then answer this offer
     if (!videoPipeline) startVideoPipeline();
     if (!videoWebrtc) {
         cout << "VIDEO_OFFER ignored, no webrtcbin." << endl;
         json_object_unref(object);
         return;
     }
-
-    // Parse SDP
-    GstSDPMessage* sdp = NULL;
-    gst_sdp_message_new(&sdp);
-    gst_sdp_message_parse_buffer((guint8*)sdpText, strlen(sdpText), sdp);
-
-    // Set remote offer
-    GstWebRTCSessionDescription* offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
-    GstPromise* promise = gst_promise_new_with_change_func(onVideoOfferSet, NULL, NULL);
-    g_signal_emit_by_name(videoWebrtc, "set-remote-description", offer, promise);
-    gst_webrtc_session_description_free(offer);
+    waitForCameraCaps();
+    prepareVideoTransceiver();
+    applyRemoteVideoOffer(sdpText);
     json_object_unref(object);
 }
 
@@ -838,6 +870,8 @@ void handleVideoAnswer(string payload) {
         json_object_unref(object);
         return;
     }
+
+    cout << "VIDEO_ANSWER " << summarizeSdp(sdpText) << endl;
 
     // Need an active caller pipeline
     if (!videoWebrtc) {
@@ -869,24 +903,171 @@ void createVideoOffer() {
     g_signal_emit_by_name(videoWebrtc, "create-offer", NULL, promise);
 }
 
-// Find H264 payload type
-int findH264PayloadType(const char* sdpText) {
-    // Read SDP text
-    string sdp = sdpText;
+// Pick the H264 payload type and profile the browser offered, webrtcbin matches profiles exactly
+void chooseVideoCodec(const char* sdpText) {
+    string sdp = sdpText ? sdpText : "";
     string marker = "a=rtpmap:";
     string codec = " H264/90000";
-    size_t codecPosition = sdp.find(codec);
-    if (codecPosition == string::npos) return videoPayloadType;
 
-    // Find payload type line
-    size_t lineStart = sdp.rfind(marker, codecPosition);
-    if (lineStart == string::npos) return videoPayloadType;
-    lineStart += marker.size();
+    // Try every H264 payload type the browser listed, in its order of preference
+    int fallbackPayloadType = 0;
+    string fallbackProfile;
+    size_t search = 0;
+    while (true) {
+        size_t codecPosition = sdp.find(codec, search);
+        if (codecPosition == string::npos) break;
+        search = codecPosition + codec.size();
 
-    // Parse payload type
-    size_t lineEnd = sdp.find(" ", lineStart);
-    string payloadType = sdp.substr(lineStart, lineEnd - lineStart);
-    return atoi(payloadType.c_str());
+        // Read the payload type off the front of the rtpmap line
+        size_t lineStart = sdp.rfind(marker, codecPosition);
+        if (lineStart == string::npos) continue;
+        lineStart += marker.size();
+        int payloadType = atoi(sdp.substr(lineStart, codecPosition - lineStart).c_str());
+
+        // Read the format line belonging to that payload type
+        string formatMarker = "a=fmtp:" + to_string(payloadType) + " ";
+        size_t formatStart = sdp.find(formatMarker);
+        if (formatStart == string::npos) continue;
+        formatStart += formatMarker.size();
+        size_t formatEnd = sdp.find('\n', formatStart);
+        string format = sdp.substr(formatStart, formatEnd == string::npos ? string::npos : formatEnd - formatStart);
+
+        // Our payloader only sends whole access units, so packetization mode 1
+        if (format.find("packetization-mode=1") == string::npos) continue;
+
+        // Take baseline profiles only, x264enc sends constrained baseline
+        string profileMarker = "profile-level-id=";
+        size_t profileStart = format.find(profileMarker);
+        if (profileStart == string::npos) continue;
+        profileStart += profileMarker.size();
+        size_t profileEnd = format.find_first_not_of("0123456789abcdefABCDEF", profileStart);
+        string profile = format.substr(profileStart, profileEnd == string::npos ? string::npos : profileEnd - profileStart);
+        if (profile.compare(0, 2, "42") != 0) continue;
+
+        // Prefer constrained baseline, x264enc says constrained-baseline and profiles must agree
+        if (profile == CONSTRAINED_BASELINE_PROFILE) {
+            videoPayloadType = payloadType;
+            videoProfileLevelId = profile;
+            return;
+        }
+        if (!fallbackPayloadType) {
+            fallbackPayloadType = payloadType;
+            fallbackProfile = profile;
+        }
+    }
+
+    // Settle for any baseline profile the browser listed
+    if (fallbackPayloadType) {
+        videoPayloadType = fallbackPayloadType;
+        videoProfileLevelId = fallbackProfile;
+    }
+}
+
+// Name the codec and direction of every media line in an SDP
+string summarizeSdp(const char* sdpText) {
+    string text = sdpText ? sdpText : "";
+    string summary;
+
+    // Walk each media section, they start at an m= line and run to the next one
+    size_t start = text.compare(0, 2, "m=") == 0 ? 0 : text.find("\nm=");
+    while (start != string::npos) {
+        if (text[start] == '\n') start++;
+        size_t next = text.find("\nm=", start);
+        string section = text.substr(start, next == string::npos ? string::npos : next - start);
+
+        // Read the kind from the media line
+        string kind = "media";
+        if (section.compare(0, 7, "m=video") == 0) kind = "video";
+        else if (section.compare(0, 7, "m=audio") == 0) kind = "audio";
+
+        // Read the direction, an unnegotiated line is inactive
+        string direction = "none";
+        if (section.find("a=inactive") != string::npos) direction = "inactive";
+        else if (section.find("a=sendrecv") != string::npos) direction = "sendrecv";
+        else if (section.find("a=sendonly") != string::npos) direction = "sendonly";
+        else if (section.find("a=recvonly") != string::npos) direction = "recvonly";
+
+        // Read the codecs still on offer in this line, GStreamer and Chrome differ in case
+        string upperSection = section;
+        for (char& letter : upperSection) letter = toupper(letter);
+        string codecs;
+        const char* names[] = {"H264", "VP8", "VP9", "AV1", "OPUS", "PCMU"};
+        for (const char* name : names) {
+            if (upperSection.find(name) == string::npos) continue;
+            if (!codecs.empty()) codecs += "/";
+            codecs += name;
+        }
+        if (codecs.empty()) codecs = "no codec";
+
+        if (!summary.empty()) summary += " ";
+        summary += kind + "=" + direction + " " + codecs;
+        start = next;
+    }
+    return summary;
+}
+
+// Hold the answer until the camera has caps, webrtcbin drops the sender without them
+void waitForCameraCaps() {
+    if (!videoWebrtc) return;
+
+    // Poll the camera pad, a cold libcamera and software encoder take a moment
+    GstPad* sinkPad = gst_element_get_static_pad(videoWebrtc, "sink_0");
+    if (!sinkPad) {
+        cout << "No camera pad on webrtcbin." << endl;
+        return;
+    }
+    int waited = 0;
+    GstCaps* caps = NULL;
+    while (waited < CAMERA_CAPS_WAIT_MS) {
+        caps = gst_pad_get_current_caps(sinkPad);
+        if (caps) break;
+        g_usleep(CAMERA_CAPS_POLL_MS * 1000);
+        waited += CAMERA_CAPS_POLL_MS;
+    }
+
+    // Log that the camera is ready, or that it never produced a frame
+    if (caps) {
+        cout << "Camera ready after " << waited << "ms." << endl;
+        gst_caps_unref(caps);
+    }
+    else {
+        logGStreamerError("Camera produced no frames in " + to_string(CAMERA_CAPS_WAIT_MS) + "ms, answering without video.");
+    }
+    gst_object_unref(sinkPad);
+}
+
+// Pin the camera transceiver to H264 send, a slow camera start otherwise answers VP8 inactive
+void prepareVideoTransceiver() {
+    if (!videoWebrtc) return;
+
+    // Find the transceiver webrtcbin made for the camera sink pad
+    GstWebRTCRTPTransceiver* transceiver = NULL;
+    g_signal_emit_by_name(videoWebrtc, "get-transceiver", 0, &transceiver);
+    if (!transceiver) {
+        cout << "No video transceiver to prepare." << endl;
+        return;
+    }
+
+    // Offer only H264 at the payload type the browser asked for
+    string capsText = "application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=" + to_string(videoPayloadType);
+    GstCaps* caps = gst_caps_from_string(capsText.c_str());
+    g_object_set(transceiver, "codec-preferences", caps, NULL);
+    g_object_set(transceiver, "direction", GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY, NULL);
+    gst_caps_unref(caps);
+
+    cout << "Video transceiver H264 pt=" << videoPayloadType << " sendonly." << endl;
+    gst_object_unref(transceiver);
+}
+
+// Set the browser or peer offer on webrtcbin
+void applyRemoteVideoOffer(const char* sdpText) {
+    GstSDPMessage* sdp = NULL;
+    gst_sdp_message_new(&sdp);
+    gst_sdp_message_parse_buffer((guint8*)sdpText, strlen(sdpText), sdp);
+    GstWebRTCSessionDescription* offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
+    GstPromise* promise = gst_promise_new_with_change_func(onVideoOfferSet, NULL, NULL);
+    g_signal_emit_by_name(videoWebrtc, "set-remote-description", offer, promise);
+    gst_webrtc_session_description_free(offer);
 }
 
 // Handle video address
@@ -933,6 +1114,7 @@ void sendVideoDescription(GstWebRTCSessionDescription* description) {
     // Send offer or answer
     string payload = encodeJson(object);
     if (videoWebSocket) videoWebSocket->send(videoDeviceName + " " + command + " " + payload);
+    cout << "Sent " << command << " " << summarizeSdp(sdpText) << endl;
     json_object_unref(object);
     g_free(sdpText);
 }
@@ -946,6 +1128,14 @@ void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData) {
     // Only link source pads once
     if (GST_PAD_DIRECTION(pad) != GST_PAD_SRC) return;
     if (gst_pad_is_linked(pad)) return;
+
+    // Log the incoming RTP pad
+    GstCaps* padCaps = gst_pad_get_current_caps(pad);
+    if (!padCaps) padCaps = gst_pad_query_caps(pad, NULL);
+    gchar* capsText = padCaps ? gst_caps_to_string(padCaps) : g_strdup("none");
+    cout << "Remote WebRTC pad " << (GST_PAD_NAME(pad) ? GST_PAD_NAME(pad) : "?") << " caps=" << capsText << endl;
+    g_free(capsText);
+    if (padCaps) gst_caps_unref(padCaps);
 
     // Decode remote RTP with decodebin
     GstElement* decodebin = gst_element_factory_make("decodebin", NULL);
@@ -973,16 +1163,24 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
     // Read media type from caps
     GstCaps* caps = gst_pad_get_current_caps(pad);
     if (!caps) caps = gst_pad_query_caps(pad, NULL);
-    if (!caps) return;
+    if (!caps) {
+        cout << "Remote decoded pad has no caps." << endl;
+        return;
+    }
     const GstStructure* structure = gst_caps_get_structure(caps, 0);
     const gchar* mediaName = gst_structure_get_name(structure);
     bool isVideo = g_str_has_prefix(mediaName, "video/");
     bool isAudio = g_str_has_prefix(mediaName, "audio/");
+    cout << "Decoded remote stream " << (mediaName ? mediaName : "?") << endl;
     gst_caps_unref(caps);
     if (!isVideo && !isAudio) return;
 
-    // Play remote video fullscreen on the local display
+    // Play remote video fullscreen on robot calls only
     if (isVideo) {
+        if (!callMode) {
+            cout << "Skipping remote video pad, web viewer is send-audio only." << endl;
+            return;
+        }
         GstElement* queue = gst_element_factory_make("queue", NULL);
         GstElement* convert = NULL;
         GstElement* sink = NULL;
@@ -1032,7 +1230,8 @@ void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidat
     JsonObject* object = json_object_new();
     json_object_set_string_member(object, "candidate", candidate);
     json_object_set_int_member(object, "sdpMLineIndex", mediaLineIndex);
-    json_object_set_string_member(object, "sdpMid", "0");
+    string mid = to_string(mediaLineIndex);
+    json_object_set_string_member(object, "sdpMid", mid.c_str());
 
     // Send candidate
     string payload = encodeJson(object);
@@ -1079,6 +1278,16 @@ void destroyFullscreenVideoWindow() {
 }
 #endif
 
+// Log once when camera frames reach webrtcbin
+GstPadProbeReturn logFirstCameraBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
+    // Confirm camera packets reach webrtcbin
+    (void)pad;
+    (void)info;
+    (void)userData;
+    cout << "Camera sending to WebRTC." << endl;
+    return GST_PAD_PROBE_REMOVE;
+}
+
 // Catch prepare-window-handle so remote video renders into our fullscreen window
 GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer userData) {
     (void)bus;
@@ -1100,6 +1309,15 @@ GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer us
     return GST_BUS_PASS;
 }
 
+// Print a GStreamer error at journal priority 3 so journalctl shows it red
+void logGStreamerError(const string& message) {
+    if (!isatty(STDERR_FILENO)) {
+        cerr << "<3>" << message << endl;
+        return;
+    }
+    cerr << "\033[1;31m" << message << "\033[0m" << endl;
+}
+
 // Handle video bus message
 gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData) {
     // Ignore unused values
@@ -1119,13 +1337,13 @@ gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userDa
 
         // USB sound card unplugged or bumped loose, log once and skip camera dump
         if (isCallAudioDisconnectMessage(errorMessage, debugMessage)) {
-            if (shouldLogCallAudioDisconnect()) cout << "Audio device disconnected." << endl;
+            if (shouldLogCallAudioDisconnect()) logGStreamerError("Audio device disconnected.");
         } else if (errorMessage.find("Cannot identify device") != string::npos || debugMessage.find("No such file or directory") != string::npos) {
-            cout << "No camera connected." << endl;
+            logGStreamerError("No camera connected.");
             printCameraFormats();
         } else {
-            cout << "GStreamer error: " << errorMessage << endl;
-            if (debug) cout << "GStreamer debug: " << debug << endl;
+            logGStreamerError("GStreamer error: " + errorMessage);
+            if (debug) logGStreamerError(string("GStreamer debug: ") + debug);
         }
         g_clear_error(&error);
         g_free(debug);
@@ -1154,7 +1372,11 @@ gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userDa
 
 // Stop video from the GStreamer main loop after the peer drops
 gboolean stopVideoFromMainLoop(gpointer userData) {
-    (void)userData;
+    int sessionId = GPOINTER_TO_INT(userData);
+    if (sessionId != videoSessionId) {
+        cout << "Ignoring disconnect from old WebRTC session " << sessionId << "." << endl;
+        return G_SOURCE_REMOVE;
+    }
     if (!videoRunning) return G_SOURCE_REMOVE;
     cout << "Remote peer disconnected, closing video." << endl;
     stopVideo();
@@ -1170,11 +1392,10 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
     // Read state
     GstWebRTCPeerConnectionState state;
     g_object_get(object, "connection-state", &state, NULL);
-    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED ||
-        state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED ||
+    cout << "WebRTC connection " << videoConnectionStateName(state) << endl;
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED ||
         state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED) {
-        cout << "WebRTC connection " << videoConnectionStateName(state) << endl;
-        g_idle_add(stopVideoFromMainLoop, NULL);
+        g_idle_add(stopVideoFromMainLoop, GINT_TO_POINTER(videoSessionId));
     }
 }
 
@@ -1182,8 +1403,12 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
 gboolean iceDisconnectHangup(gpointer userData) {
     (void)userData;
     iceDisconnectTimerId = 0;
+    if (iceDisconnectSessionId != videoSessionId) {
+        cout << "Ignoring hangup from old WebRTC session." << endl;
+        return G_SOURCE_REMOVE;
+    }
     if (!videoRunning) return G_SOURCE_REMOVE;
-    cout << "WebRTC ICE disconnected, closing video." << endl;
+    cout << "WebRTC connection disconnected, closing video." << endl;
     stopVideo();
     return G_SOURCE_REMOVE;
 }
@@ -1194,6 +1419,7 @@ void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer user
 
     GstWebRTCICEConnectionState state;
     g_object_get(object, "ice-connection-state", &state, NULL);
+    cout << "WebRTC connection " << videoConnectionStateName(state) << endl;
 
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED ||
         state == GST_WEBRTC_ICE_CONNECTION_STATE_COMPLETED) {
@@ -1203,12 +1429,12 @@ void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer user
 
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_FAILED ||
         state == GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED) {
-        cout << "WebRTC ICE failed." << endl;
-        g_idle_add(stopVideoFromMainLoop, NULL);
+        g_idle_add(stopVideoFromMainLoop, GINT_TO_POINTER(videoSessionId));
         return;
     }
 
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED && videoRunning && videoLoop && !iceDisconnectTimerId) {
+        iceDisconnectSessionId = videoSessionId;
         GSource* source = g_timeout_source_new(ICE_DISCONNECT_HANGOVER_MS);
         g_source_set_callback(source, iceDisconnectHangup, NULL, NULL);
         iceDisconnectTimerId = g_source_attach(source, g_main_loop_get_context(videoLoop));
@@ -1225,7 +1451,7 @@ void logVideoSignalingState(GObject* object, GParamSpec* spec, gpointer userData
     // Read state
     GstWebRTCSignalingState state;
     g_object_get(object, "signaling-state", &state, NULL);
-    if (state == GST_WEBRTC_SIGNALING_STATE_CLOSED) cout << "WebRTC signaling closed." << endl;
+    cout << "WebRTC signaling " << videoSignalingStateName(state) << endl;
 }
 
 // Name peer connection state
@@ -1237,6 +1463,19 @@ const char* videoConnectionStateName(GstWebRTCPeerConnectionState state) {
     if (state == GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED) return "disconnected";
     if (state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED) return "failed";
     if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED) return "closed";
+    return "unknown";
+}
+
+// Name transport connection state
+const char* videoConnectionStateName(GstWebRTCICEConnectionState state) {
+    // Map state
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_NEW) return "new";
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CHECKING) return "checking";
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED) return "connected";
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_COMPLETED) return "completed";
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_FAILED) return "failed";
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED) return "disconnected";
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED) return "closed";
     return "unknown";
 }
 
