@@ -9,7 +9,7 @@ Functions:
 
 Comments:
 
-- Every block of code needs a comment above it, with a blank line above the comment
+- Every group of lines in the file needs a comment above it, including includes, namespace, and consts, with a blank line above the comment
 - No line of code should exist just by itself, put a comment above it or group it
 - Comments are short descriptions of what code blocks do, like "# Create the thing", not a passive "# Thing"
 - Always insert a blank line immediately before every comment block, except for at top of functions

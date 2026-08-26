@@ -9,6 +9,7 @@
 #include "config.h"
 #include "interface.h"
 #include "fan.h"
+#include "battery.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -229,6 +230,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
     while (!quit && !g_quit) {
         reap_talk_process();
         check_fan();
+        check_battery();
         apply_call_handoff(faceTracker);
 
         // Process keyboard input on the main thread when a window exists
@@ -292,6 +294,10 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
 
             string temperature_warning = temperature_warning_text();
             if (!temperature_warning.empty()) draw_text(temperature_warning.c_str(), 10, 90, face.font, {200, 0, 0, 255});
+
+            // Pack voltage from the INA219
+            string battery = battery_text();
+            if (!battery.empty()) draw_text(battery.c_str(), 10, screen_height - 40, face.font, {0, 0, 0, 255});
 
             if (use_camera && faceTracker.isCameraAvailable()) faceTracker.updateWindow();
 

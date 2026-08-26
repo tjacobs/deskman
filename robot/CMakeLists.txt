@@ -12,6 +12,7 @@ add_executable(${TARGET_NAME}
     src/face.cpp
     src/screen.cpp
     src/fan.cpp
+    src/battery.cpp
     src/servos.cpp
     src/renderer.cpp
     src/tracker.cpp
