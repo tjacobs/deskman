@@ -85,10 +85,15 @@ vector<string> pendingVideoAddresses;
 guint iceDisconnectTimerId = 0;
 int iceDisconnectSessionId = 0;
 int videoSessionId = 0;
-const int ICE_DISCONNECT_HANGOVER_MS = 3000;
+gint64 remoteVideoBufferTimeUs = 0;
+guint remoteVideoTimerId = 0;
+bool remoteVideoShowing = false;
 GstElement* remoteVideoSink = NULL;
 int remoteVideoWidth = 0;
 int remoteVideoHeight = 0;
+const int ICE_DISCONNECT_HANGOVER_MS = 3000;
+const int REMOTE_VIDEO_IDLE_MS = 1500;
+const int REMOTE_VIDEO_POLL_MS = 500;
 #ifdef HAVE_X11_FULLSCREEN
 Display* videoDisplay = NULL;
 Window videoWindow = 0;
@@ -180,6 +185,11 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
 Window ensureFullscreenVideoWindow();
 void destroyFullscreenVideoWindow();
 #endif
+void startRemoteVideoIdleTimer();
+GstPadProbeReturn noteRemoteVideoBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
+gboolean hideRemoteVideoWhenIdle(gpointer userData);
+void showRemoteVideoWindow();
+void hideRemoteVideoWindow();
 void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer userData);
 gboolean iceDisconnectHangup(gpointer userData);
 void cancelIceDisconnectTimer();
@@ -813,6 +823,13 @@ void stopVideoPipeline() {
     // Ignore hangups from the webrtcbin we are about to drop
     videoSessionId++;
     cancelIceDisconnectTimer();
+
+    // Stop watching remote frames, the window goes away with the pipeline
+    if (remoteVideoTimerId) {
+        g_source_remove(remoteVideoTimerId);
+        remoteVideoTimerId = 0;
+    }
+    remoteVideoShowing = false;
     stopCallAudio();
     if (videoPipeline) gst_element_set_state(videoPipeline, GST_STATE_NULL);
     if (videoWebrtc) gst_object_unref(videoWebrtc);
@@ -1270,6 +1287,11 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
         gst_pad_link(pad, sinkPad);
         gst_object_unref(sinkPad);
         cout << "Linked remote video stream." << endl;
+
+        // Watch the frames, a peer turning its camera off just stops sending
+        remoteVideoBufferTimeUs = g_get_monotonic_time();
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, noteRemoteVideoBuffer, NULL, NULL);
+        startRemoteVideoIdleTimer();
         return;
     }
 
@@ -1372,6 +1394,7 @@ Window ensureFullscreenVideoWindow() {
     // Show the window
     XMapRaised(videoDisplay, videoWindow);
     XSync(videoDisplay, False);
+    remoteVideoShowing = true;
     cout << "Remote video fullscreen " << width << "x" << height << endl;
     return videoWindow;
 }
@@ -1384,6 +1407,62 @@ void destroyFullscreenVideoWindow() {
     videoWindow = 0;
 }
 #endif
+
+// Poll for remote frames stopping, a peer camera going off sends no packets and no event
+void startRemoteVideoIdleTimer() {
+    if (remoteVideoTimerId || !videoLoop) return;
+    GSource* source = g_timeout_source_new(REMOTE_VIDEO_POLL_MS);
+    g_source_set_callback(source, hideRemoteVideoWhenIdle, NULL, NULL);
+    remoteVideoTimerId = g_source_attach(source, g_main_loop_get_context(videoLoop));
+    g_source_unref(source);
+}
+
+// Note the arrival time of each remote frame, and show the screen again on the first one
+GstPadProbeReturn noteRemoteVideoBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
+    // Ignore unused values
+    (void)pad;
+    (void)info;
+    (void)userData;
+
+    remoteVideoBufferTimeUs = g_get_monotonic_time();
+    if (!remoteVideoShowing) showRemoteVideoWindow();
+    return GST_PAD_PROBE_OK;
+}
+
+// Clear the screen once the remote frames have stopped for a moment
+gboolean hideRemoteVideoWhenIdle(gpointer userData) {
+    (void)userData;
+
+    if (!remoteVideoShowing) return TRUE;
+    gint64 idleMs = (g_get_monotonic_time() - remoteVideoBufferTimeUs) / 1000;
+    if (idleMs < REMOTE_VIDEO_IDLE_MS) return TRUE;
+    hideRemoteVideoWindow();
+    return TRUE;
+}
+
+// Raise the window over the face, raising keeps the fullscreen state that unmapping loses
+void showRemoteVideoWindow() {
+    remoteVideoShowing = true;
+#ifdef HAVE_X11_FULLSCREEN
+    if (videoDisplay && videoWindow) {
+        XRaiseWindow(videoDisplay, videoWindow);
+        XSync(videoDisplay, False);
+    }
+#endif
+    cout << "Remote video on screen." << endl;
+}
+
+// Drop the window behind the face
+void hideRemoteVideoWindow() {
+    remoteVideoShowing = false;
+#ifdef HAVE_X11_FULLSCREEN
+    if (videoDisplay && videoWindow) {
+        XLowerWindow(videoDisplay, videoWindow);
+        XSync(videoDisplay, False);
+    }
+#endif
+    cout << "Remote video stopped, screen cleared." << endl;
+}
 
 // Log once when camera frames reach webrtcbin
 GstPadProbeReturn logFirstCameraBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
