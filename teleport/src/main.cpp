@@ -80,7 +80,6 @@ bool autoAnswerPending = false;
 steady_clock::time_point autoAnswerAt;
 steady_clock::time_point ringTimeoutAt;
 string pendingVideoOffer;
-vector<string> heldVideoAddresses;
 string pendingCameraView;
 TeleportConfig settings;
 vector<string> listedPeers;
@@ -105,11 +104,9 @@ void handleWebSocketMessage(const WebSocketMessagePtr& message);
 void handleTextMessage(const string& text);
 void handleCommand(const string& command, const string& commandArgument, const string& secondCommandArgument, const string& target);
 void pollInterfaceCommands();
-void pollAutoAnswer();
-void pollRingTimeout();
 void beginIncomingCall(const string& peer, const string& cameraView);
+void pollRingingCall();
 void acceptIncomingCall();
-void replayHeldVideoSignaling();
 void cancelIncomingCall();
 
 // Main
@@ -321,8 +318,7 @@ void runMainLoop() {
     while (running) {
         sendPing();
         pollInterfaceCommands();
-        pollAutoAnswer();
-        pollRingTimeout();
+        pollRingingCall();
         pollCallInterface();
         if (isCallOverlayIdle() && isVideoRunning()) stopVideo();
         sleep_for(milliseconds(16));
@@ -441,7 +437,7 @@ void handleCommand(const string& command, const string& commandArgument, const s
             cout << "Calling " << callPeer << "..." << endl;
             webSocket.send(deviceName + " CONNECT " + callPeer);
             webSocket.send(deviceName + " Call");
-            if (startCall(cameraPath, true)) showCallInProgress();
+            if (startCall(cameraPath)) showCallInProgress();
             else showCallFailed("Call not sent");
         }
     }
@@ -473,10 +469,6 @@ void handleCommand(const string& command, const string& commandArgument, const s
         move(command, value);
     }
 
-    // Ignore legacy web commands
-    else if (command == "Start" || command == "Stop" || command == "ListTracks") {
-    }
-
     // Accept incoming robot call
     else if (command == "DEVICE") {
         if (commandArgument.empty() || commandArgument == deviceName) return;
@@ -500,20 +492,13 @@ void handleCommand(const string& command, const string& commandArgument, const s
     else if (command == "RINGING") {
     }
 
-    // Pick the camera view, callers send this alongside Call
+    // Pick the camera view, callers send this alongside Call and the server repeats it
     else if (command == "StartVideo") {
         // Keep the view a ringing caller asked for, they send it right after Call
-        if (holdIncomingCall) {
-            pendingCameraView = commandArgument;
-            return;
-        }
+        if (holdIncomingCall) pendingCameraView = commandArgument;
 
         // Nothing reaches the camera without ringing first, so ring for a caller that skipped Call
-        if (!isVideoRunning()) {
-            beginIncomingCall(target, commandArgument);
-            return;
-        }
-        startVideo(cameraPath, commandArgument);
+        else if (!isVideoRunning()) beginIncomingCall(target, commandArgument);
     }
 
     // Play remote PCM on the USB speaker
@@ -539,21 +524,11 @@ void handleCommand(const string& command, const string& commandArgument, const s
 
     // Handle video signaling
     else if (command == "VIDEO_OFFER" || command == "VIDEO_ANSWER" || command == "VIDEO_ADDRESS" || command == "VIDEO_STOP") {
-        // Ring for an offer that arrived without a Call or StartVideo first
-        if (command == "VIDEO_OFFER" && !holdIncomingCall && !isVideoRunning()) {
+        // Hold an offer that arrives before the camera is open, ringing first if the caller skipped Call
+        if (command == "VIDEO_OFFER" && !isVideoRunning()) {
             pendingVideoOffer = commandArgument;
-            beginIncomingCall(target, "");
-            return;
-        }
-        if (command == "VIDEO_OFFER" && holdIncomingCall) {
-            pendingVideoOffer = commandArgument;
-            cout << "Holding remote offer until Accept." << endl;
-            return;
-        }
-
-        // Hold the caller's ICE candidates here, a starting pipeline clears its own queue
-        if (command == "VIDEO_ADDRESS" && holdIncomingCall) {
-            heldVideoAddresses.push_back(commandArgument);
+            if (holdIncomingCall) cout << "Holding remote offer until Accept." << endl;
+            else beginIncomingCall(target, "");
             return;
         }
         handleVideoMessage(command, commandArgument);
@@ -586,7 +561,7 @@ void pollInterfaceCommands() {
         cancelIncomingCall();
         webSocket.send(deviceName + " CONNECT " + peer);
         webSocket.send(deviceName + " Call");
-        if (startCall(cameraPath, true)) {
+        if (startCall(cameraPath)) {
             showCallInProgress();
         } else {
             webSocket.send(deviceName + " VIDEO_STOP");
@@ -604,24 +579,6 @@ void pollInterfaceCommands() {
         webSocket.send(deviceName + " VIDEO_STOP");
         showCallIdle();
     }
-}
-
-// Answer after the auto-answer delay
-void pollAutoAnswer() {
-    if (!autoAnswerPending) return;
-    if (steady_clock::now() < autoAnswerAt) return;
-    cout << "Auto-answering call." << endl;
-    acceptIncomingCall();
-}
-
-// Decline a call that nobody has answered
-void pollRingTimeout() {
-    if (!holdIncomingCall) return;
-    if (steady_clock::now() < ringTimeoutAt) return;
-    cout << "Nobody answered, declining call." << endl;
-    cancelIncomingCall();
-    webSocket.send(deviceName + " VIDEO_STOP");
-    showCallIdle();
 }
 
 // Ring the speaker and show the incoming bar until someone answers
@@ -650,6 +607,26 @@ void beginIncomingCall(const string& peer, const string& cameraView) {
     webSocket.send(deviceName + " RINGING");
 }
 
+// Answer or give up on a ringing call once one of its waits runs out
+void pollRingingCall() {
+    if (!holdIncomingCall) return;
+
+    // Answer alone when autoAnswer is set
+    if (autoAnswerPending && steady_clock::now() >= autoAnswerAt) {
+        cout << "Auto-answering call." << endl;
+        acceptIncomingCall();
+        return;
+    }
+
+    // Decline a call nobody has answered
+    if (steady_clock::now() >= ringTimeoutAt) {
+        cout << "Nobody answered, declining call." << endl;
+        cancelIncomingCall();
+        webSocket.send(deviceName + " VIDEO_STOP");
+        showCallIdle();
+    }
+}
+
 // Start the local side of an incoming call, robots and browsers answer the same way
 void acceptIncomingCall() {
     holdIncomingCall = false;
@@ -658,23 +635,12 @@ void acceptIncomingCall() {
 
     // Open the camera on the offer, so the encoder matches the payload type the caller asked for
     startVideo(cameraPath, pendingCameraView);
-    replayHeldVideoSignaling();
-}
 
-// Feed the pipeline the offer and candidates that arrived while it was ringing
-void replayHeldVideoSignaling() {
-    // The offer has to land before any candidate can be added
+    // Answer the offer we held, the pipeline already has the candidates that followed it
     if (!pendingVideoOffer.empty()) {
         handleVideoMessage("VIDEO_OFFER", pendingVideoOffer);
         pendingVideoOffer.clear();
     }
-
-    // Candidates queue again inside the pipeline until the offer is set
-    for (size_t index = 0; index < heldVideoAddresses.size(); index++) {
-        handleVideoMessage("VIDEO_ADDRESS", heldVideoAddresses[index]);
-    }
-    if (!heldVideoAddresses.empty()) cout << "Replayed " << heldVideoAddresses.size() << " held ICE candidates." << endl;
-    heldVideoAddresses.clear();
 }
 
 // Drop a ringing incoming call
@@ -682,7 +648,7 @@ void cancelIncomingCall() {
     holdIncomingCall = false;
     autoAnswerPending = false;
     pendingVideoOffer.clear();
-    heldVideoAddresses.clear();
+    clearVideoAddresses();
     stopRingtone();
 }
 

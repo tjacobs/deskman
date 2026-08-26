@@ -63,6 +63,11 @@ const int RING_GAP_MS = 200;
 const int RING_PAUSE_MS = 2000;
 const int RING_SLICE_MS = 25;
 
+// Fade each edge of the tone, switching it on mid-wave clicks
+const int RING_FADE_MS = 40;
+const int RING_FADE_STEPS = 20;
+const int RING_HOLD_MS = RING_TONE_MS - 2 * RING_FADE_MS;
+
 string videoAudioDevice = "plughw:0,0";
 string videoMicDevice = "plughw:0,0";
 string videoSpeakerDevice = "plughw:0,0";
@@ -108,7 +113,7 @@ bool isPulseAudioDevice(const string& device);
 void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gchar* message, gpointer userData);
 void runRingCadence();
 bool waitWhileRinging(int waitMilliseconds);
-void setRingGate(bool open);
+void fadeRingGate(bool open);
 #endif
 
 string cardStreamInfo(int card);
@@ -343,11 +348,11 @@ void startRingtone() {
     if (ringPipeline) return;
     gst_init(NULL, NULL);
 
-    // Hold a sine tone behind a gate, the cadence thread opens and closes it
+    // Hold a sine tone behind a silent gate, the cadence thread fades it up and down
     string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
     string pipelineString = "audiotestsrc name=ringsource wave=sine is-live=true freq=" + to_string(RING_FREQUENCY_HZ) + " ! "
         "audioconvert ! audioresample ! audio/x-raw,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! "
-        "volume name=ringgate mute=true volume=" + to_string(RING_VOLUME) + " ! "
+        "volume name=ringgate volume=0.0 ! "
         + sinkElement + " name=ringsink device=" + videoSpeakerDevice + " buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
     GError* error = NULL;
     ringPipeline = gst_parse_launch(pipelineString.c_str(), &error);
@@ -359,7 +364,7 @@ void startRingtone() {
         return;
     }
 
-    // Open the speaker with the tone still muted
+    // Open the speaker with the tone still silent
     ringGate = gst_bin_get_by_name(GST_BIN(ringPipeline), "ringgate");
     if (gst_element_set_state(ringPipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         cout << "Failed to ring on " << videoSpeakerDevice << endl;
@@ -395,16 +400,16 @@ void stopRingtone() {
 // Ring, ring, pause, until someone answers
 void runRingCadence() {
     while (ringPlaying) {
-        setRingGate(true);
-        if (!waitWhileRinging(RING_TONE_MS)) break;
-        setRingGate(false);
+        fadeRingGate(true);
+        if (!waitWhileRinging(RING_HOLD_MS)) break;
+        fadeRingGate(false);
         if (!waitWhileRinging(RING_GAP_MS)) break;
-        setRingGate(true);
-        if (!waitWhileRinging(RING_TONE_MS)) break;
-        setRingGate(false);
+        fadeRingGate(true);
+        if (!waitWhileRinging(RING_HOLD_MS)) break;
+        fadeRingGate(false);
         if (!waitWhileRinging(RING_PAUSE_MS)) break;
     }
-    setRingGate(false);
+    fadeRingGate(false);
 }
 
 // Wait in slices so an answer stops the tone straight away
@@ -416,9 +421,16 @@ bool waitWhileRinging(int waitMilliseconds) {
     return ringPlaying;
 }
 
-// Let the tone through, or mute it
-void setRingGate(bool open) {
-    if (ringGate) g_object_set(ringGate, "mute", open ? FALSE : TRUE, NULL);
+// Ramp the tone up or down, so each edge starts and ends on silence
+void fadeRingGate(bool open) {
+    if (!ringGate) return;
+
+    // Walk the volume across the fade, ignoring an answer so the tone never cuts mid-wave
+    for (int step = 1; step <= RING_FADE_STEPS; step++) {
+        double part = (double)step / RING_FADE_STEPS;
+        g_object_set(ringGate, "volume", (open ? part : 1.0 - part) * RING_VOLUME, NULL);
+        this_thread::sleep_for(milliseconds(RING_FADE_MS / RING_FADE_STEPS));
+    }
 }
 #endif
 

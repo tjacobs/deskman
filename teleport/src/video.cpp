@@ -53,7 +53,7 @@ using namespace ix;
 // Track video state
 WebSocket* videoWebSocket = NULL;
 bool videoRunning = false;
-bool callMode = false;
+bool dialedCall = false;
 bool createOfferPending = false;
 bool includeAudioInPipeline = false;
 string activeCameraPath;
@@ -71,6 +71,9 @@ string getCameraView(string cameraView);
 // The encoder only makes constrained baseline, so declare that until an offer names another
 const char* CONSTRAINED_BASELINE_PROFILE = "42e01f";
 
+// Candidates wait here for a remote description, through ringing and pipeline rebuilds, until the call ends
+vector<string> pendingVideoAddresses;
+
 // Track GStreamer state
 GMainLoop* videoLoop = NULL;
 GstElement* videoPipeline = NULL;
@@ -81,7 +84,6 @@ bool videoCameraAvailable = true;
 int videoPayloadType = 103;
 string videoProfileLevelId = CONSTRAINED_BASELINE_PROFILE;
 bool remoteDescriptionSet = false;
-vector<string> pendingVideoAddresses;
 guint iceDisconnectTimerId = 0;
 int iceDisconnectSessionId = 0;
 int videoSessionId = 0;
@@ -243,10 +245,10 @@ void startVideo(string cameraPath, string cameraView) {
     // Keep the live sender, the web client and server both repeat StartVideo
     if (videoRunning && videoPipeline) return;
 
-    // Save camera settings for web viewer path, and send the mic so the web page can hear
+    // Save camera settings for the answering path, and send the mic so the caller can hear
     activeCameraPath = cameraPath;
     activeCameraView = getCameraView(cameraView);
-    callMode = false;
+    dialedCall = false;
     createOfferPending = false;
     includeAudioInPipeline = true;
     videoRunning = true;
@@ -260,10 +262,10 @@ void startVideo(string cameraPath, string cameraView) {
 #endif
 }
 
-// Start robot-to-robot call
-bool startCall(string cameraPath, bool createOffer) {
-    // Ignore duplicate Call messages from symmetric server relay
-    if (videoRunning && callMode) {
+// Dial a peer from the screen, incoming calls are answered by startVideo instead
+bool startCall(string cameraPath) {
+    // Ignore a second tap on a peer we are already calling
+    if (videoRunning && dialedCall) {
         cout << "Already in a call." << endl;
         return true;
     }
@@ -271,16 +273,16 @@ bool startCall(string cameraPath, bool createOffer) {
     // Save call settings
     activeCameraPath = cameraPath;
     activeCameraView = CAMERA_VIEW_FULL;
-    callMode = true;
-    createOfferPending = createOffer;
+    dialedCall = true;
+    createOfferPending = true;
     includeAudioInPipeline = true;
     videoRunning = true;
 
 #ifdef HAVE_GSTREAMER_WEBRTC
-    // Start bidirectional session
-    cout << (createOffer ? "Starting call as caller." : "Starting call as callee.") << endl;
+    // Open the camera now, the offer follows once it is really running
+    cout << "Starting call as caller." << endl;
     startVideoPipeline();
-    return videoRunning && callMode;
+    return videoRunning && dialedCall;
 #else
     failCallWithoutOffer("Call not sent");
     return false;
@@ -296,12 +298,13 @@ bool isVideoRunning() {
 void stopVideo() {
     bool sendStop = videoRunning;
     videoRunning = false;
-    callMode = false;
+    dialedCall = false;
     createOfferPending = false;
     includeAudioInPipeline = false;
 
 #ifdef HAVE_GSTREAMER_WEBRTC
     stopVideoPipeline();
+    pendingVideoAddresses.clear();
 #endif
 
     resumeInterfaceAfterCall();
@@ -354,6 +357,13 @@ void handleVideoMessage(string command, string payload) {
     else if (command == "VIDEO_STOP") {
         stopVideo();
     }
+}
+
+// Forget candidates queued for a call that never got answered
+void clearVideoAddresses() {
+#ifdef HAVE_GSTREAMER_WEBRTC
+    pendingVideoAddresses.clear();
+#endif
 }
 
 // Get requested camera view
@@ -414,7 +424,7 @@ static void failCallWithoutOffer(string message) {
     showCallFailed(message);
     createOfferPending = false;
     videoRunning = false;
-    callMode = false;
+    dialedCall = false;
     includeAudioInPipeline = false;
 }
 
@@ -438,23 +448,17 @@ void startVideoPipeline() {
     // Stop old pipeline
     stopVideoPipeline();
 
-    // Prefer sending the mic, fall back to video-only if ALSA fails
-    bool wantAudio = includeAudioInPipeline;
-    if (wantAudio && !startParsedVideoPipeline(createPipelineString(true))) {
+    // Prefer sending the mic, and give up on it when ALSA fails
+    if (includeAudioInPipeline && !startParsedVideoPipeline(createPipelineString(true))) {
         cout << "***WARNING***: Mic failed, continuing with video only." << endl;
-        wantAudio = false;
         includeAudioInPipeline = false;
-        if (!startParsedVideoPipeline(createPipelineString(false))) {
-            resumeInterfaceAfterCall();
-            showCallFailed("Call not sent");
-            return;
-        }
-    } else if (!wantAudio) {
-        if (!startParsedVideoPipeline(createPipelineString(false))) {
-            resumeInterfaceAfterCall();
-            showCallFailed("Call not sent");
-            return;
-        }
+    }
+
+    // Start without the mic, either by choice or after that failure
+    if (!includeAudioInPipeline && !startParsedVideoPipeline(createPipelineString(false))) {
+        resumeInterfaceAfterCall();
+        showCallFailed("Call not sent");
+        return;
     }
 
     // Caller creates the offer once the camera and mic are really running
@@ -842,7 +846,6 @@ void stopVideoPipeline() {
     remoteVideoWidth = 0;
     remoteVideoHeight = 0;
     remoteDescriptionSet = false;
-    pendingVideoAddresses.clear();
 
 #ifdef HAVE_X11_FULLSCREEN
     // Close the fullscreen remote video window
