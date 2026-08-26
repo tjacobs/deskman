@@ -1069,7 +1069,7 @@ void waitForSenderCaps() {
 
 // Pin each sender, webrtcbin otherwise answers with a codec we cannot produce
 void prepareSenderTransceivers() {
-    prepareSenderTransceiver(0, "video", "H264", videoPayloadType, GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY);
+    prepareSenderTransceiver(0, "video", "H264", videoPayloadType, GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV);
     if (includeAudioInPipeline) prepareSenderTransceiver(1, "audio", "OPUS", getCallAudioPayloadType(), GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV);
 }
 
@@ -1213,12 +1213,8 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
     gst_caps_unref(caps);
     if (!isVideo && !isAudio) return;
 
-    // Play remote video fullscreen on robot calls only
+    // Play remote video fullscreen, from a peer robot or from the web page camera
     if (isVideo) {
-        if (!callMode) {
-            cout << "Skipping remote video pad, web viewer is send-audio only." << endl;
-            return;
-        }
         GstElement* queue = gst_element_factory_make("queue", NULL);
         GstElement* convert = NULL;
         GstElement* sink = NULL;
