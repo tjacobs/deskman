@@ -87,6 +87,9 @@ int main(int argc, char **argv) {
     int parse_result = parse_arguments(argc, argv, sweep_only, no_servos, print_servos);
     if (parse_result != 0) return parse_result == 1 ? 0 : 1;
 
+    // Temporary, leave the camera for teleport
+    use_camera = false;
+
     // Relax servos on any later exit
     atexit([]() { relax_servos(); });
 

@@ -25,6 +25,7 @@ SPEECH_SPEED = 1.2
 WAKE_WORD = 'robot'
 NEAR_WAKE_WORDS = ('rob', 'rub')
 GREETING = 'Hi!'
+SAY_HI = False
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
@@ -228,8 +229,9 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     start_reminder_checker(listener, kokoro_pipeline)
 
     # Greet, then keep the conversation open so the first line needs no wake word
-    speak_muted(listener, kokoro_pipeline, GREETING)
-    LAST_ASK_AT = time.time()
+    if SAY_HI:
+        speak_muted(listener, kokoro_pipeline, GREETING)
+        LAST_ASK_AT = time.time()
     print_talk_help()
     try:
         while True:
