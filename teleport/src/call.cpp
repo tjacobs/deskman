@@ -9,6 +9,7 @@
 #include <SDL2/SDL_ttf.h>
 
 #include <atomic>
+#include <cctype>
 #include <cstdint>
 #include <iostream>
 #include <mutex>
@@ -24,6 +25,9 @@ using namespace std;
 const int CALL_BUTTON_HEIGHT = 88;
 const int CALL_ROW_HEIGHT = 80;
 const int HANGUP_STRIP_HEIGHT = 96;
+
+// Incoming call bar is the bottom 10 percent of the screen
+const int INCOMING_STRIP_PERCENT = 10;
 const int CALL_FONT_SIZE = 32;
 const char* CALL_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
@@ -67,6 +71,8 @@ static void mapOverlay(int y, int height);
 static void unmapOverlay();
 static void destroyOverlayWindow();
 static void layoutButtons();
+static int incomingStripHeight();
+static string incomingCallTitle(const string& peer);
 static void drawOverlay();
 static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill, SDL_Color text);
 static void drawLabel(const char* text, int x, int y, SDL_Color color);
@@ -219,6 +225,9 @@ static void applyRequestedView() {
     if (view == CALL_INTERFACE_IN_CALL) {
         height = HANGUP_STRIP_HEIGHT;
         y = windowHeight - height;
+    } else if (view == CALL_INTERFACE_INCOMING) {
+        height = incomingStripHeight();
+        y = windowHeight - height;
     }
     mapOverlay(y, height);
     shownView = view;
@@ -354,13 +363,37 @@ static void destroyOverlayWindow() {
     shownView = CALL_INTERFACE_IDLE;
 }
 
+static int incomingStripHeight() {
+    int height = windowHeight * INCOMING_STRIP_PERCENT / 100;
+    if (height < CALL_BUTTON_HEIGHT) height = CALL_BUTTON_HEIGHT;
+    return height;
+}
+
+// Tom's robots are teleport1 and teleport3
+static string incomingCallTitle(const string& peer) {
+    string lower;
+    for (unsigned char character : peer) lower.push_back((char)tolower(character));
+    if (lower == "teleport1" || lower == "teleport3") return "Tom calling...";
+    if (peer.empty()) return "Incoming call";
+    return peer + " calling...";
+}
+
 static void layoutButtons() {
     int height = windowHeight;
     if (shownView == CALL_INTERFACE_IN_CALL) height = HANGUP_STRIP_HEIGHT;
+    else if (shownView == CALL_INTERFACE_INCOMING) height = incomingStripHeight();
     backButton = {20, 20, windowWidth - 40, CALL_BUTTON_HEIGHT};
     hangupButton = {0, 0, windowWidth, height};
-    acceptButton = {20, height / 2, windowWidth - 40, CALL_BUTTON_HEIGHT};
-    declineButton = {20, height / 2 + CALL_BUTTON_HEIGHT + 16, windowWidth - 40, CALL_BUTTON_HEIGHT};
+
+    // Incoming bar, accept on the left, decline on the right
+    if (shownView == CALL_INTERFACE_INCOMING) {
+        int declineWidth = windowWidth / 3;
+        acceptButton = {0, 0, windowWidth - declineWidth, height};
+        declineButton = {windowWidth - declineWidth, 0, declineWidth, height};
+    } else {
+        acceptButton = {20, height / 2, windowWidth - 40, CALL_BUTTON_HEIGHT};
+        declineButton = {20, height / 2 + CALL_BUTTON_HEIGHT + 16, windowWidth - 40, CALL_BUTTON_HEIGHT};
+    }
     peerButtons.clear();
     int top = 20 + CALL_BUTTON_HEIGHT + 16;
     lock_guard<mutex> lock(callInterfaceMutex);
@@ -391,6 +424,7 @@ static void drawOverlay() {
     SDL_Color gray = {60, 60, 60, 255};
     SDL_Color lightBlue = {173, 216, 230, 255};
     if (view == CALL_INTERFACE_IN_CALL) SDL_SetRenderDrawColor(callRenderer, lightBlue.r, lightBlue.g, lightBlue.b, lightBlue.a);
+    else if (view == CALL_INTERFACE_INCOMING) SDL_SetRenderDrawColor(callRenderer, 30, 140, 70, 255);
     else SDL_SetRenderDrawColor(callRenderer, 245, 245, 245, 255);
     SDL_RenderClear(callRenderer);
     if (view == CALL_INTERFACE_DIRECTORY) {
@@ -401,9 +435,8 @@ static void drawOverlay() {
         if (peers.empty()) drawLabel(status.empty() ? "No peers online" : status.c_str(), 30, 20 + CALL_BUTTON_HEIGHT + 20, black);
         else if (!status.empty()) drawLabel(status.c_str(), 30, windowHeight - 60, black);
     } else if (view == CALL_INTERFACE_INCOMING) {
-        string title = incoming.empty() ? "Incoming call" : "Incoming call " + incoming;
-        drawLabel(title.c_str(), 30, windowHeight / 2 - 60, black);
-        drawButton(acceptButton, "Accept", green, white);
+        string title = incomingCallTitle(incoming);
+        drawButton(acceptButton, title, green, white);
         drawButton(declineButton, "Decline", red, white);
     } else if (view == CALL_INTERFACE_IN_CALL) {
         drawButton(hangupButton, "Hang up", lightBlue, black);
