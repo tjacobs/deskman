@@ -4,6 +4,7 @@
 // System
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <fcntl.h>
 #include <string>
@@ -27,13 +28,19 @@ static const int BATTERY_BUS_FALLBACK = 1;
 // INA219 default address and registers
 static const int INA219_ADDRESS = 0x40;
 static const int INA219_REGISTER_CONFIG = 0x00;
+static const int INA219_REGISTER_SHUNT = 0x01;
 static const int INA219_REGISTER_BUS = 0x02;
 static const int INA219_CONFIG_TOP_NIBBLE = 0x3000;
 static const int INA219_BUS_MV_PER_BIT = 4;
+static const int INA219_SHUNT_UV_PER_BIT = 10;
+
+// Typical INA219 module shunt
+static const float BATTERY_SHUNT_OHMS = 0.1f;
 
 // Read once a second and smooth the voltage
 static const int BATTERY_CHECK_MS = 1000;
 static const float BATTERY_FILTER = 0.99f;
+static const float BATTERY_CURRENT_FILTER = 0.7f;
 
 // 3S LiPo pack, 0% at 3.0V/cell and 100% at 4.2V/cell
 static const int BATTERY_CELL_COUNT = 3;
@@ -48,6 +55,8 @@ static const float BATTERY_CURVE_MID = 0.70f;
 static int battery_file = -1;
 static float battery_voltage_value = 0;
 static int battery_percent_value = 0;
+static float battery_current_value = 0;
+static bool battery_current_ready = false;
 static string battery_label;
 static bool battery_logged = false;
 static steady_clock::time_point last_battery_check;
@@ -59,6 +68,7 @@ static bool open_ina219();
 static unsigned int read_ina219_register(int fileDescriptor, int registerAddress);
 static bool is_ina219_config(unsigned int config);
 static float read_bus_volts();
+static float read_shunt_amps();
 static int percent_from_voltage(float packVolts);
 
 // Recheck the INA219 about once a second
@@ -92,6 +102,11 @@ int battery_percent() {
     return battery_percent_value;
 }
 
+// Filtered shunt current in amps, sign follows the meter wiring
+float battery_current() {
+    return battery_current_value;
+}
+
 // Open the chip if needed, then filter a bus-voltage sample
 static void update_battery_reading() {
     // Leave the label empty until the chip opens
@@ -114,14 +129,23 @@ static void update_battery_reading() {
     // Percent from the LiPo curve, clamped to empty and full
     battery_percent_value = percent_from_voltage(battery_voltage_value);
 
+    // Smooth shunt current, 0 A is a real reading
+    float amps = read_shunt_amps();
+    if (!battery_current_ready) {
+        battery_current_value = amps;
+        battery_current_ready = true;
+    } else {
+        battery_current_value = battery_current_value * BATTERY_CURRENT_FILTER + amps * (1.0f - BATTERY_CURRENT_FILTER);
+    }
+
     // Face label
-    char line[32];
-    snprintf(line, sizeof(line), "%.1f V  %d%%", battery_voltage_value, battery_percent_value);
+    char line[48];
+    snprintf(line, sizeof(line), "%.1f V  %d%%  %.2f A", battery_voltage_value, battery_percent_value, battery_current_value);
     battery_label = line;
 
     // Log once
     if (!battery_logged) {
-        printf("Battery INA219 %.2f V %d%%\n", battery_voltage_value, battery_percent_value);
+        printf("Battery INA219 %.2f V %d%% %.2f A\n", battery_voltage_value, battery_percent_value, battery_current_value);
         fflush(stdout);
         battery_logged = true;
     }
@@ -204,6 +228,17 @@ static float read_bus_volts() {
     if (raw == 0) return 0;
     int milliVolts = (int)(raw >> 3) * INA219_BUS_MV_PER_BIT;
     return milliVolts / 1000.0f;
+}
+
+// Shunt voltage over the sense resistor, signed
+static float read_shunt_amps() {
+    if (battery_file < 0) return 0;
+
+    // 10 uV per bit, then divide by the shunt
+    unsigned int raw = read_ina219_register(battery_file, INA219_REGISTER_SHUNT);
+    int16_t signedRaw = (int16_t)raw;
+    float shuntVolts = signedRaw * (INA219_SHUNT_UV_PER_BIT / 1000000.0f);
+    return shuntVolts / BATTERY_SHUNT_OHMS;
 }
 
 // LiPo S-curve from empty to full, 0% and 100% land on those voltages

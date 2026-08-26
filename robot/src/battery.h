@@ -17,3 +17,6 @@ float battery_voltage();
 
 // 0 to 100 from the LiPo curve, or 0 when unread
 int battery_percent();
+
+// Filtered shunt current in amps, sign follows the meter wiring
+float battery_current();
