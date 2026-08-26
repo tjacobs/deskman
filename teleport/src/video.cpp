@@ -97,6 +97,7 @@ const int REMOTE_VIDEO_POLL_MS = 500;
 #ifdef HAVE_X11_FULLSCREEN
 Display* videoDisplay = NULL;
 Window videoWindow = 0;
+const long NET_WM_STATE_ADD = 1;
 #endif
 const int VIDEO_WIDTH = 1920;
 const int VIDEO_HEIGHT = 1080;
@@ -183,6 +184,7 @@ gboolean stopVideoFromMainLoop(gpointer userData);
 void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userData);
 #ifdef HAVE_X11_FULLSCREEN
 Window ensureFullscreenVideoWindow();
+void requestFullscreenVideoWindow();
 void destroyFullscreenVideoWindow();
 #endif
 void startRemoteVideoIdleTimer();
@@ -1399,6 +1401,22 @@ Window ensureFullscreenVideoWindow() {
     return videoWindow;
 }
 
+// Ask the window manager for fullscreen, the property alone only counts before the first map
+void requestFullscreenVideoWindow() {
+    if (!videoDisplay || !videoWindow) return;
+    XEvent event;
+    memset(&event, 0, sizeof(event));
+    event.type = ClientMessage;
+    event.xclient.window = videoWindow;
+    event.xclient.message_type = XInternAtom(videoDisplay, "_NET_WM_STATE", False);
+    event.xclient.format = 32;
+    event.xclient.data.l[0] = NET_WM_STATE_ADD;
+    event.xclient.data.l[1] = XInternAtom(videoDisplay, "_NET_WM_STATE_FULLSCREEN", False);
+    event.xclient.data.l[3] = 1;
+    XSendEvent(videoDisplay, DefaultRootWindow(videoDisplay), False, SubstructureRedirectMask | SubstructureNotifyMask, &event);
+    XSync(videoDisplay, False);
+}
+
 // Destroy the fullscreen remote video window
 void destroyFullscreenVideoWindow() {
     if (!videoDisplay || !videoWindow) return;
@@ -1440,24 +1458,24 @@ gboolean hideRemoteVideoWhenIdle(gpointer userData) {
     return TRUE;
 }
 
-// Raise the window over the face, raising keeps the fullscreen state that unmapping loses
+// Map the window again, and ask for fullscreen since mapping loses that state
 void showRemoteVideoWindow() {
     remoteVideoShowing = true;
 #ifdef HAVE_X11_FULLSCREEN
     if (videoDisplay && videoWindow) {
-        XRaiseWindow(videoDisplay, videoWindow);
-        XSync(videoDisplay, False);
+        XMapRaised(videoDisplay, videoWindow);
+        requestFullscreenVideoWindow();
     }
 #endif
     cout << "Remote video on screen." << endl;
 }
 
-// Drop the window behind the face
+// Take the window off the screen, a fullscreen window stays on top so lowering it does nothing
 void hideRemoteVideoWindow() {
     remoteVideoShowing = false;
 #ifdef HAVE_X11_FULLSCREEN
     if (videoDisplay && videoWindow) {
-        XLowerWindow(videoDisplay, videoWindow);
+        XUnmapWindow(videoDisplay, videoWindow);
         XSync(videoDisplay, False);
     }
 #endif
