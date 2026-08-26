@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -61,12 +62,12 @@ const double RING_VOLUME = 0.35;
 const int RING_TONE_MS = 400;
 const int RING_GAP_MS = 200;
 const int RING_PAUSE_MS = 2000;
-const int RING_SLICE_MS = 25;
 
-// Fade each edge of the tone, switching it on mid-wave clicks
-const int RING_FADE_MS = 40;
-const int RING_FADE_STEPS = 20;
-const int RING_HOLD_MS = RING_TONE_MS - 2 * RING_FADE_MS;
+// Shape every edge of the tone in the samples, a volume step only lands on a buffer edge and clicks
+const int RING_FADE_MS = 25;
+const int RING_CHUNK_MS = 50;
+const int RING_DRAIN_MS = 120;
+const double RING_FULL_SCALE = 32767.0;
 
 string videoAudioDevice = "plughw:0,0";
 string videoMicDevice = "plughw:0,0";
@@ -79,7 +80,8 @@ bool audioDisconnectLogged = false;
 GstElement* remotePcmPipeline = NULL;
 GstElement* remotePcmSrc = NULL;
 GstElement* ringPipeline = NULL;
-GstElement* ringGate = NULL;
+GstElement* ringSource = NULL;
+vector<gint16> ringCycle;
 thread ringThread;
 atomic<bool> ringPlaying(false);
 GstElement* micToneTapElement = NULL;
@@ -111,9 +113,11 @@ bool isGStreamerAudioElement(string name);
 string echoCancelVersion();
 bool isPulseAudioDevice(const string& device);
 void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gchar* message, gpointer userData);
+void buildRingCycle();
+void appendRingTone();
+void appendRingSilence(int milliseconds);
 void runRingCadence();
-bool waitWhileRinging(int waitMilliseconds);
-void fadeRingGate(bool open);
+void pushRingSamples(size_t position, int milliseconds, bool fadeOut);
 #endif
 
 string cardStreamInfo(int card);
@@ -348,12 +352,13 @@ void startRingtone() {
     if (ringPipeline) return;
     gst_init(NULL, NULL);
 
-    // Hold a sine tone behind a silent gate, the cadence thread fades it up and down
+    // Play the ring as plain samples, so the fades live in the waveform and nothing gates it live
+    buildRingCycle();
     string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
-    string pipelineString = "audiotestsrc name=ringsource wave=sine is-live=true freq=" + to_string(RING_FREQUENCY_HZ) + " ! "
-        "audioconvert ! audioresample ! audio/x-raw,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! "
-        "volume name=ringgate volume=0.0 ! "
-        + sinkElement + " name=ringsink device=" + videoSpeakerDevice + " buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
+    int chunkBytes = VIDEO_AUDIO_RATE * RING_CHUNK_MS / 1000 * sizeof(gint16);
+    string pipelineString = "appsrc name=ringsource is-live=true format=time do-timestamp=true block=true max-bytes=" + to_string(chunkBytes) + " ! "
+        "audioconvert ! audioresample ! "
+        + sinkElement + " name=ringsink device=" + videoSpeakerDevice + " sync=false buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
     GError* error = NULL;
     ringPipeline = gst_parse_launch(pipelineString.c_str(), &error);
     if (error) {
@@ -364,8 +369,13 @@ void startRingtone() {
         return;
     }
 
-    // Open the speaker with the tone still silent
-    ringGate = gst_bin_get_by_name(GST_BIN(ringPipeline), "ringgate");
+    // Feed the speaker mono samples at the call rate
+    ringSource = gst_bin_get_by_name(GST_BIN(ringPipeline), "ringsource");
+    GstCaps* caps = gst_caps_new_simple("audio/x-raw", "format", G_TYPE_STRING, "S16LE", "layout", G_TYPE_STRING, "interleaved", "rate", G_TYPE_INT, VIDEO_AUDIO_RATE, "channels", G_TYPE_INT, 1, NULL);
+    g_object_set(ringSource, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
+    // Open the speaker
     if (gst_element_set_state(ringPipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         cout << "Failed to ring on " << videoSpeakerDevice << endl;
         stopRingtone();
@@ -382,55 +392,87 @@ void startRingtone() {
 // Silence the ringtone and hand the speaker back
 void stopRingtone() {
 #ifdef HAVE_GSTREAMER_WEBRTC
-    // Let the cadence thread finish before the gate goes away
+    // Let the thread fade its tail out and drain, so answering does not cut the tone off
     ringPlaying = false;
     if (ringThread.joinable()) ringThread.join();
 
     // Close the speaker so a call can open it
     if (!ringPipeline) return;
     gst_element_set_state(ringPipeline, GST_STATE_NULL);
-    if (ringGate) gst_object_unref(ringGate);
+    if (ringSource) gst_object_unref(ringSource);
     gst_object_unref(ringPipeline);
-    ringGate = NULL;
+    ringSource = NULL;
     ringPipeline = NULL;
 #endif
 }
 
 #ifdef HAVE_GSTREAMER_WEBRTC
-// Ring, ring, pause, until someone answers
+// Render one ring, ring, pause cycle once, the thread then loops over it
+void buildRingCycle() {
+    ringCycle.clear();
+    appendRingTone();
+    appendRingSilence(RING_GAP_MS);
+    appendRingTone();
+    appendRingSilence(RING_PAUSE_MS);
+}
+
+// Add a tone that rises and falls on a raised cosine, so it starts and ends at silence
+void appendRingTone() {
+    int toneSamples = VIDEO_AUDIO_RATE * RING_TONE_MS / 1000;
+    int fadeSamples = VIDEO_AUDIO_RATE * RING_FADE_MS / 1000;
+    for (int index = 0; index < toneSamples; index++) {
+        // Fade in over the first edge, out over the last, hold the middle
+        double envelope = 1.0;
+        if (index < fadeSamples) envelope = 0.5 - 0.5 * cos(M_PI * index / fadeSamples);
+        else if (index >= toneSamples - fadeSamples) envelope = 0.5 - 0.5 * cos(M_PI * (toneSamples - 1 - index) / fadeSamples);
+
+        // Sine at the ring frequency, scaled by the envelope and the ring volume
+        double angle = 2.0 * M_PI * RING_FREQUENCY_HZ * index / VIDEO_AUDIO_RATE;
+        ringCycle.push_back((gint16)(sin(angle) * envelope * RING_VOLUME * RING_FULL_SCALE));
+    }
+}
+
+// Add the quiet between rings
+void appendRingSilence(int milliseconds) {
+    int silentSamples = VIDEO_AUDIO_RATE * milliseconds / 1000;
+    for (int index = 0; index < silentSamples; index++) ringCycle.push_back(0);
+}
+
+// Push the cycle over and over, the speaker paces the loop by blocking each push
 void runRingCadence() {
+    size_t position = 0;
+    int chunkSamples = VIDEO_AUDIO_RATE * RING_CHUNK_MS / 1000;
     while (ringPlaying) {
-        fadeRingGate(true);
-        if (!waitWhileRinging(RING_HOLD_MS)) break;
-        fadeRingGate(false);
-        if (!waitWhileRinging(RING_GAP_MS)) break;
-        fadeRingGate(true);
-        if (!waitWhileRinging(RING_HOLD_MS)) break;
-        fadeRingGate(false);
-        if (!waitWhileRinging(RING_PAUSE_MS)) break;
+        pushRingSamples(position, RING_CHUNK_MS, false);
+        position = (position + chunkSamples) % ringCycle.size();
     }
-    fadeRingGate(false);
+
+    // Fade out from where the cycle stopped, then wait for the speaker to play it
+    pushRingSamples(position, RING_FADE_MS, true);
+    this_thread::sleep_for(milliseconds(RING_FADE_MS + RING_DRAIN_MS));
 }
 
-// Wait in slices so an answer stops the tone straight away
-bool waitWhileRinging(int waitMilliseconds) {
-    for (int waited = 0; waited < waitMilliseconds; waited += RING_SLICE_MS) {
-        if (!ringPlaying) return false;
-        this_thread::sleep_for(milliseconds(RING_SLICE_MS));
+// Copy samples out of the cycle, optionally fading them away to nothing
+void pushRingSamples(size_t position, int milliseconds, bool fadeOut) {
+    if (!ringSource || ringCycle.empty()) return;
+    int sampleCount = VIDEO_AUDIO_RATE * milliseconds / 1000;
+    GstBuffer* buffer = gst_buffer_new_allocate(NULL, sampleCount * sizeof(gint16), NULL);
+    GstMapInfo map;
+    if (!gst_buffer_map(buffer, &map, GST_MAP_WRITE)) {
+        gst_buffer_unref(buffer);
+        return;
     }
-    return ringPlaying;
-}
 
-// Ramp the tone up or down, so each edge starts and ends on silence
-void fadeRingGate(bool open) {
-    if (!ringGate) return;
-
-    // Walk the volume across the fade, ignoring an answer so the tone never cuts mid-wave
-    for (int step = 1; step <= RING_FADE_STEPS; step++) {
-        double part = (double)step / RING_FADE_STEPS;
-        g_object_set(ringGate, "volume", (open ? part : 1.0 - part) * RING_VOLUME, NULL);
-        this_thread::sleep_for(milliseconds(RING_FADE_MS / RING_FADE_STEPS));
+    // Walk the cycle, wrapping at its end
+    gint16* samples = (gint16*)map.data;
+    for (int index = 0; index < sampleCount; index++) {
+        double level = fadeOut ? (double)(sampleCount - index) / sampleCount : 1.0;
+        samples[index] = (gint16)(ringCycle[(position + index) % ringCycle.size()] * level);
     }
+    gst_buffer_unmap(buffer, &map);
+
+    // A blocked push means the speaker is still busy with the last chunk
+    gst_app_src_push_buffer(GST_APP_SRC(ringSource), buffer);
 }
 #endif
 
