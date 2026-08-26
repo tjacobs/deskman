@@ -68,6 +68,9 @@ string getCameraView(string cameraView);
 
 #ifdef HAVE_GSTREAMER_WEBRTC
 
+// The encoder only makes constrained baseline, so declare that until an offer names another
+const char* CONSTRAINED_BASELINE_PROFILE = "42e01f";
+
 // Track GStreamer state
 GMainLoop* videoLoop = NULL;
 GstElement* videoPipeline = NULL;
@@ -76,7 +79,7 @@ thread videoLoopThread;
 bool videoBackendReady = false;
 bool videoCameraAvailable = true;
 int videoPayloadType = 103;
-string videoProfileLevelId;
+string videoProfileLevelId = CONSTRAINED_BASELINE_PROFILE;
 bool remoteDescriptionSet = false;
 vector<string> pendingVideoAddresses;
 guint iceDisconnectTimerId = 0;
@@ -97,7 +100,6 @@ const int LIBCAMERA_WIDTH = VIDEO_WIDTH;
 const int LIBCAMERA_HEIGHT = VIDEO_HEIGHT;
 const int LIBCAMERA_FRAMERATE = 30;
 const int VIDEO_STATE_TIMEOUT_SECONDS = 2;
-const char* CONSTRAINED_BASELINE_PROFILE = "42e01f";
 const int SENDER_CAPS_WAIT_MS = 8000;
 const int SENDER_CAPS_POLL_MS = 50;
 const int VIDEO_CLOCK_RATE = 90000;
@@ -437,9 +439,10 @@ void startVideoPipeline() {
         }
     }
 
-    // Caller creates the offer after the pipeline is up
+    // Caller creates the offer once the camera and mic are really running
     if (createOfferPending && videoWebrtc) {
         createOfferPending = false;
+        waitForSenderCaps();
         createVideoOffer();
     }
     showCallInProgress();
@@ -578,9 +581,8 @@ string createVideoSourceString() {
 #endif
 }
 
-// Declare the profile the browser offered, x264enc says 42c01f and webrtcbin then finds no match
+// Declare the profile the peer offered, x264enc says 42c01f and webrtcbin then finds no match
 string createVideoProfileString() {
-    if (videoProfileLevelId.empty()) return "";
     return " ! capssetter name=robotprofile caps=\"application/x-rtp,profile-level-id=(string)" + videoProfileLevelId + "\"";
 }
 
@@ -835,7 +837,7 @@ void handleVideoOffer(string payload) {
     // Match the browser payload types and H264 profile for web viewers
     chooseVideoCodec(sdpText);
     chooseAudioCodec(sdpText);
-    cout << "VIDEO_OFFER " << summarizeSdp(sdpText) << " h264_pt=" << videoPayloadType << " profile=" << (videoProfileLevelId.empty() ? "encoder" : videoProfileLevelId) << " opus_pt=" << getCallAudioPayloadType() << endl;
+    cout << "VIDEO_OFFER " << summarizeSdp(sdpText) << " h264_pt=" << videoPayloadType << " profile=" << videoProfileLevelId << " opus_pt=" << getCallAudioPayloadType() << endl;
 
     // Skip if camera is unavailable
     if (!videoCameraAvailable) {
