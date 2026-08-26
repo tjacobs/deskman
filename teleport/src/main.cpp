@@ -57,6 +57,9 @@ const int PING_INTERVAL_SECONDS = 1;
 const int SOCKET_PING_SECONDS = 10;
 const uint32_t RECONNECT_WAIT_MILLISECONDS = 10000;
 
+// Give up and decline when a call rings this long with nobody answering
+const int RING_TIMEOUT_SECONDS = 60;
+
 // Configure audio device
 const char* DEFAULT_AUDIO_DEVICE = "plughw:0,0";
 
@@ -76,6 +79,7 @@ bool holdIncomingCall = false;
 bool incomingWebCall = false;
 bool autoAnswerPending = false;
 steady_clock::time_point autoAnswerAt;
+steady_clock::time_point ringTimeoutAt;
 string pendingVideoOffer;
 string pendingCameraView;
 TeleportConfig settings;
@@ -102,6 +106,7 @@ void handleTextMessage(const string& text);
 void handleCommand(const string& command, const string& commandArgument, const string& secondCommandArgument, const string& target);
 void pollInterfaceCommands();
 void pollAutoAnswer();
+void pollRingTimeout();
 void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraView);
 void acceptIncomingCall();
 void cancelIncomingCall();
@@ -316,6 +321,7 @@ void runMainLoop() {
         sendPing();
         pollInterfaceCommands();
         pollAutoAnswer();
+        pollRingTimeout();
         pollCallInterface();
         if (isCallOverlayIdle() && isVideoRunning()) stopVideo();
         sleep_for(milliseconds(16));
@@ -488,9 +494,17 @@ void handleCommand(const string& command, const string& commandArgument, const s
         beginIncomingCall(peer, false, "");
     }
 
+    // Ignore our own ringing notice coming back from the server
+    else if (command == "RINGING") {
+    }
+
     // Start video, a web viewer asking to watch is an incoming call
     else if (command == "StartVideo") {
-        if (holdIncomingCall) return;
+        // Keep the view a ringing caller asked for, they repeat StartVideo
+        if (holdIncomingCall) {
+            pendingCameraView = commandArgument;
+            return;
+        }
         if (!isVideoRunning()) {
             beginIncomingCall(target, true, commandArgument);
             return;
@@ -590,6 +604,16 @@ void pollAutoAnswer() {
     acceptIncomingCall();
 }
 
+// Decline a call that nobody has answered
+void pollRingTimeout() {
+    if (!holdIncomingCall) return;
+    if (steady_clock::now() < ringTimeoutAt) return;
+    cout << "Nobody answered, declining call." << endl;
+    cancelIncomingCall();
+    webSocket.send(deviceName + " VIDEO_STOP");
+    showCallIdle();
+}
+
 // Ring the speaker and show the incoming bar until someone answers
 void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraView) {
     // Hold the caller off until Accept, or until the auto-answer wait runs out
@@ -597,6 +621,7 @@ void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraVie
     holdIncomingCall = true;
     incomingWebCall = fromWeb;
     pendingCameraView = cameraView;
+    ringTimeoutAt = steady_clock::now() + seconds(RING_TIMEOUT_SECONDS);
 
     // Arm the auto-answer, or wait for a tap when it is switched off
     if (settings.autoAnswer > 0) {
@@ -611,6 +636,9 @@ void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraVie
     // Ring, and show the bar along the bottom of the screen
     showIncomingCall(caller);
     startRingtone();
+
+    // Let the caller show that we are ringing
+    webSocket.send(deviceName + " RINGING");
 }
 
 // Start the local side of an incoming call
