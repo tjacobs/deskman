@@ -30,6 +30,7 @@
 // Local
 #include "video.h"
 #include "call.h"
+#include "config.h"
 #include "interface.h"
 #include "move.h"
 
@@ -55,7 +56,6 @@ const char* BINARY_NAME = "teleport";
 const int PING_INTERVAL_SECONDS = 1;
 const int SOCKET_PING_SECONDS = 10;
 const uint32_t RECONNECT_WAIT_MILLISECONDS = 10000;
-const int AUTO_ANSWER_DELAY_MS = 3000;
 
 // Configure audio device
 const char* DEFAULT_AUDIO_DEVICE = "plughw:0,0";
@@ -73,9 +73,12 @@ string callPeer;
 string audioDevice = DEFAULT_AUDIO_DEVICE;
 bool muteMic = false;
 bool holdIncomingCall = false;
+bool incomingWebCall = false;
 bool autoAnswerPending = false;
 steady_clock::time_point autoAnswerAt;
 string pendingVideoOffer;
+string pendingCameraView;
+TeleportConfig settings;
 vector<string> listedPeers;
 WebSocket webSocket;
 time_t lastPing = 0;
@@ -99,6 +102,7 @@ void handleTextMessage(const string& text);
 void handleCommand(const string& command, const string& commandArgument, const string& secondCommandArgument, const string& target);
 void pollInterfaceCommands();
 void pollAutoAnswer();
+void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraView);
 void acceptIncomingCall();
 void cancelIncomingCall();
 
@@ -109,6 +113,11 @@ int main(int argumentCount, char** argumentValues) {
 
     // Make sure only one running
     checkAlreadyRunning();
+
+    // Read call settings
+    settings = loadConfig();
+    if (settings.autoAnswer > 0) cout << "Auto-answering calls after " << settings.autoAnswer << " seconds." << endl;
+    else cout << "Auto-answer off, calls wait for Accept." << endl;
 
     // Point HDMI video at the local screen when DISPLAY is unset
     setupDisplayEnv();
@@ -473,18 +482,19 @@ void handleCommand(const string& command, const string& commandArgument, const s
     }
 
     else if (command == "Call") {
-        if (autoAnswerPending) return;
+        if (holdIncomingCall) return;
         string peer = commandArgument;
         if (peer.empty() && target != deviceName) peer = target;
-        cout << "Incoming call from " << (peer.empty() ? "peer" : peer) << ", answering in 3 seconds." << endl;
-        holdIncomingCall = true;
-        autoAnswerPending = true;
-        autoAnswerAt = steady_clock::now() + milliseconds(AUTO_ANSWER_DELAY_MS);
-        showIncomingCall(peer.empty() ? "peer" : peer);
+        beginIncomingCall(peer, false, "");
     }
 
-    // Start video
+    // Start video, a web viewer asking to watch is an incoming call
     else if (command == "StartVideo") {
+        if (holdIncomingCall) return;
+        if (!isVideoRunning()) {
+            beginIncomingCall(target, true, commandArgument);
+            return;
+        }
         startVideo(cameraPath, commandArgument);
     }
 
@@ -498,13 +508,25 @@ void handleCommand(const string& command, const string& commandArgument, const s
         stopRemoteMic();
     }
 
-    // Stop video
+    // Stop video, or give up on a call that is still ringing
     else if (command == "StopVideo") {
+        if (holdIncomingCall) {
+            cout << "Caller hung up while ringing." << endl;
+            cancelIncomingCall();
+            showCallIdle();
+            return;
+        }
         stopVideo();
     }
 
     // Handle video signaling
     else if (command == "VIDEO_OFFER" || command == "VIDEO_ANSWER" || command == "VIDEO_ADDRESS" || command == "VIDEO_STOP") {
+        // Ring for an offer that arrived without a Call or StartVideo first
+        if (command == "VIDEO_OFFER" && !holdIncomingCall && !isVideoRunning()) {
+            pendingVideoOffer = commandArgument;
+            beginIncomingCall(target, true, "");
+            return;
+        }
         if (command == "VIDEO_OFFER" && holdIncomingCall) {
             pendingVideoOffer = commandArgument;
             cout << "Holding remote offer until Accept." << endl;
@@ -568,10 +590,47 @@ void pollAutoAnswer() {
     acceptIncomingCall();
 }
 
+// Ring the speaker and show the incoming bar until someone answers
+void beginIncomingCall(const string& peer, bool fromWeb, const string& cameraView) {
+    // Hold the caller off until Accept, or until the auto-answer wait runs out
+    string caller = peer.empty() ? "peer" : peer;
+    holdIncomingCall = true;
+    incomingWebCall = fromWeb;
+    pendingCameraView = cameraView;
+
+    // Arm the auto-answer, or wait for a tap when it is switched off
+    if (settings.autoAnswer > 0) {
+        autoAnswerPending = true;
+        autoAnswerAt = steady_clock::now() + seconds(settings.autoAnswer);
+        cout << "Incoming call from " << caller << ", answering in " << settings.autoAnswer << " seconds." << endl;
+    } else {
+        autoAnswerPending = false;
+        cout << "Incoming call from " << caller << ", waiting for Accept." << endl;
+    }
+
+    // Ring, and show the bar along the bottom of the screen
+    showIncomingCall(caller);
+    startRingtone();
+}
+
 // Start the local side of an incoming call
 void acceptIncomingCall() {
     holdIncomingCall = false;
     autoAnswerPending = false;
+    stopRingtone();
+
+    // A web viewer only watches, so send video instead of opening a two-way call
+    if (incomingWebCall) {
+        incomingWebCall = false;
+        startVideo(cameraPath, pendingCameraView);
+        if (!pendingVideoOffer.empty()) {
+            handleVideoMessage("VIDEO_OFFER", pendingVideoOffer);
+            pendingVideoOffer.clear();
+        }
+        return;
+    }
+
+    // A robot call runs both ways
     if (startCall(cameraPath, false)) {
         if (!pendingVideoOffer.empty()) {
             handleVideoMessage("VIDEO_OFFER", pendingVideoOffer);
@@ -588,8 +647,10 @@ void acceptIncomingCall() {
 // Drop a ringing incoming call
 void cancelIncomingCall() {
     holdIncomingCall = false;
+    incomingWebCall = false;
     autoAnswerPending = false;
     pendingVideoOffer.clear();
+    stopRingtone();
 }
 
 // Initialize signals

@@ -28,6 +28,9 @@ const int HANGUP_STRIP_HEIGHT = 96;
 
 // Incoming call bar is the bottom 10 percent of the screen
 const int INCOMING_STRIP_PERCENT = 10;
+
+// Browsers log in with a name like web57152
+const char* WEB_PEER_PREFIX = "web";
 const int CALL_FONT_SIZE = 32;
 const char* CALL_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 
@@ -369,11 +372,12 @@ static int incomingStripHeight() {
     return height;
 }
 
-// Tom's robots are teleport1 and teleport3
+// Tom's robots are teleport1 and teleport3, browsers log in as webNNNNNN
 static string incomingCallTitle(const string& peer) {
     string lower;
     for (unsigned char character : peer) lower.push_back((char)tolower(character));
     if (lower == "teleport1" || lower == "teleport3") return "Tom calling...";
+    if (lower.find(WEB_PEER_PREFIX) == 0) return "Web calling...";
     if (peer.empty()) return "Incoming call";
     return peer + " calling...";
 }

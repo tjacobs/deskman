@@ -5,6 +5,7 @@
 #include "audio.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +15,7 @@
 #include <iterator>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef HAVE_GSTREAMER_WEBRTC
@@ -53,6 +55,14 @@ const int NOTCH_SETTLE_MS = 700;
 const int NOTCH_HOLD_MS = 60000;
 const int NOTCH_POLL_MS = 500;
 
+// Ring the speaker twice, then pause, like a desk phone
+const int RING_FREQUENCY_HZ = 440;
+const double RING_VOLUME = 0.35;
+const int RING_TONE_MS = 400;
+const int RING_GAP_MS = 200;
+const int RING_PAUSE_MS = 2000;
+const int RING_SLICE_MS = 25;
+
 string videoAudioDevice = "plughw:0,0";
 string videoMicDevice = "plughw:0,0";
 string videoSpeakerDevice = "plughw:0,0";
@@ -63,6 +73,10 @@ int callAudioPayloadType = 97;
 bool audioDisconnectLogged = false;
 GstElement* remotePcmPipeline = NULL;
 GstElement* remotePcmSrc = NULL;
+GstElement* ringPipeline = NULL;
+GstElement* ringGate = NULL;
+thread ringThread;
+atomic<bool> ringPlaying(false);
 GstElement* micToneTapElement = NULL;
 GstFFTF32* toneFft = NULL;
 float toneWindow[TONE_FFT_SIZE];
@@ -92,6 +106,9 @@ bool isGStreamerAudioElement(string name);
 string echoCancelVersion();
 bool isPulseAudioDevice(const string& device);
 void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gchar* message, gpointer userData);
+void runRingCadence();
+bool waitWhileRinging(int waitMilliseconds);
+void setRingGate(bool open);
 #endif
 
 string cardStreamInfo(int card);
@@ -319,6 +336,91 @@ void stopRemotePcmPlayback() {
     remotePcmPipeline = NULL;
 #endif
 }
+
+// Ring the speaker until the call is answered or dropped
+void startRingtone() {
+#ifdef HAVE_GSTREAMER_WEBRTC
+    if (ringPipeline) return;
+    gst_init(NULL, NULL);
+
+    // Hold a sine tone behind a gate, the cadence thread opens and closes it
+    string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
+    string pipelineString = "audiotestsrc name=ringsource wave=sine is-live=true freq=" + to_string(RING_FREQUENCY_HZ) + " ! "
+        "audioconvert ! audioresample ! audio/x-raw,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! "
+        "volume name=ringgate mute=true volume=" + to_string(RING_VOLUME) + " ! "
+        + sinkElement + " name=ringsink device=" + videoSpeakerDevice + " buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
+    GError* error = NULL;
+    ringPipeline = gst_parse_launch(pipelineString.c_str(), &error);
+    if (error) {
+        cout << "Failed to build ringtone: " << error->message << endl;
+        g_error_free(error);
+        if (ringPipeline) gst_object_unref(ringPipeline);
+        ringPipeline = NULL;
+        return;
+    }
+
+    // Open the speaker with the tone still muted
+    ringGate = gst_bin_get_by_name(GST_BIN(ringPipeline), "ringgate");
+    if (gst_element_set_state(ringPipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+        cout << "Failed to ring on " << videoSpeakerDevice << endl;
+        stopRingtone();
+        return;
+    }
+
+    // Ring on its own thread so the call loop keeps running
+    ringPlaying = true;
+    ringThread = thread(runRingCadence);
+    cout << "Ringing on " << videoSpeakerDevice << endl;
+#endif
+}
+
+// Silence the ringtone and hand the speaker back
+void stopRingtone() {
+#ifdef HAVE_GSTREAMER_WEBRTC
+    // Let the cadence thread finish before the gate goes away
+    ringPlaying = false;
+    if (ringThread.joinable()) ringThread.join();
+
+    // Close the speaker so a call can open it
+    if (!ringPipeline) return;
+    gst_element_set_state(ringPipeline, GST_STATE_NULL);
+    if (ringGate) gst_object_unref(ringGate);
+    gst_object_unref(ringPipeline);
+    ringGate = NULL;
+    ringPipeline = NULL;
+#endif
+}
+
+#ifdef HAVE_GSTREAMER_WEBRTC
+// Ring, ring, pause, until someone answers
+void runRingCadence() {
+    while (ringPlaying) {
+        setRingGate(true);
+        if (!waitWhileRinging(RING_TONE_MS)) break;
+        setRingGate(false);
+        if (!waitWhileRinging(RING_GAP_MS)) break;
+        setRingGate(true);
+        if (!waitWhileRinging(RING_TONE_MS)) break;
+        setRingGate(false);
+        if (!waitWhileRinging(RING_PAUSE_MS)) break;
+    }
+    setRingGate(false);
+}
+
+// Wait in slices so an answer stops the tone straight away
+bool waitWhileRinging(int waitMilliseconds) {
+    for (int waited = 0; waited < waitMilliseconds; waited += RING_SLICE_MS) {
+        if (!ringPlaying) return false;
+        this_thread::sleep_for(milliseconds(RING_SLICE_MS));
+    }
+    return ringPlaying;
+}
+
+// Let the tone through, or mute it
+void setRingGate(bool open) {
+    if (ringGate) g_object_set(ringGate, "mute", open ? FALSE : TRUE, NULL);
+}
+#endif
 
 // Play one websocket PCM packet, header is 4 little-endian int16 char codes for audi
 bool playRemotePcmPacket(const char* data, size_t size) {

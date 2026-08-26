@@ -20,6 +20,8 @@ int getCallAudioPayloadType();
 void startRemotePcmPlayback();
 void stopRemotePcmPlayback();
 bool playRemotePcmPacket(const char* data, size_t size);
+void startRingtone();
+void stopRingtone();
 string findUsbAlsaDevice();
 string findUsbMicDevice();
 string findUsbSpeakerDevice();

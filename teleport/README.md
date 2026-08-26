@@ -26,6 +26,18 @@ Optional anti-echo: `./install_anti_echo.sh`.
 
 `./teleport --help` lists flags. `--local` uses `ws://127.0.0.1:8080`. `--call teleport2` dials after login.
 
+## Settings
+
+`config.json` is written next to the binary on first run.
+
+```json
+{
+  "autoAnswer": 5
+}
+```
+
+An incoming call rings the speaker and shows a bar along the bottom of the screen. `autoAnswer` is how many seconds to ring before answering by itself, and `0` rings until someone taps Accept or Decline.
+
 ## Service
 
 ```bash
