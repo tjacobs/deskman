@@ -26,6 +26,7 @@ using namespace std::chrono;
 static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 const int INTERFACE_TIMEOUT_SECONDS = 10;
 const int INTERFACE_RECONNECT_SECONDS = 2;
+const int INTERFACE_BATTERY_TIMEOUT_SECONDS = 1;
 
 static mutex interfaceMutex;
 static condition_variable interfaceReplyCv;
@@ -45,6 +46,8 @@ static void runInterface();
 static bool writeInterfaceLine(string line);
 static void handleInterfaceLine(string line);
 static bool waitInterfaceOk();
+static bool waitInterfaceReply(int timeoutSeconds);
+static bool jsonNumber(const string& line, const string& key, float& value);
 static void logError(const string& message);
 
 void startInterface() {
@@ -106,6 +109,25 @@ bool takeInterfaceCommand(string& command, string& peer) {
     return true;
 }
 
+// Ask robot for voltage, percent, and current
+bool getInterfaceBattery(float& voltage, int& percent, float& current) {
+    if (!writeInterfaceLine("{\"command\":\"battery\"}")) return false;
+    if (!waitInterfaceReply(INTERFACE_BATTERY_TIMEOUT_SECONDS)) return false;
+
+    // Copy the reply, then pull the three numbers
+    string reply;
+    {
+        lock_guard<mutex> lock(interfaceMutex);
+        reply = lastReply;
+    }
+    float percentValue = 0;
+    if (!jsonNumber(reply, "voltage", voltage)) return false;
+    if (!jsonNumber(reply, "percent", percentValue)) return false;
+    if (!jsonNumber(reply, "current", current)) return false;
+    percent = (int)(percentValue + 0.5f);
+    return voltage > 0;
+}
+
 static string robotInterfacePath() {
     string directory;
     const char* runtime = getenv("XDG_RUNTIME_DIR");
@@ -134,16 +156,31 @@ static bool writeInterfaceLine(string line) {
 }
 
 static bool waitInterfaceOk() {
+    return waitInterfaceReply(INTERFACE_TIMEOUT_SECONDS);
+}
+
+static bool waitInterfaceReply(int timeoutSeconds) {
     unique_lock<mutex> lock(interfaceMutex);
     waitingReply = true;
     lastReply.clear();
-    time_t deadline = time(NULL) + INTERFACE_TIMEOUT_SECONDS;
+    time_t deadline = time(NULL) + timeoutSeconds;
     while (waitingReply && time(NULL) <= deadline) {
         interfaceReplyCv.wait_for(lock, chrono::seconds(1));
         if (!waitingReply) break;
     }
     waitingReply = false;
     return lastReply.find("\"ok\":true") != string::npos || lastReply.find("\"ok\": true") != string::npos;
+}
+
+static bool jsonNumber(const string& line, const string& key, float& value) {
+    string needle = "\"" + key + "\":";
+    size_t start = line.find(needle);
+    if (start == string::npos) return false;
+    start += needle.size();
+    while (start < line.size() && line[start] == ' ') start++;
+    char* end = NULL;
+    value = strtof(line.c_str() + start, &end);
+    return end != line.c_str() + start;
 }
 
 static void handleInterfaceLine(string line) {

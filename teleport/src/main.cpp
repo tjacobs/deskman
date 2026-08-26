@@ -331,8 +331,17 @@ void sendPing() {
     // Check ping interval
     if (now <= lastPing + PING_INTERVAL_SECONDS) return;
 
-    // Send ping
-    string ping = deviceName + " ping ";
+    // Send ping, with battery stats when the robot is up
+    string ping = deviceName + " ping";
+    float voltage = 0;
+    int percent = 0;
+    float current = 0;
+    if (getInterfaceBattery(voltage, percent, current)) {
+        char stats[64];
+        snprintf(stats, sizeof(stats), " %.2f %d %.2f", voltage, percent, current);
+        ping += stats;
+    }
+    ping += " ";
     webSocket.sendText(ping);
     lastPing = now;
 }

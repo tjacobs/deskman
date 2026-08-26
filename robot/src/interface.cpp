@@ -2,6 +2,7 @@
 
 #include "interface.h"
 #include "servos.h"
+#include "battery.h"
 
 #include "json.hpp"
 
@@ -147,6 +148,8 @@ static string handle_request(const string& line) {
         } else if (command == "menu") {
             send_menu();
             reply = {{"ok", true}};
+        } else if (command == "battery") {
+            reply = {{"ok", true}, {"voltage", battery_voltage()}, {"percent", battery_percent()}, {"current", battery_current()}};
         } else {
             reply = {{"ok", false}, {"error", "unknown command"}};
         }
