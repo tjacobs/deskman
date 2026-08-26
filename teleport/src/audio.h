@@ -15,6 +15,8 @@ using namespace std;
 void setVideoAudioDevice(string device);
 void setVideoAudioDevices(string micDevice, string speakerDevice);
 void setVideoMuteMic(bool muteMic);
+void setCallAudioPayloadType(int payloadType);
+int getCallAudioPayloadType();
 void startRemotePcmPlayback();
 void stopRemotePcmPlayback();
 bool playRemotePcmPacket(const char* data, size_t size);

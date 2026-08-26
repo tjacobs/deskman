@@ -98,8 +98,10 @@ const int LIBCAMERA_HEIGHT = VIDEO_HEIGHT;
 const int LIBCAMERA_FRAMERATE = 30;
 const int VIDEO_STATE_TIMEOUT_SECONDS = 2;
 const char* CONSTRAINED_BASELINE_PROFILE = "42e01f";
-const int CAMERA_CAPS_WAIT_MS = 8000;
-const int CAMERA_CAPS_POLL_MS = 50;
+const int SENDER_CAPS_WAIT_MS = 8000;
+const int SENDER_CAPS_POLL_MS = 50;
+const int VIDEO_CLOCK_RATE = 90000;
+const int AUDIO_CLOCK_RATE = 48000;
 const char* VIDEO_DEFAULT_CAMERA_PATH = "0";
 const char* VIDEO_PREFERRED_CAMERA_PATH = "/dev/video6";
 const int VIDEO_MAX_INDEX = 8;
@@ -149,10 +151,13 @@ void handleVideoAddress(string payload);
 void applyPendingVideoAddresses();
 void createVideoOffer();
 void chooseVideoCodec(const char* sdpText);
+void chooseAudioCodec(const char* sdpText);
+int findPayloadType(string sdp, string codec);
 string summarizeSdp(const char* sdpText);
 void logGStreamerError(const string& message);
-void waitForCameraCaps();
-void prepareVideoTransceiver();
+void waitForSenderCaps();
+void prepareSenderTransceivers();
+void prepareSenderTransceiver(int index, string media, string codec, int payloadType, GstWebRTCRTPTransceiverDirection direction);
 void applyRemoteVideoOffer(const char* sdpText);
 void sendVideoDescription(GstWebRTCSessionDescription* description);
 void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidate, gpointer userData);
@@ -218,12 +223,12 @@ void startVideo(string cameraPath, string cameraView) {
     // Keep the live sender, the web client and server both repeat StartVideo
     if (videoRunning && videoPipeline) return;
 
-    // Save camera settings for web viewer path
+    // Save camera settings for web viewer path, and send the mic so the web page can hear
     activeCameraPath = cameraPath;
     activeCameraView = getCameraView(cameraView);
     callMode = false;
     createOfferPending = false;
-    includeAudioInPipeline = false;
+    includeAudioInPipeline = true;
     videoRunning = true;
 
 #ifdef HAVE_GSTREAMER_WEBRTC
@@ -413,10 +418,10 @@ void startVideoPipeline() {
     // Stop old pipeline
     stopVideoPipeline();
 
-    // Prefer audio in call mode, fall back to video-only if ALSA fails
+    // Prefer sending the mic, fall back to video-only if ALSA fails
     bool wantAudio = includeAudioInPipeline;
     if (wantAudio && !startParsedVideoPipeline(createPipelineString(true))) {
-        cout << "***WARNING***: Call audio failed, continuing with video only." << endl;
+        cout << "***WARNING***: Mic failed, continuing with video only." << endl;
         wantAudio = false;
         includeAudioInPipeline = false;
         if (!startParsedVideoPipeline(createPipelineString(false))) {
@@ -827,9 +832,10 @@ void handleVideoOffer(string payload) {
         return;
     }
 
-    // Match the browser H264 payload type and profile for web viewers
+    // Match the browser payload types and H264 profile for web viewers
     chooseVideoCodec(sdpText);
-    cout << "VIDEO_OFFER " << summarizeSdp(sdpText) << " h264_pt=" << videoPayloadType << " profile=" << (videoProfileLevelId.empty() ? "encoder" : videoProfileLevelId) << endl;
+    chooseAudioCodec(sdpText);
+    cout << "VIDEO_OFFER " << summarizeSdp(sdpText) << " h264_pt=" << videoPayloadType << " profile=" << (videoProfileLevelId.empty() ? "encoder" : videoProfileLevelId) << " opus_pt=" << getCallAudioPayloadType() << endl;
 
     // Skip if camera is unavailable
     if (!videoCameraAvailable) {
@@ -853,8 +859,8 @@ void handleVideoOffer(string payload) {
         json_object_unref(object);
         return;
     }
-    waitForCameraCaps();
-    prepareVideoTransceiver();
+    waitForSenderCaps();
+    prepareSenderTransceivers();
     applyRemoteVideoOffer(sdpText);
     json_object_unref(object);
 }
@@ -963,6 +969,26 @@ void chooseVideoCodec(const char* sdpText) {
     }
 }
 
+// Send Opus at the payload type the remote peer offered
+void chooseAudioCodec(const char* sdpText) {
+    int payloadType = findPayloadType(sdpText ? sdpText : "", " opus/48000");
+    if (payloadType) setCallAudioPayloadType(payloadType);
+}
+
+// Read the payload type off the rtpmap line for a codec, a browser and a peer robot differ in case
+int findPayloadType(string sdp, string codec) {
+    string marker = "a=rtpmap:";
+    for (char& letter : sdp) letter = tolower(letter);
+
+    // The payload type sits at the front of the same line as the codec
+    size_t codecPosition = sdp.find(codec);
+    if (codecPosition == string::npos) return 0;
+    size_t lineStart = sdp.rfind(marker, codecPosition);
+    if (lineStart == string::npos) return 0;
+    lineStart += marker.size();
+    return atoi(sdp.substr(lineStart, codecPosition - lineStart).c_str());
+}
+
 // Name the codec and direction of every media line in an SDP
 string summarizeSdp(const char* sdpText) {
     string text = sdpText ? sdpText : "";
@@ -1006,56 +1032,66 @@ string summarizeSdp(const char* sdpText) {
     return summary;
 }
 
-// Hold the answer until the camera has caps, webrtcbin drops the sender without them
-void waitForCameraCaps() {
+// Hold the answer until the camera and mic have caps, webrtcbin drops a sender without them
+void waitForSenderCaps() {
     if (!videoWebrtc) return;
 
-    // Poll the camera pad, a cold libcamera and software encoder take a moment
-    GstPad* sinkPad = gst_element_get_static_pad(videoWebrtc, "sink_0");
-    if (!sinkPad) {
-        cout << "No camera pad on webrtcbin." << endl;
-        return;
-    }
-    int waited = 0;
-    GstCaps* caps = NULL;
-    while (waited < CAMERA_CAPS_WAIT_MS) {
-        caps = gst_pad_get_current_caps(sinkPad);
-        if (caps) break;
-        g_usleep(CAMERA_CAPS_POLL_MS * 1000);
-        waited += CAMERA_CAPS_POLL_MS;
-    }
+    // The camera is sink_0, the mic is sink_1 when audio is in the pipeline
+    const char* padNames[] = {"sink_0", "sink_1"};
+    for (const char* padName : padNames) {
+        GstPad* sinkPad = gst_element_get_static_pad(videoWebrtc, padName);
+        if (!sinkPad) continue;
 
-    // Log that the camera is ready, or that it never produced a frame
-    if (caps) {
-        cout << "Camera ready after " << waited << "ms." << endl;
-        gst_caps_unref(caps);
+        // Poll for caps, a cold libcamera or a mic behind the canceller takes a moment
+        int waited = 0;
+        GstCaps* caps = NULL;
+        while (waited < SENDER_CAPS_WAIT_MS) {
+            caps = gst_pad_get_current_caps(sinkPad);
+            if (caps) break;
+            g_usleep(SENDER_CAPS_POLL_MS * 1000);
+            waited += SENDER_CAPS_POLL_MS;
+        }
+
+        // Log that the sender is ready, or that it never produced anything
+        string sender = g_str_equal(padName, "sink_0") ? "Camera" : "Mic";
+        if (caps) {
+            cout << sender << " ready after " << waited << "ms." << endl;
+            gst_caps_unref(caps);
+        }
+        else {
+            logGStreamerError(sender + " produced nothing in " + to_string(SENDER_CAPS_WAIT_MS) + "ms, answering without it.");
+        }
+        gst_object_unref(sinkPad);
     }
-    else {
-        logGStreamerError("Camera produced no frames in " + to_string(CAMERA_CAPS_WAIT_MS) + "ms, answering without video.");
-    }
-    gst_object_unref(sinkPad);
 }
 
-// Pin the camera transceiver to H264 send, a slow camera start otherwise answers VP8 inactive
-void prepareVideoTransceiver() {
+// Pin each sender, webrtcbin otherwise answers with a codec we cannot produce
+void prepareSenderTransceivers() {
+    prepareSenderTransceiver(0, "video", "H264", videoPayloadType, GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY);
+    if (includeAudioInPipeline) prepareSenderTransceiver(1, "audio", "OPUS", getCallAudioPayloadType(), GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV);
+}
+
+// Set one transceiver to a single codec and direction
+void prepareSenderTransceiver(int index, string media, string codec, int payloadType, GstWebRTCRTPTransceiverDirection direction) {
     if (!videoWebrtc) return;
 
-    // Find the transceiver webrtcbin made for the camera sink pad
+    // Find the transceiver webrtcbin made for this sink pad
     GstWebRTCRTPTransceiver* transceiver = NULL;
-    g_signal_emit_by_name(videoWebrtc, "get-transceiver", 0, &transceiver);
+    g_signal_emit_by_name(videoWebrtc, "get-transceiver", index, &transceiver);
     if (!transceiver) {
-        cout << "No video transceiver to prepare." << endl;
+        cout << "No " << media << " transceiver to prepare." << endl;
         return;
     }
 
-    // Offer only H264 at the payload type the browser asked for
-    string capsText = "application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=" + to_string(videoPayloadType);
+    // Offer only our codec, at the payload type the remote peer asked for
+    int clockRate = media == "video" ? VIDEO_CLOCK_RATE : AUDIO_CLOCK_RATE;
+    string capsText = "application/x-rtp,media=" + media + ",encoding-name=" + codec + ",clock-rate=" + to_string(clockRate) + ",payload=" + to_string(payloadType);
     GstCaps* caps = gst_caps_from_string(capsText.c_str());
     g_object_set(transceiver, "codec-preferences", caps, NULL);
-    g_object_set(transceiver, "direction", GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY, NULL);
+    g_object_set(transceiver, "direction", direction, NULL);
     gst_caps_unref(caps);
 
-    cout << "Video transceiver H264 pt=" << videoPayloadType << " sendonly." << endl;
+    cout << (media == "video" ? "Video" : "Audio") << " transceiver " << codec << " pt=" << payloadType << " " << (direction == GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY ? "sendonly" : "sendrecv") << "." << endl;
     gst_object_unref(transceiver);
 }
 

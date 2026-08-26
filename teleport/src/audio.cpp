@@ -57,6 +57,7 @@ string videoAudioDevice = "plughw:0,0";
 string videoMicDevice = "plughw:0,0";
 string videoSpeakerDevice = "plughw:0,0";
 bool videoMuteMic = false;
+int callAudioPayloadType = 97;
 
 #ifdef HAVE_GSTREAMER_WEBRTC
 bool audioDisconnectLogged = false;
@@ -251,6 +252,16 @@ void setVideoMuteMic(bool muteMic) {
     videoMuteMic = muteMic;
 }
 
+// Send Opus at the payload type the remote peer offered
+void setCallAudioPayloadType(int payloadType) {
+    callAudioPayloadType = payloadType;
+}
+
+// Read the Opus payload type the mic branch is using
+int getCallAudioPayloadType() {
+    return callAudioPayloadType;
+}
+
 // Size, rate, and volume for remote websocket PCM, header is audi as int16 char codes
 const int REMOTE_PCM_HEADER_BYTES = 8;
 const int REMOTE_PCM_RATE = 48000;
@@ -403,9 +414,10 @@ string createAudioSourceString() {
             process += "audioconvert ! audio/x-raw,format=S16LE,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! ";
         }
     }
+    string payloadType = to_string(callAudioPayloadType);
     return source + process +
-        "opusenc name=robotopus audio-type=voice frame-size=20 bitrate=32000 ! rtpopuspay name=robotopuspay pt=97 ! "
-        "application/x-rtp,media=audio,encoding-name=OPUS,payload=97 ! sendrecv.";
+        "opusenc name=robotopus audio-type=voice frame-size=20 bitrate=32000 ! rtpopuspay name=robotopuspay pt=" + payloadType + " ! "
+        "application/x-rtp,media=audio,encoding-name=OPUS,payload=" + payloadType + " ! sendrecv.";
 }
 
 // Add named echo probe so webrtcdsp can cancel speaker audio from the mic
