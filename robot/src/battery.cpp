@@ -3,6 +3,7 @@
 
 // System
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <fcntl.h>
 #include <string>
@@ -34,9 +35,19 @@ static const int INA219_BUS_MV_PER_BIT = 4;
 static const int BATTERY_CHECK_MS = 1000;
 static const float BATTERY_FILTER = 0.99f;
 
+// 3S LiPo pack, 0% at 3.0V/cell and 100% at 4.2V/cell
+static const int BATTERY_CELL_COUNT = 3;
+static const float BATTERY_VOLTAGE_EMPTY = 9.0f;
+static const float BATTERY_VOLTAGE_FULL = 12.6f;
+
+// S-curve, 50% near 3.84V/cell on that empty to full span
+static const float BATTERY_CURVE_STEEPNESS = 8.0f;
+static const float BATTERY_CURVE_MID = 0.70f;
+
 // Open I2C file and last filtered reading
 static int battery_file = -1;
 static float battery_voltage_value = 0;
+static int battery_percent_value = 0;
 static string battery_label;
 static bool battery_logged = false;
 static steady_clock::time_point last_battery_check;
@@ -48,6 +59,7 @@ static bool open_ina219();
 static unsigned int read_ina219_register(int fileDescriptor, int registerAddress);
 static bool is_ina219_config(unsigned int config);
 static float read_bus_volts();
+static int percent_from_voltage(float packVolts);
 
 // Recheck the INA219 about once a second
 void check_battery() {
@@ -75,6 +87,11 @@ float battery_voltage() {
     return battery_voltage_value;
 }
 
+// 0 to 100 from the LiPo curve, or 0 when unread
+int battery_percent() {
+    return battery_percent_value;
+}
+
 // Open the chip if needed, then filter a bus-voltage sample
 static void update_battery_reading() {
     // Leave the label empty until the chip opens
@@ -94,14 +111,17 @@ static void update_battery_reading() {
     if (battery_voltage_value <= 0) battery_voltage_value = voltage;
     else battery_voltage_value = battery_voltage_value * BATTERY_FILTER + voltage * (1.0f - BATTERY_FILTER);
 
+    // Percent from the LiPo curve, clamped to empty and full
+    battery_percent_value = percent_from_voltage(battery_voltage_value);
+
     // Face label
     char line[32];
-    snprintf(line, sizeof(line), "%.1f V", battery_voltage_value);
+    snprintf(line, sizeof(line), "%.1f V  %d%%", battery_voltage_value, battery_percent_value);
     battery_label = line;
 
     // Log once
     if (!battery_logged) {
-        printf("Battery INA219 %.2f V\n", battery_voltage_value);
+        printf("Battery INA219 %.2f V %d%%\n", battery_voltage_value, battery_percent_value);
         fflush(stdout);
         battery_logged = true;
     }
@@ -184,4 +204,22 @@ static float read_bus_volts() {
     if (raw == 0) return 0;
     int milliVolts = (int)(raw >> 3) * INA219_BUS_MV_PER_BIT;
     return milliVolts / 1000.0f;
+}
+
+// LiPo S-curve from empty to full, 0% and 100% land on those voltages
+static int percent_from_voltage(float packVolts) {
+    // Hard stop at empty and full pack volts
+    if (packVolts <= BATTERY_VOLTAGE_EMPTY) return 0;
+    if (packVolts >= BATTERY_VOLTAGE_FULL) return 100;
+
+    // Map voltage to 0..1, then a logistic so the middle stays flatter than linear
+    float span = BATTERY_VOLTAGE_FULL - BATTERY_VOLTAGE_EMPTY;
+    float t = (packVolts - BATTERY_VOLTAGE_EMPTY) / span;
+    float sigmoid = 1.0f / (1.0f + expf(-BATTERY_CURVE_STEEPNESS * (t - BATTERY_CURVE_MID)));
+    float sigmoidEmpty = 1.0f / (1.0f + expf(-BATTERY_CURVE_STEEPNESS * (0.0f - BATTERY_CURVE_MID)));
+    float sigmoidFull = 1.0f / (1.0f + expf(-BATTERY_CURVE_STEEPNESS * (1.0f - BATTERY_CURVE_MID)));
+    int percent = (int)(100.0f * (sigmoid - sigmoidEmpty) / (sigmoidFull - sigmoidEmpty) + 0.5f);
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    return percent;
 }
