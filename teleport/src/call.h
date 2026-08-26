@@ -14,5 +14,4 @@ bool isCallOverlayIdle();
 void showCallFailed(std::string message);
 void setCallPeers(const std::vector<std::string>& names);
 bool takeCallAction(std::string& command, std::string& peer);
-bool isWebPeer(const std::string& name);
 bool isCallInterfaceReady();

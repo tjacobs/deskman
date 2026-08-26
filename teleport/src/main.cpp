@@ -76,7 +76,6 @@ string callPeer;
 string audioDevice = DEFAULT_AUDIO_DEVICE;
 bool muteMic = false;
 bool holdIncomingCall = false;
-bool incomingWebCall = false;
 bool autoAnswerPending = false;
 steady_clock::time_point autoAnswerAt;
 steady_clock::time_point ringTimeoutAt;
@@ -501,16 +500,15 @@ void handleCommand(const string& command, const string& commandArgument, const s
     else if (command == "RINGING") {
     }
 
-    // Start video, a viewer asking to watch only wants one way video
+    // Pick the camera view, callers send this alongside Call
     else if (command == "StartVideo") {
-        // Keep the view a ringing caller asked for, and mark them as a viewer
+        // Keep the view a ringing caller asked for, they send it right after Call
         if (holdIncomingCall) {
             pendingCameraView = commandArgument;
-            incomingWebCall = true;
             return;
         }
 
-        // Ring for an old browser that watches without announcing a Call first
+        // Nothing reaches the camera without ringing first, so ring for a caller that skipped Call
         if (!isVideoRunning()) {
             beginIncomingCall(target, commandArgument);
             return;
@@ -632,9 +630,6 @@ void beginIncomingCall(const string& peer, const string& cameraView) {
     string caller = peer.empty() ? "peer" : peer;
     holdIncomingCall = true;
     pendingCameraView = cameraView;
-
-    // A caller named webNNNNNN, or one asking for a camera view, only wants to watch
-    incomingWebCall = isWebPeer(peer) || !cameraView.empty();
     ringTimeoutAt = steady_clock::now() + seconds(RING_TIMEOUT_SECONDS);
 
     // Arm the auto-answer, or wait for a tap when it is switched off
@@ -655,30 +650,15 @@ void beginIncomingCall(const string& peer, const string& cameraView) {
     webSocket.send(deviceName + " RINGING");
 }
 
-// Start the local side of an incoming call
+// Start the local side of an incoming call, robots and browsers answer the same way
 void acceptIncomingCall() {
     holdIncomingCall = false;
     autoAnswerPending = false;
     stopRingtone();
 
-    // A web viewer only watches, so send video instead of opening a two-way call
-    if (incomingWebCall) {
-        incomingWebCall = false;
-        startVideo(cameraPath, pendingCameraView);
-        replayHeldVideoSignaling();
-        return;
-    }
-
-    // A robot call runs both ways
-    if (startCall(cameraPath, false)) {
-        replayHeldVideoSignaling();
-        showCallInProgress();
-    } else {
-        pendingVideoOffer.clear();
-        heldVideoAddresses.clear();
-        webSocket.send(deviceName + " VIDEO_STOP");
-        showCallFailed("Call not sent");
-    }
+    // Open the camera on the offer, so the encoder matches the payload type the caller asked for
+    startVideo(cameraPath, pendingCameraView);
+    replayHeldVideoSignaling();
 }
 
 // Feed the pipeline the offer and candidates that arrived while it was ringing
@@ -700,7 +680,6 @@ void replayHeldVideoSignaling() {
 // Drop a ringing incoming call
 void cancelIncomingCall() {
     holdIncomingCall = false;
-    incomingWebCall = false;
     autoAnswerPending = false;
     pendingVideoOffer.clear();
     heldVideoAddresses.clear();
