@@ -79,7 +79,6 @@ public:
 
         // Enable the receiver and set local mode
         options.c_cflag |= (CLOCAL | CREAD);
-        options.c_cflag &= ~HUPCL;
 
         // Disable hardware flow control
         options.c_cflag &= ~CRTSCTS;
@@ -115,7 +114,7 @@ public:
             return true;
         }
 
-        serial_fd = open(port_name.c_str(), O_RDWR | O_NOCTTY);
+        serial_fd = open(port_name.c_str(), O_RDWR | O_NOCTTY | O_NDELAY);
         if (serial_fd == -1) {
             #ifndef __APPLE__
             cerr << "Failed to open serial port " << port_name << endl;
@@ -166,32 +165,25 @@ public:
     }
 
     int writeOut(unsigned char *nDat, int nLen) {
-        if (serial_fd == -1) return 0;
-        int sent = 0;
-        while (sent < nLen) {
-            int bytes_written = write(serial_fd, nDat + sent, nLen - sent);
-            if (bytes_written < 0) {
-                if (errno == EINTR) continue;
-                cerr << "Failed to write to serial port." << endl;
-                return sent;
-            }
-            sent += bytes_written;
-        }
-        return sent;
+        //printf("Writing: %d bytes.\n", nLen);
+        string data(reinterpret_cast<char*>(nDat), nLen);
+        writeData(data);
+        return nLen;
     }
 
     bool writeData(const string &data) {
-        return writeOut(reinterpret_cast<unsigned char*>(const_cast<char*>(data.c_str())), static_cast<int>(data.length())) == static_cast<int>(data.length());
-    }
+        if (serial_fd == -1) {
+            cerr << "Serial port not open." << endl;
+            return false;
+        }
 
-    // Wait until the UART has shifted out the last TX bit
-    void drain() {
-        if (serial_fd != -1) ioctl(serial_fd, TCSBRK, 1);
-    }
+        int bytes_written = write(serial_fd, data.c_str(), data.length());
+        if (bytes_written < 0) {
+            cerr << "Failed to write to serial port." << endl;
+            return false;
+        }
 
-    // Drop RX bytes, TX echo on a half-duplex bus
-    void flushInput() {
-        if (serial_fd != -1) ioctl(serial_fd, TCFLSH, 0);
+        return true;
     }
 
     string readData(size_t max_length = 256) {
