@@ -53,6 +53,15 @@ target_include_directories(${TARGET_NAME} PRIVATE ${SDL2_INCLUDE_DIRS})
 target_compile_options(${TARGET_NAME} PRIVATE ${SDL2_CFLAGS_OTHER})
 target_link_libraries(${TARGET_NAME} PRIVATE ${SDL2_LDFLAGS} ${SDL2_LIBRARIES})
 
+# pkg-config gives .../include/SDL2, sources include <SDL2/SDL.h>
+foreach(sdl_include ${SDL2_INCLUDE_DIRS})
+    get_filename_component(sdl_include_name "${sdl_include}" NAME)
+    if(sdl_include_name STREQUAL "SDL2")
+        get_filename_component(sdl_include_parent "${sdl_include}" DIRECTORY)
+        target_include_directories(${TARGET_NAME} PRIVATE "${sdl_include_parent}")
+    endif()
+endforeach()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0)
     target_include_directories(${TARGET_NAME} PRIVATE ${GSTREAMER_INCLUDE_DIRS})
