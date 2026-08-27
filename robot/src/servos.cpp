@@ -89,6 +89,16 @@ extern volatile bool g_quit;
 // Probe one servo by position reads, then a ping
 static bool detect_servo(Servo &servo);
 
+// Put min below max when config.json has them reversed
+static void swap_inverted_limits(Servo &servo) {
+    if (servo.min_limit <= servo.max_limit) return;
+    printf("Servo ID %d %s config min %d is above max %d, swapping\n", servo.id, servo.name, servo.min_limit, servo.max_limit);
+    fflush(stdout);
+    int high = servo.min_limit;
+    servo.min_limit = servo.max_limit;
+    servo.max_limit = high;
+}
+
 int open_servos() {
     // Load servo travel limits from config.json
     AppConfig config = loadConfig();
@@ -98,6 +108,9 @@ int open_servos() {
     servos[1].max_limit = config.max_y;
     servos[2].min_limit = config.min_hat;
     servos[2].max_limit = config.max_hat;
+    for (Servo &servo : servos) {
+        swap_inverted_limits(servo);
+    }
     servos[0].position = servos[0].min_limit + (servos[0].max_limit - servos[0].min_limit) / 2;
     servos[1].position = servos[1].min_limit + (servos[1].max_limit - servos[1].min_limit) / 2;
     servos[2].position = servos[2].min_limit;
@@ -169,7 +182,7 @@ int open_servos() {
     const char *separator = " ";
     for (Servo &servo : servos) {
         if (!servo.found) continue;
-        printf("%s%s to %d", separator, servo.name, servo.position);
+        printf("%s%s to %d, limits %d..%d", separator, servo.name, servo.position, servo.min_limit, servo.max_limit);
         separator = ", ";
     }
     printf("\n");
@@ -258,8 +271,10 @@ void stop_servo_position_log() {
 
 // Keep a value inside a travel range
 static int clamp_to_range(int value, int min_value, int max_value) {
-    if (value < min_value) return min_value;
-    if (value > max_value) return max_value;
+    int low = min_value < max_value ? min_value : max_value;
+    int high = min_value < max_value ? max_value : min_value;
+    if (value < low) return low;
+    if (value > high) return high;
     return value;
 }
 
@@ -328,22 +343,32 @@ void sweep_servos() {
     }
     printf(g_quit ? "Sweep stopped\n" : "Sweep done\n");
 }
+
+// Read present position for one motor
+static int read_present_position(Servo &servo) {
+    lock_guard<recursive_mutex> lock(servo_mutex);
+    if (!st.pSerial) return -1;
+    return st.ReadPos(servo.id);
+}
+
 // Print a sweep line, move one motor, then wait
 static void sweep_line(const char *label, Servo &servo, int position) {
     if (g_quit || !servo.found) return;
-    printf("%s\n", label);
-    fflush(stdout);
 
     // Write only the motor for this step
+    int before = read_present_position(servo);
+    int command = clamp_to_range(position, servo.min_limit, servo.max_limit);
     {
         lock_guard<recursive_mutex> lock(servo_mutex);
         if (servos_enabled && st.pSerial) {
-            servo.position = clamp_to_range(position, servo.min_limit, servo.max_limit);
+            servo.position = command;
             st.WritePosEx(servo.id, servo.position, sweep_speed, sweep_acceleration);
         } else if (servos_enabled) {
             printf("No servos detected, not moving\n");
         }
     }
+    printf("%s  command %d  before %d  limits %d..%d\n", label, command, before, servo.min_limit, servo.max_limit);
+    fflush(stdout);
 
     // Wait before the next line, stop on Ctrl-C
     int waited_ms = 0;
@@ -351,6 +376,11 @@ static void sweep_line(const char *label, Servo &servo, int position) {
         sleep_for(milliseconds(sweep_poll_ms));
         waited_ms += sweep_poll_ms;
     }
+
+    // Show whether the motor actually moved
+    int after = read_present_position(servo);
+    printf("%s  after %d\n", label, after);
+    fflush(stdout);
 }
 
 // After min or max, read where the servo actually stopped
