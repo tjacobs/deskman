@@ -225,7 +225,7 @@ static void serve_client_thread(int client_fd) {
 
 static void interface_loop() {
     while (g_interface_running.load()) {
-        int client_fd = accept(g_listen_fd, nullptr, nullptr);
+        int client_fd = ::accept(g_listen_fd, nullptr, nullptr);
         if (client_fd < 0) {
             if (!g_interface_running.load()) break;
             continue;
@@ -273,7 +273,7 @@ bool start_interface() {
     }
     strncpy(addr.sun_path, socket_path.c_str(), sizeof(addr.sun_path) - 1);
 
-    if (bind(g_listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+    if (::bind(g_listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
         perror("interface bind");
         close(g_listen_fd);
         g_listen_fd = -1;
@@ -282,7 +282,7 @@ bool start_interface() {
 
     chmod(socket_path.c_str(), 0600);
 
-    if (listen(g_listen_fd, 4) < 0) {
+    if (::listen(g_listen_fd, 4) < 0) {
         perror("interface listen");
         close(g_listen_fd);
         g_listen_fd = -1;
