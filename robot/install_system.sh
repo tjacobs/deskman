@@ -31,6 +31,7 @@ main() {
     disable_software_updater
     configure_session
     disable_screen_idle
+    disable_screen_keyboard
     echo "Done."
 }
 
@@ -242,6 +243,30 @@ XDG_PICTURES_DIR="\$HOME"
 XDG_VIDEOS_DIR="\$HOME"
 EOF
     chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/user-dirs.conf" "${RUN_HOME}/.config/user-dirs.dirs"
+}
+
+# Keep the on-screen keyboard from popping over the robot face
+disable_screen_keyboard() {
+    echo "Disabling the on-screen keyboard"
+
+    # Turn off the GNOME accessibility keyboard
+    run_as_user gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false
+    run_as_user gsettings set org.gnome.desktop.interface gtk-im-module '' || true
+
+    # Stop onboard from showing itself on text focus
+    run_as_user gsettings set org.onboard.auto-show enabled false || true
+    run_as_user gsettings set org.onboard.auto-show tablet-mode-detection-enabled false || true
+    run_as_user gsettings set org.onboard start-minimized true || true
+
+    # Hide the onboard autostart entry and close it if it is up
+    cat > "${RUN_HOME}/.config/autostart/onboard-autostart.desktop" <<'EOF'
+[Desktop Entry]
+Name=Onboard
+Hidden=true
+X-GNOME-Autostart-enabled=false
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/onboard-autostart.desktop"
+    pkill -u "${RUN_USER}" -x onboard || true
 }
 
 # Keep the display on and skip the lock screen
