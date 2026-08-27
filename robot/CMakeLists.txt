@@ -45,13 +45,11 @@ if(NOT PKG_CONFIG_FOUND)
 endif()
 
 # Find SDL2, SDL2_image, and SDL2_ttf
-pkg_check_modules(SDL2 sdl2 SDL2_image SDL2_ttf)
+pkg_check_modules(SDL2 IMPORTED_TARGET sdl2 SDL2_image SDL2_ttf)
 if(NOT SDL2_FOUND)
     message(FATAL_ERROR "SDL2 not found. Run ./install.sh to install SDL2.")
 endif()
-target_include_directories(${TARGET_NAME} PRIVATE ${SDL2_INCLUDE_DIRS})
-target_compile_options(${TARGET_NAME} PRIVATE ${SDL2_CFLAGS_OTHER})
-target_link_libraries(${TARGET_NAME} PRIVATE ${SDL2_LDFLAGS} ${SDL2_LIBRARIES})
+target_link_libraries(${TARGET_NAME} PRIVATE PkgConfig::SDL2)
 
 # pkg-config gives .../include/SDL2, sources include <SDL2/SDL.h>
 foreach(sdl_include ${SDL2_INCLUDE_DIRS})
