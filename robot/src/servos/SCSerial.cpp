@@ -79,4 +79,8 @@ void SCSerial::rFlushSCS()
 
 void SCSerial::wFlushSCS()
 {
+	if (!pSerial) return;
+	pSerial->drain();
+	usleep(300);
+	pSerial->flushInput();
 }
