@@ -1,5 +1,7 @@
 Style guide
 
+- These rules apply to Python, C++, and shell scripts.
+
 Functions:
 
 - Main is the first function in the file
