@@ -13,6 +13,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <string>
 
 // Shorthand for names used below
 using namespace std;
@@ -102,12 +103,12 @@ static void swap_inverted_limits(Servo &servo) {
 int open_servos() {
     // Load servo travel limits from config.json
     AppConfig config = loadConfig();
-    servos[0].min_limit = config.min_x;
-    servos[0].max_limit = config.max_x;
-    servos[1].min_limit = config.min_y;
-    servos[1].max_limit = config.max_y;
-    servos[2].min_limit = config.min_hat;
-    servos[2].max_limit = config.max_hat;
+    servos[0].min_limit = config.pan_min;
+    servos[0].max_limit = config.pan_max;
+    servos[1].min_limit = config.tilt_min;
+    servos[1].max_limit = config.tilt_max;
+    servos[2].min_limit = config.hat_min;
+    servos[2].max_limit = config.hat_max;
     for (Servo &servo : servos) {
         swap_inverted_limits(servo);
     }
@@ -223,6 +224,8 @@ int relax_servos() {
         return 0;
     }
     st.pSerial = &serial;
+    serial.setBaudRate(SERVO_BAUD_RATE);
+    st.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
 
     // Relax every servo on the bus, then the known IDs
     st.EnableTorque(SERVO_BUS_BROADCAST_ID, 0);
@@ -240,14 +243,20 @@ void print_servo_positions() {
     lock_guard<recursive_mutex> lock(servo_mutex);
     if (!st.pSerial) return;
 
-    // Missing servos print as -1
-    printf("Servos:");
+    // Read first so the line is complete before printing
+    string line = "Servos:";
     const char *separator = " ";
+    bool first = true;
     for (Servo &servo : servos) {
-        printf("%s%s %d", separator, servo.name, st.ReadPos(servo.id));
+        if (!first) sleep_for(milliseconds(SERVO_DETECT_GAP_MS));
+        first = false;
+        line += separator;
+        line += servo.name;
+        line += " ";
+        line += to_string(st.ReadPos(servo.id));
         separator = ", ";
     }
-    printf("\n");
+    printf("%s\n", line.c_str());
     fflush(stdout);
 }
 

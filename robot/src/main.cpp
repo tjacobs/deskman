@@ -118,13 +118,12 @@ int main(int argc, char **argv) {
     // Relax servos when travel limits are missing from config.json
     if (!config.has_servo_limits) {
         no_servos = true;
-        printf("Servos disabled, config.json needs min_x, max_x, min_y, max_y, min_hat, max_hat\n");
+        printf("Servos disabled, config.json needs pan_min, pan_max, tilt_min, tilt_max, hat_min, hat_max\n");
     }
 
     // Connect to servos, or relax them and leave them disabled
     if (no_servos) {
         relax_servos();
-        start_servo_position_log();
     } else if (open_servos() != 0) {
         if (sweep_only) return 1;
     }
@@ -159,6 +158,9 @@ int main(int argc, char **argv) {
     if (use_camera && faceTracker.isCameraAvailable()) {
         faceTracker.startTracking();
     }
+
+    // Log positions after startup prints, so they do not interleave
+    if (no_servos) start_servo_position_log();
 
     run_robot_loop(faceTracker, quit);
 

@@ -4,9 +4,22 @@
 #include <iostream>
 
 using namespace std;
-using json = nlohmann::json;
+using json = nlohmann::ordered_json;
 
 static const char* CONFIG_PATH = "config.json";
+
+// Read a travel limit, new name first then the old config.json key
+static bool read_travel_limit(const json& j, const char* name, const char* previous_name, int& value) {
+    if (j.contains(name)) {
+        value = j[name].get<int>();
+        return true;
+    }
+    if (j.contains(previous_name)) {
+        value = j[previous_name].get<int>();
+        return true;
+    }
+    return false;
+}
 
 // Load ./config.json, servo motion needs all six travel keys
 AppConfig loadConfig() {
@@ -26,19 +39,13 @@ AppConfig loadConfig() {
         if (j.contains("faceTracking")) config.faceTracking = j["faceTracking"].get<bool>();
 
         // Use servo limits only when every axis min and max is present
-        bool has_min_x = j.contains("min_x");
-        bool has_max_x = j.contains("max_x");
-        bool has_min_y = j.contains("min_y");
-        bool has_max_y = j.contains("max_y");
-        bool has_min_hat = j.contains("min_hat");
-        bool has_max_hat = j.contains("max_hat");
-        config.has_servo_limits = has_min_x && has_max_x && has_min_y && has_max_y && has_min_hat && has_max_hat;
-        if (has_min_x) config.min_x = j["min_x"].get<int>();
-        if (has_max_x) config.max_x = j["max_x"].get<int>();
-        if (has_min_y) config.min_y = j["min_y"].get<int>();
-        if (has_max_y) config.max_y = j["max_y"].get<int>();
-        if (has_min_hat) config.min_hat = j["min_hat"].get<int>();
-        if (has_max_hat) config.max_hat = j["max_hat"].get<int>();
+        bool has_pan_min = read_travel_limit(j, "pan_min", "min_x", config.pan_min);
+        bool has_pan_max = read_travel_limit(j, "pan_max", "max_x", config.pan_max);
+        bool has_tilt_min = read_travel_limit(j, "tilt_min", "min_y", config.tilt_min);
+        bool has_tilt_max = read_travel_limit(j, "tilt_max", "max_y", config.tilt_max);
+        bool has_hat_min = read_travel_limit(j, "hat_min", "min_hat", config.hat_min);
+        bool has_hat_max = read_travel_limit(j, "hat_max", "max_hat", config.hat_max);
+        config.has_servo_limits = has_pan_min && has_pan_max && has_tilt_min && has_tilt_max && has_hat_min && has_hat_max;
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
     }
@@ -47,19 +54,18 @@ AppConfig loadConfig() {
 
 // Write ./config.json, omit servo limits unless they were already configured
 void saveConfig(const AppConfig& config) {
-    json j = {
-        {"useCamera", config.useCamera},
-        {"faceTracking", config.faceTracking}
-    };
+    json j;
+    j["useCamera"] = config.useCamera;
+    j["faceTracking"] = config.faceTracking;
 
     // Keep existing travel limits, do not invent defaults
     if (config.has_servo_limits) {
-        j["min_x"] = config.min_x;
-        j["max_x"] = config.max_x;
-        j["min_y"] = config.min_y;
-        j["max_y"] = config.max_y;
-        j["min_hat"] = config.min_hat;
-        j["max_hat"] = config.max_hat;
+        j["pan_min"] = config.pan_min;
+        j["pan_max"] = config.pan_max;
+        j["tilt_min"] = config.tilt_min;
+        j["tilt_max"] = config.tilt_max;
+        j["hat_min"] = config.hat_min;
+        j["hat_max"] = config.hat_max;
     }
     try {
         ofstream out(CONFIG_PATH);
