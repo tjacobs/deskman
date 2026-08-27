@@ -16,6 +16,9 @@ int screen_height = 600;
 
 static const char* DEFAULT_DISPLAY = ":0";
 
+// A dead IBus socket, GNOME pops its touch keyboard when SDL takes input method focus
+static const char* DEAD_IBUS_ADDRESS = "unix:path=/nonexistent";
+
 // Status text
 string currentStatus;
 mutex statusMutex;
@@ -48,11 +51,17 @@ bool create_window() {
         if (filesystem::exists(xauth)) setenv("XAUTHORITY", xauth.c_str(), 1);
     }
 
+    // Keep the on-screen keyboard away, SDL connects to IBus while it initializes
+    setenv("IBUS_ADDRESS", DEAD_IBUS_ADDRESS, 1);
+
     // Initialize SDL
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "Error: No available screen\n");
         return false;
     }
+
+    // SDL turns text input on during init, we take no typing
+    SDL_StopTextInput();
 
     // Initialize SDL_image
     if (IMG_Init(IMG_INIT_JPG | IMG_INIT_PNG | IMG_INIT_TIF) == 0) {
