@@ -29,19 +29,36 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_include_directories(${TARGET_NAME} PRIVATE /usr/include/SDL2)
-    target_link_libraries(${TARGET_NAME} PRIVATE SDL2 SDL2_image SDL2_ttf)
+# Find Homebrew SDL2 on Mac, Apple Silicon or Intel
+if(APPLE)
+    foreach(prefix /opt/homebrew /usr/local)
+        if(EXISTS "${prefix}/lib/pkgconfig")
+            list(APPEND CMAKE_PREFIX_PATH "${prefix}")
+            set(ENV{PKG_CONFIG_PATH} "${prefix}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+        endif()
+    endforeach()
+endif()
 
-    find_package(PkgConfig REQUIRED)
+find_package(PkgConfig)
+if(NOT PKG_CONFIG_FOUND)
+    message(FATAL_ERROR "SDL2 not found. Run ./install.sh to install SDL2.")
+endif()
+
+# Find SDL2, SDL2_image, and SDL2_ttf
+pkg_check_modules(SDL2 sdl2 SDL2_image SDL2_ttf)
+if(NOT SDL2_FOUND)
+    message(FATAL_ERROR "SDL2 not found. Run ./install.sh to install SDL2.")
+endif()
+target_include_directories(${TARGET_NAME} PRIVATE ${SDL2_INCLUDE_DIRS})
+target_compile_options(${TARGET_NAME} PRIVATE ${SDL2_CFLAGS_OTHER})
+target_link_libraries(${TARGET_NAME} PRIVATE ${SDL2_LDFLAGS} ${SDL2_LIBRARIES})
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(GSTREAMER REQUIRED gstreamer-1.0)
     target_include_directories(${TARGET_NAME} PRIVATE ${GSTREAMER_INCLUDE_DIRS})
     target_link_libraries(${TARGET_NAME} PRIVATE ${GSTREAMER_LIBRARIES})
-elseif(APPLE)
-    target_include_directories(${TARGET_NAME} PRIVATE /opt/homebrew/include /opt/homebrew/include/SDL2)
-    target_link_directories(${TARGET_NAME} PRIVATE /opt/homebrew/lib)
-    set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_RPATH "/opt/homebrew/lib" BUILD_WITH_INSTALL_RPATH TRUE)
-    target_link_libraries(${TARGET_NAME} PRIVATE /opt/homebrew/lib/libSDL2.dylib /opt/homebrew/lib/libSDL2_image.dylib /opt/homebrew/lib/libSDL2_ttf.dylib)
+elseif(APPLE AND SDL2_LIBRARY_DIRS)
+    set_target_properties(${TARGET_NAME} PROPERTIES INSTALL_RPATH "${SDL2_LIBRARY_DIRS}" BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
 
 target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCV_LIBS})
