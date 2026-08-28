@@ -18,7 +18,7 @@ static const int FAN_RPM_AT_FULL = 6000;
 static const int FAN_SLOW_DIVISOR = 2;
 static const int FAN_MIN_EXPECTED_RPM = 500;
 static const int FAN_CHECK_MS = 1000;
-static const int FAN_SLOW_HITS_NEEDED = 3;
+static const int FAN_SLOW_MS_NEEDED = 10000;
 static const int TEMPERATURE_WARN_C = 90;
 static const int TEMPERATURE_HITS_NEEDED = 3;
 static const int FAN_READ_FAILED = -1;
@@ -88,7 +88,7 @@ static void update_fan_warning() {
         return;
     }
 
-    // Require a few slow samples, tach can glitch for a second
+    // Wait out a run of slow samples, the tach glitches and the fan takes a while to spin up
     bool slow = fan_rpm < expected_rpm / FAN_SLOW_DIVISOR;
     if (slow) {
         fan_slow_hits += 1;
@@ -97,7 +97,7 @@ static void update_fan_warning() {
         fan_warning.clear();
         return;
     }
-    if (fan_slow_hits < FAN_SLOW_HITS_NEEDED) {
+    if (fan_slow_hits < FAN_SLOW_MS_NEEDED / FAN_CHECK_MS) {
         return;
     }
 
