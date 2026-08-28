@@ -63,6 +63,9 @@ const int RING_TIMEOUT_SECONDS = 60;
 // Configure audio device
 const char* DEFAULT_AUDIO_DEVICE = "plughw:0,0";
 
+// The locally built plugins, webrtcdsp there runs AEC3 while the system one only has the older AEC2
+const char* DESKMAN_PLUGIN_PATH = "/usr/local/lib/deskman-gstreamer-1.0";
+
 #ifdef __linux__
 const char* DEFAULT_DISPLAY = ":0";
 #endif
@@ -93,6 +96,7 @@ void parseArgs(int argumentCount, char** argumentValues);
 void checkAlreadyRunning();
 pid_t findOtherRunning();
 void setupDisplayEnv();
+void setupPluginPath();
 void printHelp();
 void initSignals();
 void signalHandler(int signalNumber);
@@ -124,6 +128,9 @@ int main(int argumentCount, char** argumentValues) {
 
     // Point HDMI video at the local screen when DISPLAY is unset
     setupDisplayEnv();
+
+    // Find the locally built plugins before anything starts GStreamer
+    setupPluginPath();
 
     // Prefer separate USB mic and speaker when using the default ALSA device
     setVideoMuteMic(muteMic);
@@ -298,6 +305,17 @@ void setupDisplayEnv() {
         if (access(xauth.c_str(), F_OK) == 0) setenv("XAUTHORITY", xauth.c_str(), 1);
     }
 #endif
+}
+
+// Look for the locally built plugins, so a run from the shell gets the same AEC3 as the service does
+void setupPluginPath() {
+    if (access(DESKMAN_PLUGIN_PATH, F_OK) != 0) return;
+
+    // Search ours first, keeping any path the caller set
+    string path = DESKMAN_PLUGIN_PATH;
+    const char* existing = getenv("GST_PLUGIN_PATH");
+    if (existing && existing[0] && string(existing) != DESKMAN_PLUGIN_PATH) path += ":" + string(existing);
+    setenv("GST_PLUGIN_PATH", path.c_str(), 1);
 }
 
 // Print command line usage
