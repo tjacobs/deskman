@@ -80,9 +80,9 @@ static void logError(const string& message) {
 void pauseInterfaceForCall() {
     if (interfacePaused) return;
 
-    // Ask robot to drop the camera before this program opens it
+    // Ask robot to drop the camera before this program opens it, nobody holds it when robot is not running
     if (!writeInterfaceLine("{\"command\":\"pause\"}")) {
-        logError("Could not request the camera, robot not connected.");
+        cout << "Robot not running, taking the camera directly." << endl;
         return;
     }
     if (!waitInterfaceOk()) {
