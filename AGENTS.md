@@ -34,6 +34,7 @@ Naming:
 - Keep code simple and minimal number of lines
 - No underscores in front of functions
 - Use full variable and function names
+- Acronyms are uppercase in function names (e.g. findUSBMicDevice and isEchoCancelAEC3, not findUsbMicDevice)
 - Prefer arg names load and save
 
 
