@@ -2,8 +2,10 @@
  * Call mic, speaker, echo cancel.
 */
 
+// Local
 #include "audio.h"
 
+// System
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -19,21 +21,36 @@
 #include <thread>
 #include <vector>
 
+// GStreamer, only when the build found the WebRTC plugins
 #ifdef HAVE_GSTREAMER_WEBRTC
 #include <gst/app/gstappsrc.h>
 #include <gst/fft/gstfftf32.h>
 #endif
 
+// Namespace
 using namespace std;
 using namespace std::chrono;
 
+// Fall back to the first ALSA card until the USB dongle is found
+const string DEFAULT_AUDIO_DEVICE = "plughw:0,0";
+const int DEFAULT_AUDIO_PAYLOAD_TYPE = 97;
+
+// Speaker volume, and the buffer sizes every call pipeline runs on
 const double VIDEO_SPEAKER_VOLUME = 0.45;
 const int VIDEO_AUDIO_BUFFER_TIME = 80000;
 const int VIDEO_AUDIO_LATENCY_TIME = 20000;
 const int VIDEO_AUDIO_RATE = 48000;
 const int VIDEO_AUDIO_QUEUE_MS = 200;
+
+// Hold mic gain fixed, a quiet room must not raise the loop gain
 const int CALL_MIC_GAIN_DB = 0;
 const int CALL_MIC_LIMIT_DBFS = 3;
+
+// AEC3 arrived in gst-plugins-bad 1.24, older plugins link webrtc-audio-processing 0.3 and run the legacy AEC2
+const int AEC3_PLUGIN_MAJOR = 1;
+const int AEC3_PLUGIN_MINOR = 24;
+
+// Believe a feedback tone only when it is loud, narrow, alone, and still
 const int TONE_FFT_SIZE = 2048;
 const int TONE_HOP = 1024;
 const double TONE_MIN_HZ = 200.0;
@@ -43,6 +60,10 @@ const double TONE_MIN_PEAK_DB = -45.0;
 const double TONE_HARMONIC_DB = 15.0;
 const int TONE_STABLE_FRAMES = 15;
 const int TONE_BIN_TOLERANCE = 1;
+const double TONE_FLOOR_DB = -120.0;
+const float TONE_FULL_SCALE = 32768.0f;
+
+// Carve ringing tones out of the mic, each notch parked above hearing until it is needed
 const int NOTCH_COUNT = 12;
 const int NOTCH_POLES = 8;
 const double NOTCH_RIPPLE_DB = 0.05;
@@ -69,16 +90,23 @@ const int RING_CHUNK_MS = 50;
 const int RING_DRAIN_MS = 120;
 const double RING_FULL_SCALE = 32767.0;
 
-string videoAudioDevice = "plughw:0,0";
-string videoMicDevice = "plughw:0,0";
-string videoSpeakerDevice = "plughw:0,0";
-bool videoMuteMic = false;
-int callAudioPayloadType = 97;
+// Raw websocket PCM from a browser, the header is audi as int16 char codes
+const int REMOTE_PCM_HEADER_BYTES = 8;
+const int REMOTE_PCM_RATE = 48000;
+const double REMOTE_PCM_VOLUME = 0.20;
+const unsigned char REMOTE_PCM_HEADER[] = { 'a', 0, 'u', 0, 'd', 0, 'i', 0 };
 
+// Devices and mic state the call pipeline is built from
+string videoMicDevice = DEFAULT_AUDIO_DEVICE;
+string videoSpeakerDevice = DEFAULT_AUDIO_DEVICE;
+bool videoMuteMic = false;
+int callAudioPayloadType = DEFAULT_AUDIO_PAYLOAD_TYPE;
+
+// Pipelines, ring samples, tone detector, and notches, all held while a call runs
 #ifdef HAVE_GSTREAMER_WEBRTC
 bool audioDisconnectLogged = false;
 GstElement* remotePcmPipeline = NULL;
-GstElement* remotePcmSrc = NULL;
+GstElement* remotePcmSource = NULL;
 GstElement* ringPipeline = NULL;
 GstElement* ringSource = NULL;
 vector<gint16> ringCycle;
@@ -93,13 +121,34 @@ int toneStableBin = 0;
 GstElement* notchElements[NOTCH_COUNT];
 double notchHertz[NOTCH_COUNT];
 double notchHalfWidth[NOTCH_COUNT];
+int notchSetCount = 0;
 steady_clock::time_point notchSetAt[NOTCH_COUNT];
 steady_clock::time_point notchSeenAt[NOTCH_COUNT];
 guint notchTimerId = 0;
 mutex notchLock;
+#endif
 
+// Declare helpers that sit further down, in the order the functions above call them
+vector<int> listUSBCards();
+vector<int> listUSBCaptureCards();
+bool cardHasCapture(int card);
+bool cardHasPlayback(int card);
+string cardStreamInfo(int card);
+vector<string> listPulseShortNames(const char* command);
+bool isUSBPulseAudioName(const string& name);
+bool isPulseAudioDevice(const string& device);
+
+// Declare the ring, call audio, and tone helpers
+#ifdef HAVE_GSTREAMER_WEBRTC
+void buildRingCycle();
+void appendRingTone();
+void appendRingSilence(int milliseconds);
+void runRingCadence();
+void pushRingSamples(size_t position, int milliseconds, bool fadeOut);
+void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gchar* message, gpointer userData);
 void attachEchoCanceller(GstElement* pipeline);
 void attachMicToneProbe(GstElement* element);
+GstPadProbeReturn onMicToneProbe(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 void appendToneSamples(GstPad* pad, GstBuffer* buffer);
 bool detectTonePeak(double& hertz);
 double spectrumBinDb(GstFFTF32Complex* spectrum, int bin);
@@ -108,247 +157,124 @@ void engageNotch(int index, double hertz, double halfWidth);
 void parkNotch(int index);
 int leastRecentNotch();
 gboolean pollNotches(gpointer userData);
-GstPadProbeReturn onMicToneProbe(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 bool isGStreamerAudioElement(string name);
+bool isEchoCancelAEC3();
 string echoCancelVersion();
-bool isPulseAudioDevice(const string& device);
-void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gchar* message, gpointer userData);
-void buildRingCycle();
-void appendRingTone();
-void appendRingSilence(int milliseconds);
-void runRingCadence();
-void pushRingSamples(size_t position, int milliseconds, bool fadeOut);
 #endif
 
-string cardStreamInfo(int card);
-bool cardHasCapture(int card);
-bool cardHasPlayback(int card);
-vector<int> listUsbCards();
-vector<int> listUsbCaptureCards();
-vector<string> listPulseShortNames(const char* command);
-bool isUsbPulseAudioName(const string& name);
-
-// Read /proc/asound/cardN/stream0 text
-string cardStreamInfo(int card) {
-    ifstream streamFile("/proc/asound/card" + to_string(card) + "/stream0");
-    if (!streamFile) return "";
-    return string((istreambuf_iterator<char>(streamFile)), istreambuf_iterator<char>());
-}
-
-// True when an ALSA card has a USB capture stream
-bool cardHasCapture(int card) {
-    return cardStreamInfo(card).find("Capture:") != string::npos;
-}
-
-// True when an ALSA card has a USB playback stream
-bool cardHasPlayback(int card) {
-    return cardStreamInfo(card).find("Playback:") != string::npos;
-}
-
-// Collect USB card indexes from /proc/asound/cards
-vector<int> listUsbCards() {
-    vector<int> usbCards;
-#ifdef __linux__
-    ifstream cardsFile("/proc/asound/cards");
-    if (!cardsFile) return usbCards;
-    string line;
-    while (getline(cardsFile, line)) {
-        if (line.find("USB-Audio") == string::npos) continue;
-        size_t start = line.find_first_not_of(" \t");
-        if (start == string::npos) continue;
-        usbCards.push_back(atoi(line.c_str() + start));
-    }
-#endif
-    return usbCards;
-}
-
-// Collect USB capture cards from arecord -l, same as speak/talk.py
-vector<int> listUsbCaptureCards() {
-    vector<int> usbCards;
-#ifdef __linux__
-    FILE* pipe = popen("arecord -l 2>/dev/null", "r");
-    if (!pipe) return usbCards;
-    char buffer[512];
-    while (fgets(buffer, sizeof(buffer), pipe)) {
-        string line = buffer;
-        if (line.find("card") != 0 || line.find("USB") == string::npos) continue;
-        size_t numberStart = line.find_first_of("0123456789");
-        if (numberStart == string::npos) continue;
-        usbCards.push_back(atoi(line.c_str() + numberStart));
-    }
-    pclose(pipe);
-#endif
-    return usbCards;
+// Find a USB ALSA plughw device
+string findUSBALSADevice() {
+    // Prefer a USB mic, then any USB speaker
+    string mic = findUSBMicDevice();
+    if (!mic.empty()) return mic;
+    return findUSBSpeakerDevice();
 }
 
 // Prefer the USB audio dongle, skip camera-only capture cards
-string findUsbMicDevice() {
-    vector<int> usbCards = listUsbCaptureCards();
+string findUSBMicDevice() {
+    // Prefer a capture card that can also play
+    vector<int> usbCards = listUSBCaptureCards();
     for (int card : usbCards) {
         if (cardHasPlayback(card)) return "plughw:" + to_string(card) + ",0";
     }
+
+    // Fall back to the first USB capture card
     if (!usbCards.empty()) return "plughw:" + to_string(usbCards[0]) + ",0";
     return "";
 }
 
 // Prefer a playback-only USB speaker, same as talk.py find_usb_card
-string findUsbSpeakerDevice() {
-    vector<int> usbCards = listUsbCards();
+string findUSBSpeakerDevice() {
+    // Prefer a playback-only USB speaker
+    vector<int> usbCards = listUSBCards();
     for (int card : usbCards) {
         if (!cardHasCapture(card)) return "plughw:" + to_string(card) + ",0";
     }
+
+    // Fall back to the first USB card
     if (!usbCards.empty()) return "plughw:" + to_string(usbCards[0]) + ",0";
     return "";
 }
 
-// Find USB ALSA plughw device, prefer a card with a mic
-string findUsbAlsaDevice() {
-    string mic = findUsbMicDevice();
-    if (!mic.empty()) return mic;
-    return findUsbSpeakerDevice();
-}
-
-// Collect Pulse source or sink names from pactl
-vector<string> listPulseShortNames(const char* command) {
-    vector<string> names;
-#ifdef __linux__
-    FILE* pipe = popen(command, "r");
-    if (!pipe) return names;
-    char buffer[512];
-    while (fgets(buffer, sizeof(buffer), pipe)) {
-        string line = buffer;
-        size_t tab = line.find('\t');
-        if (tab == string::npos) continue;
-        size_t start = tab + 1;
-        size_t end = line.find('\t', start);
-        if (end == string::npos) end = line.find('\n', start);
-        string name = line.substr(start, end - start);
-        if (!name.empty()) names.push_back(name);
-    }
-    pclose(pipe);
-#endif
-    return names;
-}
-
-// True when this name is a Pulse USB device, not HDMI, monitor, or Arducam
-bool isUsbPulseAudioName(const string& name) {
-    if (name.find(".monitor") != string::npos) return false;
-    if (name.find("Arducam") != string::npos) return false;
-    if (name.find("hdmi") != string::npos || name.find("HDMI") != string::npos) return false;
-    return name.find("usb-") != string::npos || name.find("USB") != string::npos;
-}
-
 // Prefer the USB dongle Pulse capture, skip the camera mic
-string findUsbPulseSource() {
+string findUSBPulseSource() {
+    // Keep the first Pulse capture name that is a USB dongle
     for (const string& name : listPulseShortNames("pactl list short sources 2>/dev/null")) {
         if (name.find("alsa_input") != 0) continue;
-        if (isUsbPulseAudioName(name)) return name;
+        if (isUSBPulseAudioName(name)) return name;
     }
     return "";
 }
 
 // Prefer the USB dongle Pulse speaker
-string findUsbPulseSink() {
+string findUSBPulseSink() {
+    // Keep the first Pulse sink name that is a USB dongle
     for (const string& name : listPulseShortNames("pactl list short sinks 2>/dev/null")) {
         if (name.find("alsa_output") != 0) continue;
-        if (isUsbPulseAudioName(name)) return name;
+        if (isUSBPulseAudioName(name)) return name;
     }
     return "";
 }
 
 // Set mic and speaker to the same ALSA device
 void setVideoAudioDevice(string device) {
+    // Skip an empty name
     if (device.empty()) return;
     setVideoAudioDevices(device, device);
 }
 
 // Set ALSA devices for call mic and speaker
 void setVideoAudioDevices(string micDevice, string speakerDevice) {
-    if (!micDevice.empty()) {
-        videoMicDevice = micDevice;
-        videoAudioDevice = micDevice;
-    }
+    // Keep whatever was already set when an arg is empty
+    if (!micDevice.empty()) videoMicDevice = micDevice;
     if (!speakerDevice.empty()) videoSpeakerDevice = speakerDevice;
+
+    // Say what the next call will open
     cout << "Call mic:     " << videoMicDevice << endl;
     cout << "Call speaker: " << videoSpeakerDevice << endl;
 }
 
 // Mute call mic by sending silence instead of opening ALSA capture
 void setVideoMuteMic(bool muteMic) {
+    // Hold this until the next call pipeline is built
     videoMuteMic = muteMic;
 }
 
 // Send Opus at the payload type the remote peer offered
 void setCallAudioPayloadType(int payloadType) {
+    // Hold this until the next call pipeline is built
     callAudioPayloadType = payloadType;
 }
 
 // Read the Opus payload type the mic branch is using
 int getCallAudioPayloadType() {
+    // Read the payload type the next mic branch will send
     return callAudioPayloadType;
 }
 
-// Size, rate, and volume for remote websocket PCM, header is audi as int16 char codes
-const int REMOTE_PCM_HEADER_BYTES = 8;
-const int REMOTE_PCM_RATE = 48000;
-const double REMOTE_PCM_VOLUME = 0.20;
-const unsigned char REMOTE_PCM_HEADER[] = { 'a', 0, 'u', 0, 'd', 0, 'i', 0 };
-
-// Open a speaker pipeline for raw PCM from any peer
-void startRemotePcmPlayback() {
+// Say which echo canceller and feedback notches a call will get, before any call starts
+void logCallAudioStatus() {
 #ifdef HAVE_GSTREAMER_WEBRTC
-    if (remotePcmPipeline) return;
     gst_init(NULL, NULL);
 
-    // Play S16LE mono PCM on the USB speaker at 20 percent
-    string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
-    string pipelineString = "appsrc name=pcmspeak is-live=true format=time do-timestamp=true block=false max-bytes=32768 ! "
-        "queue leaky=downstream max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 ! "
-        "audioconvert ! audioresample ! audio/x-raw,rate=" + to_string(REMOTE_PCM_RATE) + ",channels=1 ! "
-        "volume volume=" + to_string(REMOTE_PCM_VOLUME) + " ! "
-        + sinkElement + " name=pcmsink device=" + videoSpeakerDevice + " sync=false buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
-    GError* error = NULL;
-    remotePcmPipeline = gst_parse_launch(pipelineString.c_str(), &error);
-    if (error) {
-        cout << "Failed to start remote PCM playback: " << error->message << endl;
-        g_error_free(error);
-        if (remotePcmPipeline) gst_object_unref(remotePcmPipeline);
-        remotePcmPipeline = NULL;
-        return;
-    }
+    // Name the canceller generation, AEC3 or the older AEC2
+    bool haveEchoCancel = !videoMuteMic && isGStreamerAudioElement("webrtcdsp");
+    if (videoMuteMic) cout << "Call echo cancel: off, mic muted." << endl;
+    else if (!haveEchoCancel) cout << "Call echo cancel: off, no webrtcdsp plugin." << endl;
+    else if (isEchoCancelAEC3()) cout << "Call echo cancel: on, AEC3, webrtcdsp " << echoCancelVersion() << "." << endl;
+    else cout << "Call echo cancel: on, legacy AEC2, webrtcdsp " << echoCancelVersion() << ", AEC3 needs " << AEC3_PLUGIN_MAJOR << "." << AEC3_PLUGIN_MINOR << "." << endl;
 
-    // Match the peer's raw PCM
-    remotePcmSrc = gst_bin_get_by_name(GST_BIN(remotePcmPipeline), "pcmspeak");
-    GstCaps* caps = gst_caps_new_simple("audio/x-raw", "format", G_TYPE_STRING, "S16LE", "layout", G_TYPE_STRING, "interleaved", "rate", G_TYPE_INT, REMOTE_PCM_RATE, "channels", G_TYPE_INT, 1, NULL);
-    g_object_set(remotePcmSrc, "caps", caps, NULL);
-    gst_caps_unref(caps);
-
-    // Start the speaker
-    GstStateChangeReturn result = gst_element_set_state(remotePcmPipeline, GST_STATE_PLAYING);
-    if (result == GST_STATE_CHANGE_FAILURE) {
-        cout << "Failed to play remote PCM on " << videoSpeakerDevice << endl;
-        stopRemotePcmPlayback();
-        return;
-    }
-    cout << "Remote PCM playback on " << videoSpeakerDevice << endl;
-#endif
-}
-
-// Stop PCM playback from a remote peer
-void stopRemotePcmPlayback() {
-#ifdef HAVE_GSTREAMER_WEBRTC
-    if (!remotePcmPipeline) return;
-    gst_element_set_state(remotePcmPipeline, GST_STATE_NULL);
-    if (remotePcmSrc) gst_object_unref(remotePcmSrc);
-    gst_object_unref(remotePcmPipeline);
-    remotePcmSrc = NULL;
-    remotePcmPipeline = NULL;
+    // Notches ride behind the canceller, so they only exist when it does
+    if (!haveEchoCancel) cout << "Call feedback notches: off, they need the canceller." << endl;
+    else if (isGStreamerAudioElement("audiochebband")) cout << "Call feedback notches: " << NOTCH_COUNT << " ready, parked above hearing until a tone rings." << endl;
+    else cout << "Call feedback notches: off, no audiochebband plugin." << endl;
 #endif
 }
 
 // Ring the speaker until the call is answered or dropped
 void startRingtone() {
 #ifdef HAVE_GSTREAMER_WEBRTC
+    // Skip when a ring is already playing
     if (ringPipeline) return;
     gst_init(NULL, NULL);
 
@@ -409,6 +335,7 @@ void stopRingtone() {
 #ifdef HAVE_GSTREAMER_WEBRTC
 // Render one ring, ring, pause cycle once, the thread then loops over it
 void buildRingCycle() {
+    // Two rings and the silences between them
     ringCycle.clear();
     appendRingTone();
     appendRingSilence(RING_GAP_MS);
@@ -418,8 +345,11 @@ void buildRingCycle() {
 
 // Add a tone that rises and falls on a raised cosine, so it starts and ends at silence
 void appendRingTone() {
+    // Size the tone and the raised-cosine edges
     int toneSamples = VIDEO_AUDIO_RATE * RING_TONE_MS / 1000;
     int fadeSamples = VIDEO_AUDIO_RATE * RING_FADE_MS / 1000;
+
+    // Write each sample with its envelope
     for (int index = 0; index < toneSamples; index++) {
         // Fade in over the first edge, out over the last, hold the middle
         double envelope = 1.0;
@@ -434,14 +364,18 @@ void appendRingTone() {
 
 // Add the quiet between rings
 void appendRingSilence(int milliseconds) {
+    // Push zeros for this many milliseconds
     int silentSamples = VIDEO_AUDIO_RATE * milliseconds / 1000;
     for (int index = 0; index < silentSamples; index++) ringCycle.push_back(0);
 }
 
-// Push the cycle over and over, the speaker paces the loop by blocking each push
+// Ring until the call is answered or dropped
 void runRingCadence() {
+    // Start at the beginning of the cycle
     size_t position = 0;
     int chunkSamples = VIDEO_AUDIO_RATE * RING_CHUNK_MS / 1000;
+
+    // Walk the cycle in chunks, the speaker paces the loop by blocking each push
     while (ringPlaying) {
         pushRingSamples(position, RING_CHUNK_MS, false);
         position = (position + chunkSamples) % ringCycle.size();
@@ -454,7 +388,10 @@ void runRingCadence() {
 
 // Copy samples out of the cycle, optionally fading them away to nothing
 void pushRingSamples(size_t position, int milliseconds, bool fadeOut) {
+    // Skip when the speaker is gone
     if (!ringSource || ringCycle.empty()) return;
+
+    // Take a buffer for this chunk
     int sampleCount = VIDEO_AUDIO_RATE * milliseconds / 1000;
     GstBuffer* buffer = gst_buffer_new_allocate(NULL, sampleCount * sizeof(gint16), NULL);
     GstMapInfo map;
@@ -476,70 +413,106 @@ void pushRingSamples(size_t position, int milliseconds, bool fadeOut) {
 }
 #endif
 
+// Open a speaker pipeline for raw PCM from any peer
+void startRemotePCMPlayback() {
+#ifdef HAVE_GSTREAMER_WEBRTC
+    // Skip when the speaker is already open
+    if (remotePcmPipeline) return;
+    gst_init(NULL, NULL);
+
+    // Play S16LE mono PCM on the USB speaker at 20 percent
+    string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
+    string pipelineString = "appsrc name=pcmspeak is-live=true format=time do-timestamp=true block=false max-bytes=32768 ! "
+        "queue leaky=downstream max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 ! "
+        "audioconvert ! audioresample ! audio/x-raw,rate=" + to_string(REMOTE_PCM_RATE) + ",channels=1 ! "
+        "volume volume=" + to_string(REMOTE_PCM_VOLUME) + " ! "
+        + sinkElement + " name=pcmsink device=" + videoSpeakerDevice + " sync=false buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
+    GError* error = NULL;
+    remotePcmPipeline = gst_parse_launch(pipelineString.c_str(), &error);
+    if (error) {
+        cout << "Failed to start remote PCM playback: " << error->message << endl;
+        g_error_free(error);
+        if (remotePcmPipeline) gst_object_unref(remotePcmPipeline);
+        remotePcmPipeline = NULL;
+        return;
+    }
+
+    // Match the peer's raw PCM
+    remotePcmSource = gst_bin_get_by_name(GST_BIN(remotePcmPipeline), "pcmspeak");
+    GstCaps* caps = gst_caps_new_simple("audio/x-raw", "format", G_TYPE_STRING, "S16LE", "layout", G_TYPE_STRING, "interleaved", "rate", G_TYPE_INT, REMOTE_PCM_RATE, "channels", G_TYPE_INT, 1, NULL);
+    g_object_set(remotePcmSource, "caps", caps, NULL);
+    gst_caps_unref(caps);
+
+    // Start the speaker
+    GstStateChangeReturn result = gst_element_set_state(remotePcmPipeline, GST_STATE_PLAYING);
+    if (result == GST_STATE_CHANGE_FAILURE) {
+        cout << "Failed to play remote PCM on " << videoSpeakerDevice << endl;
+        stopRemotePCMPlayback();
+        return;
+    }
+    cout << "Remote PCM playback on " << videoSpeakerDevice << endl;
+#endif
+}
+
 // Play one websocket PCM packet, header is 4 little-endian int16 char codes for audi
-bool playRemotePcmPacket(const char* data, size_t size) {
+bool playRemotePCMPacket(const char* data, size_t size) {
+    // Reject packets that are not raw PCM with the audi header
     if (!data || size < REMOTE_PCM_HEADER_BYTES + 2) return false;
     if (memcmp(data, REMOTE_PCM_HEADER, REMOTE_PCM_HEADER_BYTES) != 0) return false;
+
 #ifdef HAVE_GSTREAMER_WEBRTC
-    if (!remotePcmPipeline) startRemotePcmPlayback();
-    if (!remotePcmSrc) return true;
+    // Open the speaker on the first packet
+    if (!remotePcmPipeline) startRemotePCMPlayback();
+    if (!remotePcmSource) return true;
 
     // Push the PCM after the audi header into the speaker pipeline
     size_t pcmBytes = size - REMOTE_PCM_HEADER_BYTES;
     GstBuffer* buffer = gst_buffer_new_allocate(NULL, pcmBytes, NULL);
     gst_buffer_fill(buffer, 0, data + REMOTE_PCM_HEADER_BYTES, pcmBytes);
-    GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(remotePcmSrc), buffer);
+    GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(remotePcmSource), buffer);
     if (flow != GST_FLOW_OK && flow != GST_FLOW_FLUSHING) {
         cout << "Remote PCM playback stalled, flow " << (int)flow << "." << endl;
     }
 #else
+    // Unused when this build has no speaker pipeline
     (void)size;
 #endif
     return true;
 }
 
+// Stop PCM playback from a remote peer
+void stopRemotePCMPlayback() {
 #ifdef HAVE_GSTREAMER_WEBRTC
-// True when call audio should go through Pulse
-bool isPulseAudioDevice(const string& device) {
-    return device.find("alsa_input") == 0 || device.find("alsa_output") == 0;
+    // Close the speaker pipeline
+    if (!remotePcmPipeline) return;
+    gst_element_set_state(remotePcmPipeline, GST_STATE_NULL);
+    if (remotePcmSource) gst_object_unref(remotePcmSource);
+    gst_object_unref(remotePcmPipeline);
+    remotePcmSource = NULL;
+    remotePcmPipeline = NULL;
+#endif
 }
 
-// Check GStreamer element
-bool isGStreamerAudioElement(string name) {
-    GstElementFactory* factory = gst_element_factory_find(name.c_str());
-    if (!factory) return false;
-    gst_object_unref(factory);
-    return true;
-}
-
-// Report the webrtcdsp plugin version, 1.24 and up means the AEC3 canceller
-string echoCancelVersion() {
-    GstElementFactory* factory = gst_element_factory_find("webrtcdsp");
-    if (!factory) return "none";
-    GstPlugin* plugin = gst_plugin_feature_get_plugin(GST_PLUGIN_FEATURE(factory));
-    gst_object_unref(factory);
-    if (!plugin) return "unknown";
-    const gchar* version = gst_plugin_get_version(plugin);
-    string found = version ? version : "unknown";
-    gst_object_unref(plugin);
-    return found;
-}
-
-// Drop the known GStreamer-Audio channel-position critical during call setup
-void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gchar* message, gpointer userData) {
-    (void)logDomain;
-    (void)userData;
-    if (message && strstr(message, "gst_audio_ring_buffer_set_channel_positions")) return;
-    g_log_default_handler("GStreamer-Audio", logLevel, message, NULL);
-}
-
+#ifdef HAVE_GSTREAMER_WEBRTC
 // Quiet expected audio setup noise
 void quietCallAudioLog() {
     g_log_set_handler("GStreamer-Audio", (GLogLevelFlags)(G_LOG_LEVEL_CRITICAL | G_LOG_FLAG_FATAL), quietGstAudioLog, NULL);
 }
 
-// Create local microphone branch
+// Drop the known GStreamer-Audio channel-position critical during call setup
+void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gchar* message, gpointer userData) {
+    // Ignore unused log callback args
+    (void)logDomain;
+    (void)userData;
+
+    // Swallow the known channel-position critical, pass everything else through
+    if (message && strstr(message, "gst_audio_ring_buffer_set_channel_positions")) return;
+    g_log_default_handler("GStreamer-Audio", logLevel, message, NULL);
+}
+
+// Build the local mic branch
 string createAudioSourceString() {
+    // Open silence, Pulse, or ALSA for the mic
     string source;
     if (videoMuteMic) {
         cout << "Call mic muted, sending silence." << endl;
@@ -557,51 +530,39 @@ string createAudioSourceString() {
 
     // Cancel speaker echo, and hold mic gain fixed so a quiet room cannot raise loop gain
     if (!videoMuteMic && isGStreamerAudioElement("webrtcdsp")) {
-        cout << "Using WebRTC echo cancel on call mic, plugin " << echoCancelVersion() << "." << endl;
+        cout << "Call mic echo cancel: " << (isEchoCancelAEC3() ? "AEC3" : "legacy AEC2") << ", webrtcdsp " << echoCancelVersion() << "." << endl;
         process += "webrtcdsp name=robotdsp probe=robotechoprobe echo-cancel=true noise-suppression=true noise-suppression-level=high high-pass-filter=true gain-control=true gain-control-mode=fixed-digital compression-gain-db=" + to_string(CALL_MIC_GAIN_DB) + " target-level-dbfs=" + to_string(CALL_MIC_LIMIT_DBFS) + " limiter=true ! ";
 
         // Carve out every tone that starts to ring, these filters want float and only eight poles stay stable
         if (isGStreamerAudioElement("audiochebband")) {
-            cout << "Using " << NOTCH_COUNT << " tunable notches on call mic." << endl;
+            cout << "Call mic feedback notches: " << NOTCH_COUNT << " in the chain, parked until a tone rings." << endl;
             process += "audioconvert ! audio/x-raw,format=F32LE,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! ";
             for (int index = 0; index < NOTCH_COUNT; index++) {
                 process += "audiochebband name=robotnotch" + to_string(index) + " mode=band-reject poles=" + to_string(NOTCH_POLES) + " ripple=" + to_string(NOTCH_RIPPLE_DB) + " lower-frequency=" + to_string(NOTCH_PARK_LOW_HZ) + " upper-frequency=" + to_string(NOTCH_PARK_HIGH_HZ) + " ! ";
             }
             process += "audioconvert ! audio/x-raw,format=S16LE,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! ";
+        } else {
+            cout << "Call mic feedback notches: none, no audiochebband plugin." << endl;
         }
+    } else if (!videoMuteMic) {
+        cout << "Call mic echo cancel: none, no webrtcdsp plugin." << endl;
     }
+
+    // Encode to Opus at the payload type the peer offered
     string payloadType = to_string(callAudioPayloadType);
     return source + process +
         "opusenc name=robotopus audio-type=voice frame-size=20 bitrate=32000 ! rtpopuspay name=robotopuspay pt=" + payloadType + " ! "
         "application/x-rtp,media=audio,encoding-name=OPUS,payload=" + payloadType + " ! sendrecv.";
 }
 
-// Add named echo probe so webrtcdsp can cancel speaker audio from the mic
-void attachEchoCanceller(GstElement* pipeline) {
-    if (!pipeline) return;
-    GstElement* dsp = gst_bin_get_by_name(GST_BIN(pipeline), "robotdsp");
-    if (!dsp) return;
-    gst_object_unref(dsp);
-    GstElement* existing = gst_bin_get_by_name(GST_BIN(pipeline), "robotechoprobe");
-    if (existing) {
-        gst_object_unref(existing);
-        return;
-    }
-    GstElement* probe = gst_element_factory_make("webrtcechoprobe", "robotechoprobe");
-    if (!probe) {
-        cout << "Echo probe missing, speaker ducking only." << endl;
-        return;
-    }
-    gst_bin_add(GST_BIN(pipeline), probe);
-    gst_element_sync_state_with_parent(probe);
-}
-
 // Wire AEC and the feedback notches onto the live pipeline
 void attachCallAudio(GstElement* pipeline, GMainLoop* loop) {
+    // Reset unplug logging and add the echo probe
     audioDisconnectLogged = false;
     attachEchoCanceller(pipeline);
 
     // Hold every notch parked above hearing until a tone needs it
+    notchSetCount = 0;
     for (int index = 0; index < NOTCH_COUNT; index++) {
         string name = "robotnotch" + to_string(index);
         notchElements[index] = gst_bin_get_by_name(GST_BIN(pipeline), name.c_str());
@@ -627,30 +588,34 @@ void attachCallAudio(GstElement* pipeline, GMainLoop* loop) {
     }
 }
 
-// Drop call-audio state when the pipeline stops
-void stopCallAudio() {
-    lock_guard<mutex> lock(notchLock);
-    if (notchTimerId) {
-        g_source_remove(notchTimerId);
-        notchTimerId = 0;
-    }
-    if (toneFft) gst_fft_f32_free(toneFft);
-    toneFft = NULL;
-    toneWindowFill = 0;
-    toneStableFrames = 0;
+// Add named echo probe so webrtcdsp can cancel speaker audio from the mic
+void attachEchoCanceller(GstElement* pipeline) {
+    // Need a webrtcdsp named robotdsp on this pipeline
+    if (!pipeline) return;
+    GstElement* dsp = gst_bin_get_by_name(GST_BIN(pipeline), "robotdsp");
+    if (!dsp) return;
+    gst_object_unref(dsp);
 
-    // Let the notches go with the pipeline that held them
-    for (int index = 0; index < NOTCH_COUNT; index++) {
-        if (notchElements[index]) gst_object_unref(notchElements[index]);
-        notchElements[index] = NULL;
-        notchHertz[index] = 0;
+    // Leave the probe alone when a call already added one
+    GstElement* existing = gst_bin_get_by_name(GST_BIN(pipeline), "robotechoprobe");
+    if (existing) {
+        gst_object_unref(existing);
+        return;
     }
-    micToneTapElement = NULL;
-    audioDisconnectLogged = false;
+
+    // Add the probe the canceller looks up by name
+    GstElement* probe = gst_element_factory_make("webrtcechoprobe", "robotechoprobe");
+    if (!probe) {
+        cout << "Echo probe missing, speaker ducking only." << endl;
+        return;
+    }
+    gst_bin_add(GST_BIN(pipeline), probe);
+    gst_element_sync_state_with_parent(probe);
 }
 
 // Play remote audio on the USB speaker
 void linkRemoteAudioPad(GstElement* pipeline, GstPad* pad) {
+    // Build the speaker branch
     GstElement* queue = gst_element_factory_make("queue", NULL);
     GstElement* convert = gst_element_factory_make("audioconvert", NULL);
     GstElement* resample = gst_element_factory_make("audioresample", NULL);
@@ -676,6 +641,8 @@ void linkRemoteAudioPad(GstElement* pipeline, GstPad* pad) {
     gst_caps_unref(referenceCaps);
     g_object_set(volume, "volume", VIDEO_SPEAKER_VOLUME, NULL);
     g_object_set(sink, "device", videoSpeakerDevice.c_str(), "sync", TRUE, "buffer-time", (gint64)VIDEO_AUDIO_BUFFER_TIME, "latency-time", (gint64)VIDEO_AUDIO_LATENCY_TIME, NULL);
+
+    // Add the speaker branch and bring it up with the running pipeline
     GstElement* probe = gst_bin_get_by_name(GST_BIN(pipeline), "robotechoprobe");
     gst_bin_add_many(GST_BIN(pipeline), queue, convert, resample, reference, volume, sink, NULL);
     gst_element_sync_state_with_parent(queue);
@@ -685,6 +652,8 @@ void linkRemoteAudioPad(GstElement* pipeline, GstPad* pad) {
     gst_element_sync_state_with_parent(volume);
     gst_element_sync_state_with_parent(sink);
     gst_element_link_many(queue, convert, resample, reference, volume, NULL);
+
+    // Send what we play through the probe, so the canceller knows the echo
     if (probe) {
         gst_element_link_many(volume, probe, sink, NULL);
         gst_object_unref(probe);
@@ -692,14 +661,48 @@ void linkRemoteAudioPad(GstElement* pipeline, GstPad* pad) {
     } else {
         gst_element_link(volume, sink);
     }
+
+    // Take the remote audio off the pad
     GstPad* sinkPad = gst_element_get_static_pad(queue, "sink");
     gst_pad_link(pad, sinkPad);
     gst_object_unref(sinkPad);
     cout << "Linked remote audio stream to " << videoSpeakerDevice << endl;
 }
 
+// Drop call-audio state when the pipeline stops
+void stopCallAudio() {
+    // Keep notch changes off the probe thread
+    lock_guard<mutex> lock(notchLock);
+
+    // Let the tone detector and its timer go
+    if (notchTimerId) {
+        g_source_remove(notchTimerId);
+        notchTimerId = 0;
+    }
+    if (toneFft) gst_fft_f32_free(toneFft);
+    toneFft = NULL;
+    toneWindowFill = 0;
+    toneStableFrames = 0;
+
+    // Say whether feedback ever needed notching on this call
+    if (micToneTapElement) {
+        if (notchSetCount == 0) cout << "Call feedback notches: never needed on this call." << endl;
+        else cout << "Call feedback notches: set " << notchSetCount << " times on this call." << endl;
+    }
+
+    // Let the notches go with the pipeline that held them
+    for (int index = 0; index < NOTCH_COUNT; index++) {
+        if (notchElements[index]) gst_object_unref(notchElements[index]);
+        notchElements[index] = NULL;
+        notchHertz[index] = 0;
+    }
+    micToneTapElement = NULL;
+    audioDisconnectLogged = false;
+}
+
 // True when a GStreamer message is about a yanked USB sound card
 bool isCallAudioDisconnectMessage(const string& errorMessage, const string& debugMessage) {
+    // Treat ALSA element names and the follow-on stream error as an unplug
     bool audioElement = debugMessage.find("alsasink") != string::npos ||
         debugMessage.find("alsasrc") != string::npos ||
         debugMessage.find("AlsaSink") != string::npos ||
@@ -715,14 +718,27 @@ bool isCallAudioDisconnectMessage(const string& errorMessage, const string& debu
 
 // Log a USB audio unplug once
 bool shouldLogCallAudioDisconnect() {
+    // Log the first unplug only
     if (audioDisconnectLogged) return false;
     audioDisconnectLogged = true;
     return true;
 }
 
+// Attach the tone probe to an element's src pad
+void attachMicToneProbe(GstElement* element) {
+    // Probe outgoing buffers on src
+    GstPad* pad = gst_element_get_static_pad(element, "src");
+    if (!pad) return;
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, onMicToneProbe, NULL, NULL);
+    gst_object_unref(pad);
+}
+
 // Feed outgoing mic buffers to the tone detector
 GstPadProbeReturn onMicToneProbe(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
+    // Ignore unused probe data
     (void)userData;
+
+    // Hand each outgoing mic buffer to the detector
     if (!(GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER)) return GST_PAD_PROBE_OK;
     GstBuffer* buffer = GST_PAD_PROBE_INFO_BUFFER(info);
     if (!buffer) return GST_PAD_PROBE_OK;
@@ -730,31 +746,12 @@ GstPadProbeReturn onMicToneProbe(GstPad* pad, GstPadProbeInfo* info, gpointer us
     return GST_PAD_PROBE_OK;
 }
 
-// Attach the tone probe to an element's src pad
-void attachMicToneProbe(GstElement* element) {
-    GstPad* pad = gst_element_get_static_pad(element, "src");
-    if (!pad) return;
-    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, onMicToneProbe, NULL, NULL);
-    gst_object_unref(pad);
-}
-
-// Give notches back once their tone has stayed away
-gboolean pollNotches(gpointer userData) {
-    (void)userData;
-    lock_guard<mutex> lock(notchLock);
-    auto now = steady_clock::now();
-    for (int index = 0; index < NOTCH_COUNT; index++) {
-        if (notchHertz[index] == 0) continue;
-        if (duration_cast<milliseconds>(now - notchSeenAt[index]).count() < NOTCH_HOLD_MS) continue;
-        cout << "Tone at " << (int)notchHertz[index] << "Hz gone, clearing its notch." << endl;
-        parkNotch(index);
-    }
-    return G_SOURCE_CONTINUE;
-}
-
 // Collect samples and look for a tone once per hop
 void appendToneSamples(GstPad* pad, GstBuffer* buffer) {
+    // Skip until the detector is up
     if (!toneFft) return;
+
+    // Read the buffer, the notch chain hands over floats and everything else shorts
     GstMapInfo map;
     if (!gst_buffer_map(buffer, &map, GST_MAP_READ)) return;
     GstCaps* caps = gst_pad_get_current_caps(pad);
@@ -768,8 +765,8 @@ void appendToneSamples(GstPad* pad, GstBuffer* buffer) {
     const gint16* shortSamples = (const gint16*)map.data;
 
     // Fill the window, then step it on by one hop for each look
-    for (int i = 0; i < count; i++) {
-        toneWindow[toneWindowFill] = isFloat ? floatSamples[i] : shortSamples[i] / 32768.0f;
+    for (int index = 0; index < count; index++) {
+        toneWindow[toneWindowFill] = isFloat ? floatSamples[index] : shortSamples[index] / TONE_FULL_SCALE;
         toneWindowFill++;
         if (toneWindowFill < TONE_FFT_SIZE) continue;
         double hertz = 0;
@@ -786,6 +783,7 @@ void appendToneSamples(GstPad* pad, GstBuffer* buffer) {
 
 // True when a narrow, loud, unmoving, non harmonic peak has held
 bool detectTonePeak(double& hertz) {
+    // Window the samples and take an FFT
     float windowed[TONE_FFT_SIZE];
     memcpy(windowed, toneWindow, sizeof(windowed));
     gst_fft_f32_window(toneFft, windowed, GST_FFT_WINDOW_HAMMING);
@@ -796,7 +794,7 @@ bool detectTonePeak(double& hertz) {
     int firstBin = (int)(TONE_MIN_HZ * TONE_FFT_SIZE / VIDEO_AUDIO_RATE);
     int lastBin = (int)(TONE_MAX_HZ * TONE_FFT_SIZE / VIDEO_AUDIO_RATE);
     double levels[TONE_FFT_SIZE / 2 + 1];
-    double peakDb = -120;
+    double peakDb = TONE_FLOOR_DB;
     int peakBin = firstBin;
     int count = 0;
     for (int bin = firstBin; bin <= lastBin; bin++) {
@@ -814,7 +812,7 @@ bool detectTonePeak(double& hertz) {
     double dominance = peakDb - levels[count / 2];
 
     // A hum or a sung note carries harmonics, a feedback tone stands alone
-    double harmonicDb = -120;
+    double harmonicDb = TONE_FLOOR_DB;
     if (peakBin * 2 <= TONE_FFT_SIZE / 2) harmonicDb = max(harmonicDb, spectrumBinDb(spectrum, peakBin * 2));
     if (peakBin / 2 >= 2) harmonicDb = max(harmonicDb, spectrumBinDb(spectrum, peakBin / 2));
 
@@ -833,17 +831,19 @@ bool detectTonePeak(double& hertz) {
     return true;
 }
 
-// Magnitude of one spectrum bin in dB
+// Convert one spectrum bin to dB
 double spectrumBinDb(GstFFTF32Complex* spectrum, int bin) {
+    // Convert bin power to dB, floor silence
     double real = spectrum[bin].r;
     double imaginary = spectrum[bin].i;
     double power = real * real + imaginary * imaginary;
-    if (power <= 0) return -120;
+    if (power <= 0) return TONE_FLOOR_DB;
     return 10.0 * log10(power / (TONE_FFT_SIZE * TONE_FFT_SIZE / 4.0));
 }
 
 // Put a notch on a ringing tone, widening or reusing one when they run short
 void notchMicTone(double hertz) {
+    // Stamp the time this tone was heard
     auto now = steady_clock::now();
 
     // A tone still ringing under its own notch needs that notch wider
@@ -868,7 +868,10 @@ void notchMicTone(double hertz) {
 
 // Point one notch at a tone and start its settling clock
 void engageNotch(int index, double hertz, double halfWidth) {
+    // Skip a notch the pipeline never created
     if (!notchElements[index]) return;
+
+    // Point the filter at this tone
     double lower = hertz - halfWidth;
     double upper = hertz + halfWidth;
     g_object_set(notchElements[index], "lower-frequency", (gfloat)lower, "upper-frequency", (gfloat)upper, NULL);
@@ -876,19 +879,13 @@ void engageNotch(int index, double hertz, double halfWidth) {
     notchHalfWidth[index] = halfWidth;
     notchSetAt[index] = steady_clock::now();
     notchSeenAt[index] = notchSetAt[index];
+    notchSetCount++;
     cout << "Notching " << (int)hertz << "Hz out of the mic, " << (int)(halfWidth * 2) << "Hz wide." << endl;
-}
-
-// Send a notch back above hearing so it colours nothing
-void parkNotch(int index) {
-    if (!notchElements[index]) return;
-    g_object_set(notchElements[index], "lower-frequency", (gfloat)NOTCH_PARK_LOW_HZ, "upper-frequency", (gfloat)NOTCH_PARK_HIGH_HZ, NULL);
-    notchHertz[index] = 0;
-    notchHalfWidth[index] = NOTCH_HALF_WIDTH_HZ;
 }
 
 // The notch whose tone was heard longest ago, the cheapest one to steal
 int leastRecentNotch() {
+    // Walk the notches and keep the oldest
     int oldest = 0;
     for (int index = 1; index < NOTCH_COUNT; index++) {
         if (notchSeenAt[index] < notchSeenAt[oldest]) oldest = index;
@@ -896,4 +893,168 @@ int leastRecentNotch() {
     return oldest;
 }
 
+// Give notches back once their tone has stayed away
+gboolean pollNotches(gpointer userData) {
+    // Ignore unused timer data
+    (void)userData;
+
+    // Park notches whose tone has been gone long enough
+    lock_guard<mutex> lock(notchLock);
+    auto now = steady_clock::now();
+    for (int index = 0; index < NOTCH_COUNT; index++) {
+        if (notchHertz[index] == 0) continue;
+        if (duration_cast<milliseconds>(now - notchSeenAt[index]).count() < NOTCH_HOLD_MS) continue;
+        cout << "Tone at " << (int)notchHertz[index] << "Hz gone, clearing its notch." << endl;
+        parkNotch(index);
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+// Send a notch back above hearing so it colours nothing
+void parkNotch(int index) {
+    // Skip a notch the pipeline never created
+    if (!notchElements[index]) return;
+
+    // Park it above hearing
+    g_object_set(notchElements[index], "lower-frequency", (gfloat)NOTCH_PARK_LOW_HZ, "upper-frequency", (gfloat)NOTCH_PARK_HIGH_HZ, NULL);
+    notchHertz[index] = 0;
+    notchHalfWidth[index] = NOTCH_HALF_WIDTH_HZ;
+}
+
+// Look up whether GStreamer has this element
+bool isGStreamerAudioElement(string name) {
+    // Look the factory up by name
+    GstElementFactory* factory = gst_element_factory_find(name.c_str());
+    if (!factory) return false;
+    gst_object_unref(factory);
+    return true;
+}
+
+// True when webrtcdsp is new enough to be the AEC3 canceller
+bool isEchoCancelAEC3() {
+    // Read the plugin version, anything older runs the legacy AEC2
+    int major = 0;
+    int minor = 0;
+    if (sscanf(echoCancelVersion().c_str(), "%d.%d", &major, &minor) != 2) return false;
+    return major > AEC3_PLUGIN_MAJOR || (major == AEC3_PLUGIN_MAJOR && minor >= AEC3_PLUGIN_MINOR);
+}
+
+// Report the webrtcdsp plugin version, 1.24 and up means the AEC3 canceller
+string echoCancelVersion() {
+    // Read the plugin that owns webrtcdsp
+    GstElementFactory* factory = gst_element_factory_find("webrtcdsp");
+    if (!factory) return "none";
+    GstPlugin* plugin = gst_plugin_feature_get_plugin(GST_PLUGIN_FEATURE(factory));
+    gst_object_unref(factory);
+    if (!plugin) return "unknown";
+    const gchar* version = gst_plugin_get_version(plugin);
+    string found = version ? version : "unknown";
+    gst_object_unref(plugin);
+    return found;
+}
 #endif
+
+// True when call audio should go through Pulse
+bool isPulseAudioDevice(const string& device) {
+    // Pulse device names start with alsa_input or alsa_output
+    return device.find("alsa_input") == 0 || device.find("alsa_output") == 0;
+}
+
+// Read USB card indexes from /proc/asound/cards
+vector<int> listUSBCards() {
+    // Collect USB card indexes
+    vector<int> usbCards;
+#ifdef __linux__
+    // Open the ALSA card list
+    ifstream cardsFile("/proc/asound/cards");
+    if (!cardsFile) return usbCards;
+
+    // Keep the card number from every USB line
+    string line;
+    while (getline(cardsFile, line)) {
+        if (line.find("USB-Audio") == string::npos) continue;
+        size_t start = line.find_first_not_of(" \t");
+        if (start == string::npos) continue;
+        usbCards.push_back(atoi(line.c_str() + start));
+    }
+#endif
+    return usbCards;
+}
+
+// Collect USB capture cards from arecord -l, same as speak/talk.py
+vector<int> listUSBCaptureCards() {
+    // Collect USB capture card indexes
+    vector<int> usbCards;
+#ifdef __linux__
+    // List capture cards the same way talk.py does
+    FILE* pipe = popen("arecord -l 2>/dev/null", "r");
+    if (!pipe) return usbCards;
+
+    // Keep the card number from every USB capture line
+    char buffer[512];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        string line = buffer;
+        if (line.find("card") != 0 || line.find("USB") == string::npos) continue;
+        size_t numberStart = line.find_first_of("0123456789");
+        if (numberStart == string::npos) continue;
+        usbCards.push_back(atoi(line.c_str() + numberStart));
+    }
+    pclose(pipe);
+#endif
+    return usbCards;
+}
+
+// True when an ALSA card has a USB capture stream
+bool cardHasCapture(int card) {
+    // Look for a Capture stream on this card
+    return cardStreamInfo(card).find("Capture:") != string::npos;
+}
+
+// True when an ALSA card has a USB playback stream
+bool cardHasPlayback(int card) {
+    // Look for a Playback stream on this card
+    return cardStreamInfo(card).find("Playback:") != string::npos;
+}
+
+// Read /proc/asound/cardN/stream0 text
+string cardStreamInfo(int card) {
+    // Read the USB stream description for this card
+    ifstream streamFile("/proc/asound/card" + to_string(card) + "/stream0");
+    if (!streamFile) return "";
+    return string((istreambuf_iterator<char>(streamFile)), istreambuf_iterator<char>());
+}
+
+// Collect Pulse source or sink names from pactl
+vector<string> listPulseShortNames(const char* command) {
+    // Collect Pulse source or sink names
+    vector<string> names;
+#ifdef __linux__
+    // Run pactl and read its short list
+    FILE* pipe = popen(command, "r");
+    if (!pipe) return names;
+
+    // Take the name out of the second column of every line
+    char buffer[512];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        string line = buffer;
+        size_t tab = line.find('\t');
+        if (tab == string::npos) continue;
+        size_t start = tab + 1;
+        size_t end = line.find('\t', start);
+        if (end == string::npos) end = line.find('\n', start);
+        string name = line.substr(start, end - start);
+        if (!name.empty()) names.push_back(name);
+    }
+    pclose(pipe);
+#endif
+    return names;
+}
+
+// True when this name is a Pulse USB device, not HDMI, monitor, or Arducam
+bool isUSBPulseAudioName(const string& name) {
+    // Reject monitors, the camera, and HDMI, then keep USB names
+    if (name.find(".monitor") != string::npos) return false;
+    if (name.find("Arducam") != string::npos) return false;
+    if (name.find("hdmi") != string::npos || name.find("HDMI") != string::npos) return false;
+    return name.find("usb-") != string::npos || name.find("USB") != string::npos;
+}

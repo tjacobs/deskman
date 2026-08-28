@@ -319,13 +319,13 @@ void stopVideo() {
 // Play remote PCM on the USB speaker, from the web client or another deskman
 void startRemoteMic() {
     cout << "StartMic: speaker ready for remote PCM." << endl;
-    startRemotePcmPlayback();
+    startRemotePCMPlayback();
 }
 
 // Stop playing remote PCM
 void stopRemoteMic() {
     cout << "StopMic: muted remote microphone." << endl;
-    stopRemotePcmPlayback();
+    stopRemotePCMPlayback();
 }
 
 // Handle video signaling

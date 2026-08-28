@@ -17,16 +17,17 @@ void setVideoAudioDevices(string micDevice, string speakerDevice);
 void setVideoMuteMic(bool muteMic);
 void setCallAudioPayloadType(int payloadType);
 int getCallAudioPayloadType();
-void startRemotePcmPlayback();
-void stopRemotePcmPlayback();
-bool playRemotePcmPacket(const char* data, size_t size);
+void logCallAudioStatus();
+void startRemotePCMPlayback();
+void stopRemotePCMPlayback();
+bool playRemotePCMPacket(const char* data, size_t size);
 void startRingtone();
 void stopRingtone();
-string findUsbAlsaDevice();
-string findUsbMicDevice();
-string findUsbSpeakerDevice();
-string findUsbPulseSource();
-string findUsbPulseSink();
+string findUSBALSADevice();
+string findUSBMicDevice();
+string findUSBSpeakerDevice();
+string findUSBPulseSource();
+string findUSBPulseSink();
 
 #ifdef HAVE_GSTREAMER_WEBRTC
 void quietCallAudioLog();

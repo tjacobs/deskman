@@ -129,16 +129,19 @@ int main(int argumentCount, char** argumentValues) {
     setVideoMuteMic(muteMic);
     if (muteMic) cout << "Call microphone muted." << endl;
     if (audioDevice == DEFAULT_AUDIO_DEVICE) {
-        string usbMic = findUsbPulseSource();
-        string usbSpeaker = findUsbPulseSink();
-        if (usbMic.empty()) usbMic = findUsbMicDevice();
-        if (usbSpeaker.empty()) usbSpeaker = findUsbSpeakerDevice();
+        string usbMic = findUSBPulseSource();
+        string usbSpeaker = findUSBPulseSink();
+        if (usbMic.empty()) usbMic = findUSBMicDevice();
+        if (usbSpeaker.empty()) usbSpeaker = findUSBSpeakerDevice();
         if (usbMic.empty()) usbMic = audioDevice;
         if (usbSpeaker.empty()) usbSpeaker = usbMic;
         setVideoAudioDevices(usbMic, usbSpeaker);
     } else {
         setVideoAudioDevices(audioDevice, audioDevice);
     }
+
+    // Say which echo canceller and notches a call will get
+    logCallAudioStatus();
 
     // Init
     initSignals();
@@ -383,7 +386,7 @@ void handleWebSocketMessage(const WebSocketMessagePtr& message) {
 
     // Play remote PCM on the USB speaker
     else if (message->type == WebSocketMessageType::Message) {
-        playRemotePcmPacket(message->str.data(), message->str.size());
+        playRemotePCMPacket(message->str.data(), message->str.size());
     }
 }
 
