@@ -64,7 +64,7 @@ const double TONE_FLOOR_DB = -120.0;
 const float TONE_FULL_SCALE = 32768.0f;
 
 // Carve ringing tones out of the mic, each notch parked above hearing until it is needed
-const int NOTCH_COUNT = 12;
+const int NOTCH_COUNT = 16;
 const int NOTCH_POLES = 8;
 const double NOTCH_RIPPLE_DB = 0.05;
 const double NOTCH_HALF_WIDTH_HZ = 30.0;
