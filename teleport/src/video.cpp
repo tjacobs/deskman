@@ -34,6 +34,11 @@
 using namespace std;
 using namespace ix;
 
+// Video needs GStreamer WebRTC, skip the rest of the file without it so this is the only error
+#ifndef HAVE_GSTREAMER_WEBRTC
+#error "GStreamer WebRTC not found. Run teleport/install.sh to install it."
+#else
+
 #ifdef HAVE_GSTREAMER_WEBRTC
 
 // GStreamer
@@ -1869,4 +1874,7 @@ bool videoFileExists(string path) {
     return stat(path.c_str(), &status) == 0;
 }
 
+#endif
+
+// Close the GStreamer WebRTC guard at the top of the file
 #endif

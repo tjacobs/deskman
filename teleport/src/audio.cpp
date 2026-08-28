@@ -21,6 +21,11 @@
 #include <thread>
 #include <vector>
 
+// Audio needs GStreamer WebRTC, skip the rest of the file without it so this is the only error
+#ifndef HAVE_GSTREAMER_WEBRTC
+#error "GStreamer WebRTC not found. Run teleport/install.sh to install it."
+#else
+
 // GStreamer, only when the build found the WebRTC plugins
 #ifdef HAVE_GSTREAMER_WEBRTC
 #include <gst/app/gstappsrc.h>
@@ -1058,3 +1063,6 @@ bool isUSBPulseAudioName(const string& name) {
     if (name.find("hdmi") != string::npos || name.find("HDMI") != string::npos) return false;
     return name.find("usb-") != string::npos || name.find("USB") != string::npos;
 }
+
+// Close the GStreamer WebRTC guard at the top of the file
+#endif
