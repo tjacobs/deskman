@@ -259,19 +259,13 @@ disable_screen_keyboard() {
     run_as_user gsettings set org.onboard start-minimized true || true
 
     # Hide the onboard autostart entry and close it if it is up
-    cat > "${RUN_HOME}/.config/autostart/onboard-autostart.desktop" <<'EOF'
-[Desktop Entry]
-Name=Onboard
-Hidden=true
-X-GNOME-Autostart-enabled=false
-EOF
-    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/onboard-autostart.desktop"
+    hide_autostart onboard-autostart.desktop
     pkill -u "${RUN_USER}" -x onboard || true
 }
 
 # Keep the display on and skip the lock screen
 disable_screen_idle() {
-    echo "Disabling screen blanking, screensaver, and lock"
+    echo "Disabling screen blanking and screensaver"
 
     # Never idle into screensaver or lock
     run_as_user gsettings set org.gnome.desktop.session idle-delay 0
@@ -317,49 +311,35 @@ skip_gnome_setup() {
     chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/gnome-initial-setup-done"
 
     # Hide first-login, updater, and folder-restore autostart entries
-    cat > "${RUN_HOME}/.config/autostart/gnome-initial-setup-first-login.desktop" <<'EOF'
-[Desktop Entry]
-Name=GNOME Initial Setup
-Exec=/usr/libexec/gnome-initial-setup --existing-user
-Hidden=true
-X-GNOME-Autostart-enabled=false
-EOF
-    cat > "${RUN_HOME}/.config/autostart/gnome-initial-setup-copy-worker.desktop" <<'EOF'
-[Desktop Entry]
-Name=GNOME Initial Setup Copy Worker
-Hidden=true
-X-GNOME-Autostart-enabled=false
-EOF
-    cat > "${RUN_HOME}/.config/autostart/update-notifier.desktop" <<'EOF'
-[Desktop Entry]
-Name=Update Notifier
-Hidden=true
-X-GNOME-Autostart-enabled=false
-EOF
-    cat > "${RUN_HOME}/.config/autostart/gnome-software-service.desktop" <<'EOF'
-[Desktop Entry]
-Name=GNOME Software
-Hidden=true
-X-GNOME-Autostart-enabled=false
-EOF
-    cat > "${RUN_HOME}/.config/autostart/update-manager.desktop" <<'EOF'
-[Desktop Entry]
-Name=Software Updater
-Hidden=true
-X-GNOME-Autostart-enabled=false
-EOF
-    cat > "${RUN_HOME}/.config/autostart/user-dirs-update-gtk.desktop" <<'EOF'
-[Desktop Entry]
-Name=User folders update
-Hidden=true
-X-GNOME-Autostart-enabled=false
-EOF
-    chown -R "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart"
+    hide_autostart gnome-initial-setup-first-login.desktop
+    hide_autostart gnome-initial-setup-copy-worker.desktop
+    hide_autostart update-notifier.desktop
+    hide_autostart gnome-software-service.desktop
+    hide_autostart update-manager.desktop
+    hide_autostart user-dirs-update-gtk.desktop
 
     # Stop updater windows already running
     pkill -u "${RUN_USER}" -f update-notifier || true
     pkill -u "${RUN_USER}" -f update-manager || true
     pkill -u "${RUN_USER}" -f gnome-software || true
+}
+
+# Stop the session starting one autostart entry, the session drops entries it cannot parse
+hide_autostart() {
+    entry_name="$1"
+    system_entry="/etc/xdg/autostart/${entry_name}"
+    user_entry="${RUN_HOME}/.config/autostart/${entry_name}"
+
+    # Copy the system entry so every key the session needs is there
+    if [[ -f "${system_entry}" ]]; then
+        grep -v -e '^Hidden=' -e '^X-GNOME-Autostart-enabled=' "${system_entry}" > "${user_entry}"
+    else
+        printf '%s\n' '[Desktop Entry]' 'Type=Application' "Name=${entry_name}" 'Exec=/bin/true' 'NoDisplay=true' > "${user_entry}"
+    fi
+
+    # Mark it hidden, which the session reads as deleted
+    printf '%s\n' 'Hidden=true' 'X-GNOME-Autostart-enabled=false' >> "${user_entry}"
+    chown "${RUN_USER}:${RUN_USER}" "${user_entry}"
 }
 
 # Run a command as the install user on their session bus
