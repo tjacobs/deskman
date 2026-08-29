@@ -310,13 +310,14 @@ static bool ensureOverlayWindow() {
 static void mapOverlay(int y, int height) {
 #ifdef __linux__
     if (overlayDisplay && overlayXWindow) {
+        // Match SDL to the strip first, it drags the window back to the position it last saw
+        if (callWindow) SDL_SetWindowSize(callWindow, windowWidth, height);
+
+        // Place the strip last, so X has the final say on where it sits
         XMoveResizeWindow(overlayDisplay, overlayXWindow, 0, y, windowWidth, height);
         XMapRaised(overlayDisplay, overlayXWindow);
         XGrabPointer(overlayDisplay, overlayXWindow, True, ButtonPressMask | ButtonReleaseMask, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
         XFlush(overlayDisplay);
-
-        // Match SDL to the X strip, or the camera icon is drawn off the visible bar
-        if (callWindow) SDL_SetWindowSize(callWindow, windowWidth, height);
         overlayMapped = true;
         return;
     }
