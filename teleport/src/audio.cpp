@@ -96,12 +96,6 @@ const int NOTCH_SETTLE_MS = 700;
 const int NOTCH_HOLD_MS = 60000;
 const int NOTCH_POLL_MS = 500;
 
-// Raw websocket PCM from a browser, the header is audi as int16 char codes
-const int REMOTE_PCM_HEADER_BYTES = 8;
-const int REMOTE_PCM_RATE = 48000;
-const double REMOTE_PCM_VOLUME = 0.20;
-const unsigned char REMOTE_PCM_HEADER[] = { 'a', 0, 'u', 0, 'd', 0, 'i', 0 };
-
 // Devices and mic state the call pipeline is built from
 string videoMicDevice = DEFAULT_AUDIO_DEVICE;
 string videoSpeakerDevice = DEFAULT_AUDIO_DEVICE;
@@ -111,8 +105,6 @@ int callAudioPayloadType = DEFAULT_AUDIO_PAYLOAD_TYPE;
 
 // Pipelines, ring samples, tone detector, and notches, all held while a call runs
 bool audioDisconnectLogged = false;
-GstElement* remotePcmPipeline = NULL;
-GstElement* remotePcmSource = NULL;
 GstElement* ringPipeline = NULL;
 GstElement* ringSource = NULL;
 vector<gint16> ringCycle;
@@ -427,77 +419,6 @@ void pushRingSamples(size_t position, int milliseconds, bool fadeOut) {
 
     // A blocked push means the speaker is still busy with the last chunk
     gst_app_src_push_buffer(GST_APP_SRC(ringSource), buffer);
-}
-
-// Open a speaker pipeline for raw PCM from any peer
-void startRemotePCMPlayback() {
-    // Skip when the speaker is already open
-    if (remotePcmPipeline) return;
-    gst_init(NULL, NULL);
-
-    // Play S16LE mono PCM on the USB speaker at 20 percent
-    string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
-    string pipelineString = "appsrc name=pcmspeak is-live=true format=time do-timestamp=true block=false max-bytes=32768 ! "
-        "queue leaky=downstream max-size-buffers=0 max-size-time=200000000 max-size-bytes=0 ! "
-        "audioconvert ! audioresample ! audio/x-raw,rate=" + to_string(REMOTE_PCM_RATE) + ",channels=1 ! "
-        "volume volume=" + to_string(REMOTE_PCM_VOLUME) + " ! "
-        + sinkElement + " name=pcmsink device=" + videoSpeakerDevice + " sync=false buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
-    GError* error = NULL;
-    remotePcmPipeline = gst_parse_launch(pipelineString.c_str(), &error);
-    if (error) {
-        cout << "Failed to start remote PCM playback: " << error->message << endl;
-        g_error_free(error);
-        if (remotePcmPipeline) gst_object_unref(remotePcmPipeline);
-        remotePcmPipeline = NULL;
-        return;
-    }
-
-    // Match the peer's raw PCM
-    remotePcmSource = gst_bin_get_by_name(GST_BIN(remotePcmPipeline), "pcmspeak");
-    GstCaps* caps = gst_caps_new_simple("audio/x-raw", "format", G_TYPE_STRING, "S16LE", "layout", G_TYPE_STRING, "interleaved", "rate", G_TYPE_INT, REMOTE_PCM_RATE, "channels", G_TYPE_INT, 1, NULL);
-    g_object_set(remotePcmSource, "caps", caps, NULL);
-    gst_caps_unref(caps);
-
-    // Start the speaker
-    GstStateChangeReturn result = gst_element_set_state(remotePcmPipeline, GST_STATE_PLAYING);
-    if (result == GST_STATE_CHANGE_FAILURE) {
-        cout << "Failed to play remote PCM on " << videoSpeakerDevice << endl;
-        stopRemotePCMPlayback();
-        return;
-    }
-    cout << "Remote PCM playback on " << videoSpeakerDevice << endl;
-}
-
-// Play one websocket PCM packet, header is 4 little-endian int16 char codes for audi
-bool playRemotePCMPacket(const char* data, size_t size) {
-    // Reject packets that are not raw PCM with the audi header
-    if (!data || size < REMOTE_PCM_HEADER_BYTES + 2) return false;
-    if (memcmp(data, REMOTE_PCM_HEADER, REMOTE_PCM_HEADER_BYTES) != 0) return false;
-
-    // Open the speaker on the first packet
-    if (!remotePcmPipeline) startRemotePCMPlayback();
-    if (!remotePcmSource) return true;
-
-    // Push the PCM after the audi header into the speaker pipeline
-    size_t pcmBytes = size - REMOTE_PCM_HEADER_BYTES;
-    GstBuffer* buffer = gst_buffer_new_allocate(NULL, pcmBytes, NULL);
-    gst_buffer_fill(buffer, 0, data + REMOTE_PCM_HEADER_BYTES, pcmBytes);
-    GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(remotePcmSource), buffer);
-    if (flow != GST_FLOW_OK && flow != GST_FLOW_FLUSHING) {
-        cout << "Remote PCM playback stalled, flow " << (int)flow << "." << endl;
-    }
-    return true;
-}
-
-// Stop PCM playback from a remote peer
-void stopRemotePCMPlayback() {
-    // Close the speaker pipeline
-    if (!remotePcmPipeline) return;
-    gst_element_set_state(remotePcmPipeline, GST_STATE_NULL);
-    if (remotePcmSource) gst_object_unref(remotePcmSource);
-    gst_object_unref(remotePcmPipeline);
-    remotePcmSource = NULL;
-    remotePcmPipeline = NULL;
 }
 
 // Quiet expected audio setup noise

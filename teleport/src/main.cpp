@@ -404,11 +404,6 @@ void handleWebSocketMessage(const WebSocketMessagePtr& message) {
     else if (message->type == WebSocketMessageType::Message && !message->binary) {
         handleTextMessage(message->str);
     }
-
-    // Play remote PCM on the USB speaker
-    else if (message->type == WebSocketMessageType::Message) {
-        playRemotePCMPacket(message->str.data(), message->str.size());
-    }
 }
 
 // Handle text messages
@@ -523,16 +518,6 @@ void handleCommand(const string& command, const string& commandArgument, const s
 
         // Nothing reaches the camera without ringing first, so ring for a caller that skipped Call
         else if (!isVideoRunning()) beginIncomingCall(target, commandArgument);
-    }
-
-    // Play remote PCM on the USB speaker
-    else if (command == "StartMic") {
-        startRemoteMic();
-    }
-
-    // Stop playing remote PCM
-    else if (command == "StopMic") {
-        stopRemoteMic();
     }
 
     // Stop video, or give up on a call that is still ringing
