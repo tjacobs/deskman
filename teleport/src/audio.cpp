@@ -21,27 +21,41 @@
 #include <thread>
 #include <vector>
 
-// Audio needs GStreamer WebRTC, skip the rest of the file without it so this is the only error
+// Fail the build when GStreamer WebRTC is missing
 #ifndef HAVE_GSTREAMER_WEBRTC
 #error "GStreamer WebRTC not found. Run teleport/install.sh to install it."
-#else
+#endif
 
-// GStreamer, only when the build found the WebRTC plugins
-#ifdef HAVE_GSTREAMER_WEBRTC
+// GStreamer appsrc for the ringtone, and FFT for the feedback notches
 #include <gst/app/gstappsrc.h>
 #include <gst/fft/gstfftf32.h>
-#endif
 
 // Namespace
 using namespace std;
 using namespace std::chrono;
 
+// How loud the remote caller is on the speaker
+const double VIDEO_SPEAKER_VOLUME = 0.50;
+
+// Ring tone: ring twice, then pause, like a desk phone
+const int RING_FREQUENCY_HZ = 440;
+const double RING_VOLUME = 0.35;
+const int RING_TONE_MS = 400;
+const int RING_GAP_MS = 200;
+const int RING_PAUSE_MS = 2000;
+
+// Shape every edge of the tone in the samples, a volume step only lands on a buffer edge and clicks
+const int RING_FADE_MS = 25;
+const int RING_CHUNK_MS = 50;
+const int RING_DRAIN_MS = 120;
+const double RING_FULL_SCALE = 32767.0;
+
 // Fall back to the first ALSA card until the USB dongle is found
 const string DEFAULT_AUDIO_DEVICE = "plughw:0,0";
 const int DEFAULT_AUDIO_PAYLOAD_TYPE = 97;
+const bool DEFAULT_CALL_MIC_MUTED = true;
 
-// Speaker volume, and the buffer sizes every call pipeline runs on
-const double VIDEO_SPEAKER_VOLUME = 0.45;
+// Buffer sizes every call pipeline runs on
 const int VIDEO_AUDIO_BUFFER_TIME = 80000;
 const int VIDEO_AUDIO_LATENCY_TIME = 20000;
 const int VIDEO_AUDIO_RATE = 48000;
@@ -55,7 +69,7 @@ const int CALL_MIC_LIMIT_DBFS = 3;
 const int AEC3_PLUGIN_MAJOR = 1;
 const int AEC3_PLUGIN_MINOR = 24;
 
-// Believe a feedback tone only when it is loud, narrow, alone, and still
+// Feedback supression: believe a feedback tone only when it is loud, narrow, alone, and still
 const int TONE_FFT_SIZE = 2048;
 const int TONE_HOP = 1024;
 const double TONE_MIN_HZ = 200.0;
@@ -68,7 +82,7 @@ const int TONE_BIN_TOLERANCE = 1;
 const double TONE_FLOOR_DB = -120.0;
 const float TONE_FULL_SCALE = 32768.0f;
 
-// Carve ringing tones out of the mic, each notch parked above hearing until it is needed
+// Feedback supression: carve tones out of the mic, each notch parked above hearing until it is needed
 const int NOTCH_COUNT = 16;
 const int NOTCH_POLES = 8;
 const double NOTCH_RIPPLE_DB = 0.05;
@@ -82,19 +96,6 @@ const int NOTCH_SETTLE_MS = 700;
 const int NOTCH_HOLD_MS = 60000;
 const int NOTCH_POLL_MS = 500;
 
-// Ring the speaker twice, then pause, like a desk phone
-const int RING_FREQUENCY_HZ = 440;
-const double RING_VOLUME = 0.35;
-const int RING_TONE_MS = 400;
-const int RING_GAP_MS = 200;
-const int RING_PAUSE_MS = 2000;
-
-// Shape every edge of the tone in the samples, a volume step only lands on a buffer edge and clicks
-const int RING_FADE_MS = 25;
-const int RING_CHUNK_MS = 50;
-const int RING_DRAIN_MS = 120;
-const double RING_FULL_SCALE = 32767.0;
-
 // Raw websocket PCM from a browser, the header is audi as int16 char codes
 const int REMOTE_PCM_HEADER_BYTES = 8;
 const int REMOTE_PCM_RATE = 48000;
@@ -104,11 +105,11 @@ const unsigned char REMOTE_PCM_HEADER[] = { 'a', 0, 'u', 0, 'd', 0, 'i', 0 };
 // Devices and mic state the call pipeline is built from
 string videoMicDevice = DEFAULT_AUDIO_DEVICE;
 string videoSpeakerDevice = DEFAULT_AUDIO_DEVICE;
-bool videoMuteMic = false;
+bool callMicMuteDefault = DEFAULT_CALL_MIC_MUTED;
+bool callMicMuted = DEFAULT_CALL_MIC_MUTED;
 int callAudioPayloadType = DEFAULT_AUDIO_PAYLOAD_TYPE;
 
 // Pipelines, ring samples, tone detector, and notches, all held while a call runs
-#ifdef HAVE_GSTREAMER_WEBRTC
 bool audioDisconnectLogged = false;
 GstElement* remotePcmPipeline = NULL;
 GstElement* remotePcmSource = NULL;
@@ -118,6 +119,7 @@ vector<gint16> ringCycle;
 thread ringThread;
 atomic<bool> ringPlaying(false);
 GstElement* micToneTapElement = NULL;
+GstElement* callMicMuteElement = NULL;
 GstFFTF32* toneFft = NULL;
 float toneWindow[TONE_FFT_SIZE];
 int toneWindowFill = 0;
@@ -131,9 +133,8 @@ steady_clock::time_point notchSetAt[NOTCH_COUNT];
 steady_clock::time_point notchSeenAt[NOTCH_COUNT];
 guint notchTimerId = 0;
 mutex notchLock;
-#endif
 
-// Declare helpers that sit further down, in the order the functions above call them
+// Declare helpers that sit further down
 vector<int> listUSBCards();
 vector<int> listUSBCaptureCards();
 bool cardHasCapture(int card);
@@ -144,7 +145,6 @@ bool isUSBPulseAudioName(const string& name);
 bool isPulseAudioDevice(const string& device);
 
 // Declare the ring, call audio, and tone helpers
-#ifdef HAVE_GSTREAMER_WEBRTC
 void buildRingCycle();
 void appendRingTone();
 void appendRingSilence(int milliseconds);
@@ -165,7 +165,6 @@ gboolean pollNotches(gpointer userData);
 bool isGStreamerAudioElement(string name);
 bool isEchoCancelAEC3();
 string echoCancelVersion();
-#endif
 
 // Find a USB ALSA plughw device
 string findUSBALSADevice() {
@@ -239,10 +238,27 @@ void setVideoAudioDevices(string micDevice, string speakerDevice) {
     cout << "Call speaker: " << videoSpeakerDevice << endl;
 }
 
-// Mute call mic by sending silence instead of opening ALSA capture
-void setVideoMuteMic(bool muteMic) {
-    // Hold this until the next call pipeline is built
-    videoMuteMic = muteMic;
+// Mute or unmute the live call mic
+void setCallMicMuted(bool muted) {
+    callMicMuted = muted;
+    if (callMicMuteElement) g_object_set(callMicMuteElement, "mute", muted ? TRUE : FALSE, NULL);
+    cout << (muted ? "Call mic muted." : "Call mic on.") << endl;
+}
+
+// Remember how the next call should start, --mute or --no-mute
+void setCallMicMuteDefault(bool muted) {
+    callMicMuteDefault = muted;
+    callMicMuted = muted;
+}
+
+// Put the mic back to the startup default when a call begins
+void applyCallMicMuteDefault() {
+    setCallMicMuted(callMicMuteDefault);
+}
+
+// True when the on-screen toggle is sending silence
+bool isCallMicMuted() {
+    return callMicMuted;
 }
 
 // Send Opus at the payload type the remote peer offered
@@ -259,13 +275,11 @@ int getCallAudioPayloadType() {
 
 // Say which echo canceller and feedback notches a call will get, before any call starts
 void logCallAudioStatus() {
-#ifdef HAVE_GSTREAMER_WEBRTC
     gst_init(NULL, NULL);
 
     // Name the canceller generation, AEC3 or the older AEC2
-    bool haveEchoCancel = !videoMuteMic && isGStreamerAudioElement("webrtcdsp");
-    if (videoMuteMic) cout << "Call echo cancel: off, mic muted." << endl;
-    else if (!haveEchoCancel) cout << "Call echo cancel: off, no webrtcdsp plugin." << endl;
+    bool haveEchoCancel = isGStreamerAudioElement("webrtcdsp");
+    if (!haveEchoCancel) cout << "Call echo cancel: off, no webrtcdsp plugin." << endl;
     else if (isEchoCancelAEC3()) cout << "Call echo cancel: on, AEC3, webrtcdsp " << echoCancelVersion() << "." << endl;
     else cout << "Call echo cancel: on, legacy AEC2, webrtcdsp " << echoCancelVersion() << ", AEC3 needs " << AEC3_PLUGIN_MAJOR << "." << AEC3_PLUGIN_MINOR << "." << endl;
 
@@ -273,12 +287,14 @@ void logCallAudioStatus() {
     if (!haveEchoCancel) cout << "Call feedback notches: off, they need the canceller." << endl;
     else if (isGStreamerAudioElement("audiochebband")) cout << "Call feedback notches: " << NOTCH_COUNT << " ready, parked above hearing until a tone rings." << endl;
     else cout << "Call feedback notches: off, no audiochebband plugin." << endl;
-#endif
+
+    // Say whether a new call starts muted
+    if (callMicMuteDefault) cout << "Call mic starts muted, tap Unmute or pass --no-mute." << endl;
+    else cout << "Call mic starts on, tap Mute or pass --mute." << endl;
 }
 
 // Ring the speaker until the call is answered or dropped
 void startRingtone() {
-#ifdef HAVE_GSTREAMER_WEBRTC
     // Skip when a ring is already playing
     if (ringPipeline) return;
     gst_init(NULL, NULL);
@@ -317,12 +333,10 @@ void startRingtone() {
     ringPlaying = true;
     ringThread = thread(runRingCadence);
     cout << "Ringing on " << videoSpeakerDevice << endl;
-#endif
 }
 
 // Silence the ringtone and hand the speaker back
 void stopRingtone() {
-#ifdef HAVE_GSTREAMER_WEBRTC
     // Let the thread fade its tail out and drain, so answering does not cut the tone off
     ringPlaying = false;
     if (ringThread.joinable()) ringThread.join();
@@ -334,10 +348,8 @@ void stopRingtone() {
     gst_object_unref(ringPipeline);
     ringSource = NULL;
     ringPipeline = NULL;
-#endif
 }
 
-#ifdef HAVE_GSTREAMER_WEBRTC
 // Render one ring, ring, pause cycle once, the thread then loops over it
 void buildRingCycle() {
     // Two rings and the silences between them
@@ -416,11 +428,9 @@ void pushRingSamples(size_t position, int milliseconds, bool fadeOut) {
     // A blocked push means the speaker is still busy with the last chunk
     gst_app_src_push_buffer(GST_APP_SRC(ringSource), buffer);
 }
-#endif
 
 // Open a speaker pipeline for raw PCM from any peer
 void startRemotePCMPlayback() {
-#ifdef HAVE_GSTREAMER_WEBRTC
     // Skip when the speaker is already open
     if (remotePcmPipeline) return;
     gst_init(NULL, NULL);
@@ -456,7 +466,6 @@ void startRemotePCMPlayback() {
         return;
     }
     cout << "Remote PCM playback on " << videoSpeakerDevice << endl;
-#endif
 }
 
 // Play one websocket PCM packet, header is 4 little-endian int16 char codes for audi
@@ -465,7 +474,6 @@ bool playRemotePCMPacket(const char* data, size_t size) {
     if (!data || size < REMOTE_PCM_HEADER_BYTES + 2) return false;
     if (memcmp(data, REMOTE_PCM_HEADER, REMOTE_PCM_HEADER_BYTES) != 0) return false;
 
-#ifdef HAVE_GSTREAMER_WEBRTC
     // Open the speaker on the first packet
     if (!remotePcmPipeline) startRemotePCMPlayback();
     if (!remotePcmSource) return true;
@@ -478,16 +486,11 @@ bool playRemotePCMPacket(const char* data, size_t size) {
     if (flow != GST_FLOW_OK && flow != GST_FLOW_FLUSHING) {
         cout << "Remote PCM playback stalled, flow " << (int)flow << "." << endl;
     }
-#else
-    // Unused when this build has no speaker pipeline
-    (void)size;
-#endif
     return true;
 }
 
 // Stop PCM playback from a remote peer
 void stopRemotePCMPlayback() {
-#ifdef HAVE_GSTREAMER_WEBRTC
     // Close the speaker pipeline
     if (!remotePcmPipeline) return;
     gst_element_set_state(remotePcmPipeline, GST_STATE_NULL);
@@ -495,10 +498,8 @@ void stopRemotePCMPlayback() {
     gst_object_unref(remotePcmPipeline);
     remotePcmSource = NULL;
     remotePcmPipeline = NULL;
-#endif
 }
 
-#ifdef HAVE_GSTREAMER_WEBRTC
 // Quiet expected audio setup noise
 void quietCallAudioLog() {
     g_log_set_handler("GStreamer-Audio", (GLogLevelFlags)(G_LOG_LEVEL_CRITICAL | G_LOG_FLAG_FATAL), quietGstAudioLog, NULL);
@@ -517,12 +518,9 @@ void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gch
 
 // Build the local mic branch
 string createAudioSourceString() {
-    // Open silence, Pulse, or ALSA for the mic
+    // Open Pulse or ALSA for the mic, mute is a live volume gate later
     string source;
-    if (videoMuteMic) {
-        cout << "Call mic muted, sending silence." << endl;
-        source = "audiotestsrc name=robotmic is-live=true wave=silence ! ";
-    } else if (isPulseAudioDevice(videoMicDevice)) {
+    if (isPulseAudioDevice(videoMicDevice)) {
         cout << "Using Pulse mic " << videoMicDevice << " for call." << endl;
         source = "pulsesrc name=robotmic device=" + videoMicDevice + " buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME) + " ! ";
     } else {
@@ -534,7 +532,7 @@ string createAudioSourceString() {
     string process = "audioconvert name=robotaudioconvert ! audioresample name=robotaudioresample ! audio/x-raw,format=S16LE,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! ";
 
     // Cancel speaker echo, and hold mic gain fixed so a quiet room cannot raise loop gain
-    if (!videoMuteMic && isGStreamerAudioElement("webrtcdsp")) {
+    if (isGStreamerAudioElement("webrtcdsp")) {
         cout << "Call mic echo cancel: " << (isEchoCancelAEC3() ? "AEC3" : "legacy AEC2") << ", webrtcdsp " << echoCancelVersion() << "." << endl;
         process += "webrtcdsp name=robotdsp probe=robotechoprobe echo-cancel=true noise-suppression=true noise-suppression-level=high high-pass-filter=true gain-control=true gain-control-mode=fixed-digital compression-gain-db=" + to_string(CALL_MIC_GAIN_DB) + " target-level-dbfs=" + to_string(CALL_MIC_LIMIT_DBFS) + " limiter=true ! ";
 
@@ -549,9 +547,13 @@ string createAudioSourceString() {
         } else {
             cout << "Call mic feedback notches: none, no audiochebband plugin." << endl;
         }
-    } else if (!videoMuteMic) {
+    } else {
         cout << "Call mic echo cancel: none, no webrtcdsp plugin." << endl;
     }
+
+    // Gate the mic here so Unmute can open it without rebuilding the pipeline
+    string mute = callMicMuted ? "true" : "false";
+    process += "volume name=robotmicmute mute=" + mute + " ! ";
 
     // Encode to Opus at the payload type the peer offered
     string payloadType = to_string(callAudioPayloadType);
@@ -574,6 +576,11 @@ void attachCallAudio(GstElement* pipeline, GMainLoop* loop) {
         notchHertz[index] = 0;
         notchHalfWidth[index] = NOTCH_HALF_WIDTH_HZ;
     }
+
+    // Hold the mute gate so the on-screen toggle can flip it mid-call
+    if (callMicMuteElement) gst_object_unref(callMicMuteElement);
+    callMicMuteElement = gst_bin_get_by_name(GST_BIN(pipeline), "robotmicmute");
+    if (callMicMuteElement) g_object_set(callMicMuteElement, "mute", callMicMuted ? TRUE : FALSE, NULL);
 
     // Listen at the end of the notch chain, so a tone that survives its notch still shows
     micToneTapElement = notchElements[NOTCH_COUNT - 1];
@@ -702,6 +709,9 @@ void stopCallAudio() {
         notchHertz[index] = 0;
     }
     micToneTapElement = NULL;
+    if (callMicMuteElement) gst_object_unref(callMicMuteElement);
+    callMicMuteElement = NULL;
+    callMicMuted = callMicMuteDefault;
     audioDisconnectLogged = false;
 }
 
@@ -957,7 +967,6 @@ string echoCancelVersion() {
     gst_object_unref(plugin);
     return found;
 }
-#endif
 
 // True when call audio should go through Pulse
 bool isPulseAudioDevice(const string& device) {
@@ -1064,5 +1073,3 @@ bool isUSBPulseAudioName(const string& name) {
     return name.find("usb-") != string::npos || name.find("USB") != string::npos;
 }
 
-// Close the GStreamer WebRTC guard at the top of the file
-#endif

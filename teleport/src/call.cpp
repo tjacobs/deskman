@@ -3,6 +3,7 @@
 */
 
 #include "call.h"
+#include "audio.h"
 #include "video.h"
 
 #include <SDL2/SDL.h>
@@ -25,6 +26,9 @@ using namespace std;
 const int CALL_BUTTON_HEIGHT = 88;
 const int CALL_ROW_HEIGHT = 80;
 const int HANGUP_STRIP_HEIGHT = 96;
+const int CAMERA_ICON_WIDTH = 78;
+const int CAMERA_ICON_HEIGHT = 58;
+const int CAMERA_ICON_PAD = 16;
 
 // Incoming call bar is the bottom 10 percent of the screen
 const int INCOMING_STRIP_PERCENT = 10;
@@ -53,6 +57,9 @@ static string pendingPeer;
 
 static SDL_Window* callWindow = nullptr;
 static SDL_Renderer* callRenderer = nullptr;
+static SDL_Renderer* drawTarget = nullptr;
+static SDL_Window* cameraWindow = nullptr;
+static SDL_Renderer* cameraRenderer = nullptr;
 static TTF_Font* callFont = nullptr;
 static int windowWidth = 0;
 static int windowHeight = 0;
@@ -60,9 +67,11 @@ static bool overlayMapped = false;
 #ifdef __linux__
 static Display* overlayDisplay = nullptr;
 static Window overlayXWindow = 0;
+static Window cameraXWindow = 0;
 #endif
 static SDL_Rect backButton;
 static SDL_Rect hangupButton;
+static SDL_Rect muteButton;
 static SDL_Rect acceptButton;
 static SDL_Rect declineButton;
 static vector<SDL_Rect> peerButtons;
@@ -73,6 +82,10 @@ static bool ensureOverlayWindow();
 static void mapOverlay(int y, int height);
 static void unmapOverlay();
 static void destroyOverlayWindow();
+static bool ensureCameraWindow();
+static void mapCameraIcon();
+static void unmapCameraIcon();
+static void drawCameraOverlay();
 static void layoutButtons();
 static int incomingStripHeight();
 static string incomingCallTitle(const string& peer);
@@ -132,10 +145,12 @@ void pollCallInterface() {
 #ifdef __linux__
     if (overlayDisplay && overlayXWindow) {
         XRaiseWindow(overlayDisplay, overlayXWindow);
+        if (cameraXWindow) XRaiseWindow(overlayDisplay, cameraXWindow);
         XFlush(overlayDisplay);
     }
 #else
     SDL_RaiseWindow(callWindow);
+    if (cameraWindow) SDL_RaiseWindow(cameraWindow);
 #endif
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -144,6 +159,7 @@ void pollCallInterface() {
     }
     applyRequestedView();
     if (callWindow && overlayMapped) drawOverlay();
+    if (shownView == CALL_INTERFACE_IN_CALL && cameraRenderer) drawCameraOverlay();
 }
 
 bool toggleCallDirectory() {
@@ -168,9 +184,11 @@ void showIncomingCall(string peer) {
 }
 
 void showCallInProgress() {
+    // Show the in-call bar, and put the mic back to the --mute default
     lock_guard<mutex> lock(callInterfaceMutex);
     callStatus.clear();
     requestedView = CALL_INTERFACE_IN_CALL;
+    applyCallMicMuteDefault();
 }
 
 void showCallIdle() {
@@ -216,6 +234,7 @@ static void applyRequestedView() {
         view = requestedView;
     }
     if (view == CALL_INTERFACE_IDLE) {
+        unmapCameraIcon();
         unmapOverlay();
         shownView = CALL_INTERFACE_IDLE;
         return;
@@ -233,6 +252,8 @@ static void applyRequestedView() {
         y = windowHeight - height;
     }
     mapOverlay(y, height);
+    if (view == CALL_INTERFACE_IN_CALL) mapCameraIcon();
+    else unmapCameraIcon();
     shownView = view;
     layoutButtons();
 }
@@ -329,7 +350,88 @@ static void mapOverlay(int y, int height) {
     overlayMapped = true;
 }
 
+// Pixel size of the top camera chip, icon plus padding
+static void cameraIconSize(int& width, int& height) {
+    width = CAMERA_ICON_WIDTH + CAMERA_ICON_PAD * 2;
+    height = CAMERA_ICON_HEIGHT + CAMERA_ICON_PAD;
+}
+
+// Small override-redirect window at the top of the screen for the camera icon
+static bool ensureCameraWindow() {
+    if (cameraWindow) return true;
+    int width = 0;
+    int height = 0;
+    cameraIconSize(width, height);
+#ifdef __linux__
+    if (!overlayDisplay) overlayDisplay = XOpenDisplay(NULL);
+    if (overlayDisplay) {
+        int screen = DefaultScreen(overlayDisplay);
+        Colormap colormap = DefaultColormap(overlayDisplay, screen);
+        XColor barColor;
+        barColor.red = 44461;
+        barColor.green = 55512;
+        barColor.blue = 59110;
+        barColor.flags = DoRed | DoGreen | DoBlue;
+        XAllocColor(overlayDisplay, colormap, &barColor);
+        cameraXWindow = XCreateSimpleWindow(overlayDisplay, RootWindow(overlayDisplay, screen), 0, 0, width, height, 0, barColor.pixel, barColor.pixel);
+        XSetWindowAttributes attributes;
+        attributes.override_redirect = True;
+        attributes.event_mask = ExposureMask | StructureNotifyMask;
+        XChangeWindowAttributes(overlayDisplay, cameraXWindow, CWOverrideRedirect | CWEventMask, &attributes);
+        XStoreName(overlayDisplay, cameraXWindow, "Teleport camera");
+        XSync(overlayDisplay, False);
+        cameraWindow = SDL_CreateWindowFrom(reinterpret_cast<void*>(static_cast<uintptr_t>(cameraXWindow)));
+    }
+#endif
+    if (!cameraWindow) {
+        cameraWindow = SDL_CreateWindow("Teleport camera", 0, 0, width, height, SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIDDEN | SDL_WINDOW_SKIP_TASKBAR);
+        if (!cameraWindow) return false;
+    }
+    cameraRenderer = SDL_CreateRenderer(cameraWindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!cameraRenderer) {
+        SDL_DestroyWindow(cameraWindow);
+        cameraWindow = nullptr;
+        return false;
+    }
+    return true;
+}
+
+// Place the camera icon at the top center of the screen
+static void mapCameraIcon() {
+    if (!ensureCameraWindow()) return;
+    int width = 0;
+    int height = 0;
+    cameraIconSize(width, height);
+    int x = (windowWidth - width) / 2;
+#ifdef __linux__
+    if (overlayDisplay && cameraXWindow) {
+        if (cameraWindow) SDL_SetWindowSize(cameraWindow, width, height);
+        XMoveResizeWindow(overlayDisplay, cameraXWindow, x, CAMERA_ICON_PAD, width, height);
+        XMapRaised(overlayDisplay, cameraXWindow);
+        XFlush(overlayDisplay);
+        return;
+    }
+#endif
+    SDL_SetWindowSize(cameraWindow, width, height);
+    SDL_SetWindowPosition(cameraWindow, x, CAMERA_ICON_PAD);
+    SDL_ShowWindow(cameraWindow);
+    SDL_RaiseWindow(cameraWindow);
+}
+
+// Hide the top camera chip
+static void unmapCameraIcon() {
+#ifdef __linux__
+    if (overlayDisplay && cameraXWindow) {
+        XUnmapWindow(overlayDisplay, cameraXWindow);
+        XFlush(overlayDisplay);
+        return;
+    }
+#endif
+    if (cameraWindow) SDL_HideWindow(cameraWindow);
+}
+
 static void unmapOverlay() {
+    unmapCameraIcon();
     if (!overlayMapped) return;
 #ifdef __linux__
     if (overlayDisplay && overlayXWindow) {
@@ -354,10 +456,22 @@ static void destroyOverlayWindow() {
         SDL_DestroyWindow(callWindow);
         callWindow = nullptr;
     }
+    if (cameraRenderer) {
+        SDL_DestroyRenderer(cameraRenderer);
+        cameraRenderer = nullptr;
+    }
+    if (cameraWindow) {
+        SDL_DestroyWindow(cameraWindow);
+        cameraWindow = nullptr;
+    }
 #ifdef __linux__
     if (overlayDisplay && overlayXWindow) {
         XDestroyWindow(overlayDisplay, overlayXWindow);
         overlayXWindow = 0;
+    }
+    if (overlayDisplay && cameraXWindow) {
+        XDestroyWindow(overlayDisplay, cameraXWindow);
+        cameraXWindow = 0;
     }
     if (overlayDisplay) {
         XCloseDisplay(overlayDisplay);
@@ -388,7 +502,11 @@ static void layoutButtons() {
     if (shownView == CALL_INTERFACE_IN_CALL) height = HANGUP_STRIP_HEIGHT;
     else if (shownView == CALL_INTERFACE_INCOMING) height = incomingStripHeight();
     backButton = {20, 20, windowWidth - 40, CALL_BUTTON_HEIGHT};
-    hangupButton = {0, 0, windowWidth, height};
+
+    // In-call bar, Unmute or Mute on the left, Hang up on the right
+    int muteWidth = windowWidth / 2;
+    muteButton = {0, 0, muteWidth, height};
+    hangupButton = {muteWidth, 0, windowWidth - muteWidth, height};
 
     // Incoming bar, accept on the left, decline on the right
     if (shownView == CALL_INTERFACE_INCOMING) {
@@ -409,6 +527,7 @@ static void layoutButtons() {
 
 static void drawOverlay() {
     if (!callRenderer) return;
+    drawTarget = callRenderer;
     layoutButtons();
     CallInterfaceView view;
     vector<string> peers;
@@ -444,38 +563,49 @@ static void drawOverlay() {
         drawButton(acceptButton, title, green, white);
         drawButton(declineButton, "Decline", red, white);
     } else if (view == CALL_INTERFACE_IN_CALL) {
+        bool muted = isCallMicMuted();
+        SDL_Color muteFill = muted ? gray : lightBlue;
+        SDL_Color muteText = muted ? white : black;
+        drawButton(muteButton, muted ? "Unmute" : "Mute", muteFill, muteText);
         drawButton(hangupButton, "Hang up", lightBlue, black);
-
-        // Camera icon in the visible strip, not centered on a full-screen hangup rect
-        int iconY = (HANGUP_STRIP_HEIGHT - 58) / 2;
-        drawCameraIcon(24, iconY, isVideoRunning());
     }
     SDL_RenderPresent(callRenderer);
 }
 
+// Draw the camera chip at the top of the screen
+static void drawCameraOverlay() {
+    if (!cameraRenderer) return;
+    drawTarget = cameraRenderer;
+    SDL_Color lightBlue = {173, 216, 230, 255};
+    SDL_SetRenderDrawColor(cameraRenderer, lightBlue.r, lightBlue.g, lightBlue.b, lightBlue.a);
+    SDL_RenderClear(cameraRenderer);
+    drawCameraIcon(CAMERA_ICON_PAD, CAMERA_ICON_PAD / 2, isVideoRunning());
+    SDL_RenderPresent(cameraRenderer);
+}
+
 static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill, SDL_Color text) {
-    SDL_SetRenderDrawColor(callRenderer, fill.r, fill.g, fill.b, fill.a);
-    SDL_RenderFillRect(callRenderer, &rect);
+    SDL_SetRenderDrawColor(drawTarget, fill.r, fill.g, fill.b, fill.a);
+    SDL_RenderFillRect(drawTarget, &rect);
     if (!callFont || label.empty()) return;
     SDL_Surface* surface = TTF_RenderText_Solid(callFont, label.c_str(), text);
     if (!surface) return;
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(callRenderer, surface);
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(drawTarget, surface);
     int x = rect.x + (rect.w - surface->w) / 2;
     int y = rect.y + (rect.h - surface->h) / 2;
     SDL_Rect dest = {x, y, surface->w, surface->h};
-    SDL_RenderCopy(callRenderer, texture, NULL, &dest);
+    SDL_RenderCopy(drawTarget, texture, NULL, &dest);
     SDL_FreeSurface(surface);
     SDL_DestroyTexture(texture);
 }
 
 static void fillCircle(int centerX, int centerY, int radius, SDL_Color color) {
-    SDL_SetRenderDrawColor(callRenderer, color.r, color.g, color.b, color.a);
+    SDL_SetRenderDrawColor(drawTarget, color.r, color.g, color.b, color.a);
     for (int offsetY = -radius; offsetY <= radius; offsetY++) {
         int span = 0;
         while (span * span + offsetY * offsetY <= radius * radius) span++;
         span--;
         if (span < 0) continue;
-        SDL_RenderDrawLine(callRenderer, centerX - span, centerY + offsetY, centerX + span, centerY + offsetY);
+        SDL_RenderDrawLine(drawTarget, centerX - span, centerY + offsetY, centerX + span, centerY + offsetY);
     }
 }
 
@@ -483,13 +613,13 @@ static void fillCircle(int centerX, int centerY, int radius, SDL_Color color) {
 static void fillRoundedRect(int x, int y, int width, int height, int radius, SDL_Color color) {
     if (radius * 2 > width) radius = width / 2;
     if (radius * 2 > height) radius = height / 2;
-    SDL_SetRenderDrawColor(callRenderer, color.r, color.g, color.b, color.a);
+    SDL_SetRenderDrawColor(drawTarget, color.r, color.g, color.b, color.a);
     SDL_Rect center = {x + radius, y, width - radius * 2, height};
     SDL_Rect left = {x, y + radius, radius, height - radius * 2};
     SDL_Rect right = {x + width - radius, y + radius, radius, height - radius * 2};
-    SDL_RenderFillRect(callRenderer, &center);
-    SDL_RenderFillRect(callRenderer, &left);
-    SDL_RenderFillRect(callRenderer, &right);
+    SDL_RenderFillRect(drawTarget, &center);
+    SDL_RenderFillRect(drawTarget, &left);
+    SDL_RenderFillRect(drawTarget, &right);
     fillCircle(x + radius, y + radius, radius, color);
     fillCircle(x + width - radius - 1, y + radius, radius, color);
     fillCircle(x + radius, y + height - radius - 1, radius, color);
@@ -537,9 +667,9 @@ static void drawLabel(const char* text, int x, int y, SDL_Color color) {
     if (!callFont || !text || !text[0]) return;
     SDL_Surface* surface = TTF_RenderText_Solid(callFont, text, color);
     if (!surface) return;
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(callRenderer, surface);
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(drawTarget, surface);
     SDL_Rect dest = {x, y, surface->w, surface->h};
-    SDL_RenderCopy(callRenderer, texture, NULL, &dest);
+    SDL_RenderCopy(drawTarget, texture, NULL, &dest);
     SDL_FreeSurface(surface);
     SDL_DestroyTexture(texture);
 }
@@ -591,6 +721,10 @@ static void handleTap(int x, int y) {
     if (view == CALL_INTERFACE_INCOMING && hitRect(declineButton, x, y)) {
         queueAction("decline", "");
         showCallIdle();
+        return;
+    }
+    if (view == CALL_INTERFACE_IN_CALL && hitRect(muteButton, x, y)) {
+        setCallMicMuted(!isCallMicMuted());
         return;
     }
     if (view == CALL_INTERFACE_IN_CALL && hitRect(hangupButton, x, y)) queueAction("hangup", "");

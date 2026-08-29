@@ -14,7 +14,10 @@ using namespace std;
 
 void setVideoAudioDevice(string device);
 void setVideoAudioDevices(string micDevice, string speakerDevice);
-void setVideoMuteMic(bool muteMic);
+void setCallMicMuted(bool muted);
+void setCallMicMuteDefault(bool muted);
+void applyCallMicMuteDefault();
+bool isCallMicMuted();
 void setCallAudioPayloadType(int payloadType);
 int getCallAudioPayloadType();
 void logCallAudioStatus();

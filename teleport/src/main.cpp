@@ -77,7 +77,6 @@ string cameraPath = DEFAULT_CAMERA_PATH;
 string deviceName;
 string callPeer;
 string audioDevice = DEFAULT_AUDIO_DEVICE;
-bool muteMic = false;
 bool holdIncomingCall = false;
 bool autoAnswerPending = false;
 steady_clock::time_point autoAnswerAt;
@@ -133,8 +132,6 @@ int main(int argumentCount, char** argumentValues) {
     setupPluginPath();
 
     // Prefer separate USB mic and speaker when using the default ALSA device
-    setVideoMuteMic(muteMic);
-    if (muteMic) cout << "Call microphone muted." << endl;
     if (audioDevice == DEFAULT_AUDIO_DEVICE) {
         string usbMic = findUSBPulseSource();
         string usbSpeaker = findUSBPulseSink();
@@ -230,9 +227,14 @@ void parseArgs(int argumentCount, char** argumentValues) {
             audioDevice = argumentValues[++index];
         }
 
-        // Send silence instead of microphone audio on calls
+        // Start muted, this is already the default
         else if (argument == "--mute" || argument == "--mute-mic") {
-            muteMic = true;
+            setCallMicMuteDefault(true);
+        }
+
+        // Start with the mic on, skip the usual mute
+        else if (argument == "--no-mute") {
+            setCallMicMuteDefault(false);
         }
     }
 }
@@ -326,7 +328,8 @@ void printHelp() {
     cout << "  -h, --help              Show this help" << endl;
     cout << "  --device <n>            Device number, login as teleport<n>" << endl;
     cout << "  --call <peer>           Call peer after login, e.g. teleport2" << endl;
-    cout << "  --mute, --mute-mic      Mute outbound call mic, send silence" << endl;
+    cout << "  --mute, --mute-mic      Start with the call mic muted, this is the default" << endl;
+    cout << "  --no-mute               Start with the call mic on" << endl;
     cout << "  --server <url>          WebSocket server URL" << endl;
     cout << "  --local                 Use local server ws://127.0.0.1:8080" << endl;
     cout << "  --camera <path|n>       Camera path or index" << endl;
