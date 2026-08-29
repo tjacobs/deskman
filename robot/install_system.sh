@@ -32,6 +32,7 @@ main() {
     configure_session
     disable_screen_idle
     disable_screen_keyboard
+    fix_mdns_name
     echo "Done."
 }
 
@@ -60,6 +61,15 @@ set -euo pipefail
 # GDM and apport paths
 GDM_CONF="/etc/gdm3/custom.conf"
 APPORT_CONF="/etc/default/apport"
+
+# Avahi paths, the drop-in holds Avahi back until the network is up
+AVAHI_CONF="/etc/avahi/avahi-daemon.conf"
+AVAHI_DROP_IN_DIR="/etc/systemd/system/avahi-daemon.service.d"
+AVAHI_DROP_IN="${AVAHI_DROP_IN_DIR}/wait-for-network.conf"
+
+# Jetson network ports, Wi-Fi and wired carry mDNS, the rest are virtual and only cause name clashes
+AVAHI_ALLOW_INTERFACES="wlP1p1s0,enP8p1s0"
+AVAHI_DENY_INTERFACES="docker0,l4tbr0,usb0,usb1"
 
 # Keep Files on the dash, leave Help, Software, and Firefox off
 FAVORITE_APPS="['org.gnome.Nautilus.desktop']"
@@ -300,6 +310,43 @@ EOF
     chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/disable-screen-blank.desktop"
 }
 
+# Publish this machine as hostname.local, Avahi renames itself when it starts before the network
+fix_mdns_name() {
+    host_name="$(cat /etc/hostname)"
+    echo "Publishing mDNS name ${host_name}.local"
+
+    # Resolve our own name locally, so lookups work before Avahi answers
+    if ! grep -q "^127.0.1.1[[:space:]]" /etc/hosts; then
+        printf '\n%s\n' "127.0.1.1	${host_name} ${host_name}.local" >> /etc/hosts
+    fi
+
+    # Claim the name from the hostname, not from a leftover announcement
+    set_avahi_option host-name "${host_name}"
+
+    # Skip IPv6, Avahi drops the link-local address once a global one arrives and calls that a conflict
+    set_avahi_option use-ipv4 yes
+    set_avahi_option use-ipv6 no
+
+    # Watch only the real network ports, docker and the USB gadget bridge churn addresses and trip the same race
+    set_avahi_option allow-interfaces "${AVAHI_ALLOW_INTERFACES}"
+    set_avahi_option deny-interfaces "${AVAHI_DENY_INTERFACES}"
+
+    # Start Avahi once the link has an address, else it collides with its own first claim
+    mkdir -p "${AVAHI_DROP_IN_DIR}"
+    cat > "${AVAHI_DROP_IN}" <<'EOF'
+[Unit]
+After=network-online.target
+Wants=network-online.target
+EOF
+
+    # Wait for the network at boot, the drop-in needs this target to mean something
+    systemctl enable NetworkManager-wait-online.service 2>/dev/null || true
+
+    # Pick up the drop-in and republish under the right name
+    systemctl daemon-reload
+    systemctl restart avahi-daemon.service
+}
+
 # Skip Connect your online accounts and first-login setup
 skip_gnome_setup() {
     # Stop the first-login wizard if it is already running
@@ -355,6 +402,21 @@ run_as_user() {
 
     # Fall back to one private bus and hide dbus-daemon chatter
     sudo -u "${RUN_USER}" env "${user_environment[@]}" dbus-run-session -- "$@" >/dev/null 2>&1
+}
+
+# Set one option in the Avahi config, the stock file ships these keys commented out
+set_avahi_option() {
+    option_name="$1"
+    option_value="$2"
+
+    # Overwrite the key whether it is commented out or already set
+    if grep -qE "^#*${option_name}=" "${AVAHI_CONF}"; then
+        sed -i "s/^#*${option_name}=.*/${option_name}=${option_value}/" "${AVAHI_CONF}"
+        return
+    fi
+
+    # Add it under the server section when the key is missing
+    sed -i "/^\[server\]/a ${option_name}=${option_value}" "${AVAHI_CONF}"
 }
 
 # Run install
