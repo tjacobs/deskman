@@ -48,8 +48,7 @@ const char* LOCAL_SERVER_URL = "ws://127.0.0.1:8080";
 const char* DEFAULT_CAMERA_PATH = "0";
 
 // Configure device ID
-const int DEFAULT_DEVICE_ID = 1;
-const char* DEVICE_ID_FILE = "device.id";
+const char* DEVICE_NAME_PREFIX = "teleport";
 const char* BINARY_NAME = "teleport";
 
 // Configure connection settings
@@ -71,7 +70,8 @@ const char* DEFAULT_DISPLAY = ":0";
 #endif
 
 // Track runtime state
-int deviceId = DEFAULT_DEVICE_ID;
+int deviceId = FALLBACK_DEVICE_ID;
+int argumentDeviceId = 0;
 string serverUrl = DEFAULT_SERVER_URL;
 string cameraPath = DEFAULT_CAMERA_PATH;
 string deviceName;
@@ -101,7 +101,6 @@ void initSignals();
 void signalHandler(int signalNumber);
 void connectWebSocket();
 void runMainLoop();
-void loadDeviceIdFromFile();
 void sendPing();
 void handleWebSocketMessage(const WebSocketMessagePtr& message);
 void handleTextMessage(const string& text);
@@ -124,6 +123,10 @@ int main(int argumentCount, char** argumentValues) {
     settings = loadConfig();
     if (settings.autoAnswer > 0) cout << "Auto-answering calls after " << settings.autoAnswer << " seconds." << endl;
     else cout << "Auto-answer off, calls wait for Accept." << endl;
+
+    // Name this device, the argument wins over config.json
+    deviceId = argumentDeviceId > 0 ? argumentDeviceId : settings.deviceId;
+    deviceName = DEVICE_NAME_PREFIX + to_string(deviceId);
 
     // Point HDMI video at the local screen when DISPLAY is unset
     setupDisplayEnv();
@@ -178,11 +181,6 @@ int main(int argumentCount, char** argumentValues) {
 
 // Parse arguments
 void parseArgs(int argumentCount, char** argumentValues) {
-    // Set defaults from code, then local device.id
-    string name = "teleport";
-    loadDeviceIdFromFile();
-    deviceName = name + to_string(deviceId);
-
     // Parse simple flags
     for (int index = 1; index < argumentCount; index++) {
         string argument = argumentValues[index];
@@ -198,10 +196,9 @@ void parseArgs(int argumentCount, char** argumentValues) {
             serverUrl = LOCAL_SERVER_URL;
         }
 
-        // Set device number
+        // Set device number, this beats the one in config.json
         else if (argument == "--device" && index + 1 < argumentCount) {
-            deviceId = atoi(argumentValues[++index]);
-            deviceName = name + to_string(deviceId);
+            argumentDeviceId = atoi(argumentValues[++index]);
         }
 
         // Set server URL
@@ -347,16 +344,6 @@ void runMainLoop() {
         if (isCallOverlayIdle() && isVideoRunning()) stopVideo();
         sleep_for(milliseconds(16));
     }
-}
-
-// Load machine-local device id from device.id when present
-void loadDeviceIdFromFile() {
-    // Read optional local override
-    ifstream file(DEVICE_ID_FILE);
-    if (!file.is_open()) return;
-    int fileDeviceId = 0;
-    file >> fileDeviceId;
-    if (fileDeviceId > 0) deviceId = fileDeviceId;
 }
 
 // Send ping
