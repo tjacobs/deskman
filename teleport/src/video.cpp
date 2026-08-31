@@ -86,6 +86,7 @@ GstElement* videoWebrtc = NULL;
 thread videoLoopThread;
 bool videoBackendReady = false;
 bool videoCameraAvailable = true;
+bool cameraSenderReady = false;
 int videoPayloadType = 103;
 string videoProfileLevelId = CONSTRAINED_BASELINE_PROFILE;
 bool remoteDescriptionSet = false;
@@ -116,7 +117,7 @@ const int LIBCAMERA_WIDTH = VIDEO_WIDTH;
 const int LIBCAMERA_HEIGHT = VIDEO_HEIGHT;
 const int LIBCAMERA_FRAMERATE = 30;
 const int VIDEO_STATE_TIMEOUT_SECONDS = 2;
-const int SENDER_CAPS_WAIT_MS = 8000;
+const int SENDER_CAPS_WAIT_MS = 2000;
 const int SENDER_CAPS_POLL_MS = 50;
 const int VIDEO_CLOCK_RATE = 90000;
 const int AUDIO_CLOCK_RATE = 48000;
@@ -175,7 +176,8 @@ void chooseAudioCodec(const char* sdpText);
 int findPayloadType(string sdp, string codec);
 string summarizeSdp(const char* sdpText);
 void logGStreamerError(const string& message);
-void waitForSenderCaps();
+bool waitForSenderCaps();
+void sendNoCamera();
 void prepareSenderTransceivers();
 void prepareSenderTransceiver(int index, string media, string codec, int payloadType, GstWebRTCRTPTransceiverDirection direction);
 void applyRemoteVideoOffer(const char* sdpText);
@@ -367,10 +369,64 @@ string getCameraView(string cameraView) {
 
 #ifdef HAVE_GSTREAMER_WEBRTC
 
+static int nvidiaLogOutput = -1;
+static bool isNvidiaNoise(string line);
+static void filterNvidiaLog(int readFd);
+static void quietNvidiaLog();
+
+// Drop NVIDIA decoder chatter that prints on stdout
+static bool isNvidiaNoise(string line) {
+    if (line.find("Opening in BLOCKING MODE") != string::npos) return true;
+    if (line.find("NvMMLiteOpen") != string::npos) return true;
+    if (line.find("NvMMLiteBlockCreate") != string::npos) return true;
+    return false;
+}
+
+// Read piped stdout and write through everything except NVIDIA noise
+static void filterNvidiaLog(int readFd) {
+    string line;
+    char buffer[256];
+    while (true) {
+        ssize_t count = read(readFd, buffer, sizeof(buffer));
+        if (count <= 0) break;
+        for (ssize_t index = 0; index < count; index++) {
+            if (buffer[index] == '\n') {
+                if (!isNvidiaNoise(line)) {
+                    line += '\n';
+                    write(nvidiaLogOutput, line.c_str(), line.size());
+                }
+                line.clear();
+            } else {
+                line += buffer[index];
+            }
+        }
+    }
+}
+
+// NVIDIA's decoder writes status lines to stdout, keep them out of the journal
+static void quietNvidiaLog() {
+    if (nvidiaLogOutput >= 0) return;
+    int pipeEnds[2];
+    if (pipe(pipeEnds) != 0) return;
+    nvidiaLogOutput = dup(STDOUT_FILENO);
+    if (nvidiaLogOutput < 0) {
+        close(pipeEnds[0]);
+        close(pipeEnds[1]);
+        return;
+    }
+    dup2(pipeEnds[1], STDOUT_FILENO);
+    dup2(pipeEnds[1], STDERR_FILENO);
+    close(pipeEnds[1]);
+    thread(filterNvidiaLog, pipeEnds[0]).detach();
+}
+
 // Initialize video backend
 bool initVideoBackend() {
     // Skip repeated init
     if (videoBackendReady) return true;
+
+    // NVIDIA decoder prints BLOCKING MODE and NvMMLite lines to stdout
+    quietNvidiaLog();
 
     // Initialize GStreamer
     GError* error = NULL;
@@ -418,6 +474,10 @@ static void failCallWithoutOffer(string message) {
     videoRunning = false;
     dialedCall = false;
     includeAudioInPipeline = false;
+    if (message.find("No camera") != string::npos) {
+        sendNoCamera();
+        if (videoWebSocket) videoWebSocket->send(videoDeviceName + " VIDEO_STOP");
+    }
 }
 
 // Start video pipeline
@@ -456,7 +516,7 @@ void startVideoPipeline() {
     // Caller creates the offer once the camera and mic are really running
     if (createOfferPending && videoWebrtc) {
         createOfferPending = false;
-        waitForSenderCaps();
+        cameraSenderReady = waitForSenderCaps();
         createVideoOffer();
     }
     showCallInProgress();
@@ -928,6 +988,8 @@ void handleVideoOffer(string payload) {
     // Skip if camera is unavailable
     if (!videoCameraAvailable) {
         cout << "VIDEO_OFFER ignored, camera unavailable." << endl;
+        sendNoCamera();
+        if (videoWebSocket) videoWebSocket->send(videoDeviceName + " VIDEO_STOP");
         json_object_unref(object);
         return;
     }
@@ -947,7 +1009,7 @@ void handleVideoOffer(string payload) {
         json_object_unref(object);
         return;
     }
-    waitForSenderCaps();
+    cameraSenderReady = waitForSenderCaps();
     prepareSenderTransceivers();
     applyRemoteVideoOffer(sdpText);
     json_object_unref(object);
@@ -1121,8 +1183,9 @@ string summarizeSdp(const char* sdpText) {
 }
 
 // Hold the answer until the camera and mic have caps, webrtcbin drops a sender without them
-void waitForSenderCaps() {
-    if (!videoWebrtc) return;
+bool waitForSenderCaps() {
+    if (!videoWebrtc) return false;
+    bool cameraReady = false;
 
     // The camera is sink_0, the mic is sink_1 when audio is in the pipeline
     const char* padNames[] = {"sink_0", "sink_1"};
@@ -1130,7 +1193,7 @@ void waitForSenderCaps() {
         GstPad* sinkPad = gst_element_get_static_pad(videoWebrtc, padName);
         if (!sinkPad) continue;
 
-        // Poll for caps, a cold libcamera or a mic behind the canceller takes a moment
+        // Poll for caps, a cold camera or a mic behind the canceller takes a moment
         int waited = 0;
         GstCaps* caps = NULL;
         while (waited < SENDER_CAPS_WAIT_MS) {
@@ -1141,16 +1204,26 @@ void waitForSenderCaps() {
         }
 
         // Log that the sender is ready, or that it never produced anything
-        string sender = g_str_equal(padName, "sink_0") ? "Camera" : "Mic";
+        bool isCamera = g_str_equal(padName, "sink_0");
+        string sender = isCamera ? "Camera" : "Mic";
         if (caps) {
             cout << sender << " ready after " << waited << "ms." << endl;
             gst_caps_unref(caps);
+            if (isCamera) cameraReady = true;
         }
         else {
             logGStreamerError(sender + " produced nothing in " + to_string(SENDER_CAPS_WAIT_MS) + "ms, answering without it.");
         }
         gst_object_unref(sinkPad);
     }
+    return cameraReady;
+}
+
+// Tell the web caller the device has no picture
+void sendNoCamera() {
+    if (!videoWebSocket) return;
+    videoWebSocket->send(videoDeviceName + " NO_CAMERA");
+    cout << "No camera for this call." << endl;
 }
 
 // Pin each sender, webrtcbin otherwise answers with a codec we cannot produce
@@ -1239,6 +1312,7 @@ void sendVideoDescription(GstWebRTCSessionDescription* description) {
     string payload = encodeJson(object);
     if (videoWebSocket) videoWebSocket->send(videoDeviceName + " " + command + " " + payload);
     cout << "Sent " << command << " " << summarizeSdp(sdpText) << endl;
+    if (description->type == GST_WEBRTC_SDP_TYPE_ANSWER && !cameraSenderReady) sendNoCamera();
     json_object_unref(object);
     g_free(sdpText);
 }
@@ -1686,7 +1760,6 @@ void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer user
 
     GstWebRTCICEConnectionState state;
     g_object_get(object, "ice-connection-state", &state, NULL);
-    cout << "WebRTC connection " << videoConnectionStateName(state) << endl;
 
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED ||
         state == GST_WEBRTC_ICE_CONNECTION_STATE_COMPLETED) {

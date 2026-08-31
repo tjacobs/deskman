@@ -277,7 +277,7 @@ void logCallAudioStatus() {
 
     // Notches ride behind the canceller, so they only exist when it does
     if (!haveEchoCancel) cout << "Call feedback notches: off, they need the canceller." << endl;
-    else if (isGStreamerAudioElement("audiochebband")) cout << "Call feedback notches: " << NOTCH_COUNT << " ready, parked above hearing until a tone rings." << endl;
+    else if (isGStreamerAudioElement("audiochebband")) cout << "Call feedback notches: " << NOTCH_COUNT << " ready." << endl;
     else cout << "Call feedback notches: off, no audiochebband plugin." << endl;
 
     // Say whether a new call starts muted
@@ -459,7 +459,7 @@ string createAudioSourceString() {
 
         // Carve out every tone that starts to ring, these filters want float and only eight poles stay stable
         if (isGStreamerAudioElement("audiochebband")) {
-            cout << "Call mic feedback notches: " << NOTCH_COUNT << " in the chain, parked until a tone rings." << endl;
+            cout << "Call mic feedback notches: " << NOTCH_COUNT << " in the chain." << endl;
             process += "audioconvert ! audio/x-raw,format=F32LE,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! ";
             for (int index = 0; index < NOTCH_COUNT; index++) {
                 process += "audiochebband name=robotnotch" + to_string(index) + " mode=band-reject poles=" + to_string(NOTCH_POLES) + " ripple=" + to_string(NOTCH_RIPPLE_DB) + " lower-frequency=" + to_string(NOTCH_PARK_LOW_HZ) + " upper-frequency=" + to_string(NOTCH_PARK_HIGH_HZ) + " ! ";
@@ -506,7 +506,6 @@ void attachCallAudio(GstElement* pipeline, GMainLoop* loop) {
     // Listen at the end of the notch chain, so a tone that survives its notch still shows
     micToneTapElement = notchElements[NOTCH_COUNT - 1];
     if (!micToneTapElement) return;
-    cout << "Call audio notching feedback tones out of the mic." << endl;
     if (!toneFft) toneFft = gst_fft_f32_new(TONE_FFT_SIZE, FALSE);
     toneWindowFill = 0;
     toneStableFrames = 0;
@@ -617,10 +616,9 @@ void stopCallAudio() {
     toneWindowFill = 0;
     toneStableFrames = 0;
 
-    // Say whether feedback ever needed notching on this call
-    if (micToneTapElement) {
-        if (notchSetCount == 0) cout << "Call feedback notches: never needed on this call." << endl;
-        else cout << "Call feedback notches: set " << notchSetCount << " times on this call." << endl;
+    // Say when feedback needed notching on this call
+    if (micToneTapElement && notchSetCount > 0) {
+        cout << "Call feedback notches: set " << notchSetCount << " times on this call." << endl;
     }
 
     // Let the notches go with the pipeline that held them
