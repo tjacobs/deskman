@@ -32,6 +32,7 @@
 #include "call.h"
 #include "config.h"
 #include "interface.h"
+#include "look.h"
 #include "move.h"
 
 // Namespace
@@ -154,6 +155,7 @@ int main(int argumentCount, char** argumentValues) {
     initSignals();
     initNetSystem();
     initVideoCamera(&webSocket, deviceName);
+    initLook(&webSocket, deviceName);
 
     // Check video camera
     checkVideoCamera(cameraPath);
@@ -171,6 +173,7 @@ int main(int argumentCount, char** argumentValues) {
     resumeInterfaceAfterCall();
     stopCallInterface();
     stopInterface();
+    stopLook();
     stopMove();
     webSocket.stop();
     uninitNetSystem();
@@ -339,6 +342,7 @@ void runMainLoop() {
     while (running) {
         sendPing();
         pollInterfaceCommands();
+        pollLook();
         pollRingingCall();
         pollCallInterface();
         if (isCallOverlayIdle() && isVideoRunning()) stopVideo();

@@ -13,7 +13,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(ixwebsocket)
 
 # Create teleport executable
-add_executable(teleport src/main.cpp src/video.cpp src/audio.cpp src/interface.cpp src/call.cpp src/move.cpp src/config.cpp)
+add_executable(teleport src/main.cpp src/video.cpp src/audio.cpp src/interface.cpp src/call.cpp src/look.cpp src/move.cpp src/config.cpp)
 target_link_libraries(teleport ixwebsocket)
 target_include_directories(teleport PRIVATE include)
 
@@ -55,6 +55,13 @@ if(UNIX AND NOT APPLE)
     target_compile_definitions(teleport PRIVATE HAVE_X11_FULLSCREEN)
     target_include_directories(teleport PRIVATE ${X11_INCLUDE_DIR})
     target_link_libraries(teleport ${X11_LIBRARIES})
+
+    # Round the drag circles, XShape lives in Xext
+    if(X11_Xext_FOUND)
+      target_link_libraries(teleport ${X11_Xext_LIB})
+    else()
+      message(FATAL_ERROR "Xext not found, install libxext-dev")
+    endif()
   endif()
 endif()
 
