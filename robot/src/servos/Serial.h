@@ -83,9 +83,9 @@ public:
         // Disable hardware flow control
         options.c_cflag &= ~CRTSCTS;
 
-        // Raw input/output mode
-        options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
-        options.c_iflag &= ~(IXON | IXOFF | IXANY);
+        // Raw input/output, keep 0x0D and 0x0A as binary bytes
+        options.c_lflag &= ~(ICANON | ECHO | ECHOE | ECHONL | ISIG | IEXTEN);
+        options.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON | IXOFF | IXANY);
         options.c_oflag &= ~OPOST;
 
 #ifdef __linux__
