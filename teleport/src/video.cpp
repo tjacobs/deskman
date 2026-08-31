@@ -147,6 +147,8 @@ string createPipelineString(bool withAudio);
 string createVideoSourceString();
 string createVideoProfileString();
 string getCameraDevice();
+bool isUSBCamera(string path);
+bool isCSICamera();
 CameraFormat getCameraFormat();
 string createCameraCropString(CameraFormat cameraFormat);
 CameraFormat makeDefaultCameraFormat();
@@ -231,11 +233,8 @@ void checkVideoCamera(string cameraPath) {
 #ifdef HAVE_GSTREAMER_WEBRTC
     // Check device presence only, starting the pipeline here races libcamerasrc
     if (!initVideoBackend()) return;
-    if (isGStreamerElementAvailable("libcamerasrc")) {
-        videoCameraAvailable = true;
-        return;
-    }
     isVideoCameraAvailable();
+    if (isGStreamerElementAvailable("libcamerasrc")) videoCameraAvailable = true;
 #else
     // Log missing backend
     cout << "GStreamer WebRTC backend is not compiled in." << endl;
@@ -575,6 +574,30 @@ string createVideoSourceString() {
     string payloadType = to_string(videoPayloadType);
     string encoder = getVideoEncoderString();
 
+    // USB cameras speak MJPEG or YUYV, feed those to v4l2src
+    string cameraDevice = getCameraDevice();
+    if (isUSBCamera(cameraDevice)) {
+        CameraFormat cameraFormat = getCameraFormat();
+        string cameraCrop = createCameraCropString(cameraFormat);
+        string decoder = cameraFormat.caps == "image/jpeg" ? "jpegdec name=robotjpeg ! " : "";
+        cout << "Using USB camera " << cameraDevice << "." << endl;
+        return "v4l2src name=robotcam device=" + cameraDevice + " ! " + cameraFormat.caps + ",width=" + to_string(cameraFormat.width) + ",height=" + to_string(cameraFormat.height) + ",framerate=" + to_string(cameraFormat.framerate) + "/1 ! " + decoder + cameraCrop + "videoconvert name=robotconvert ! " + encoder + " ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + createVideoProfileString() + " ! sendrecv.";
+    }
+
+    // CSI Bayer needs the ISP, on Jetson that is Argus, skip NVMM caps so gst_parse_launch does not break
+    if (isCSICamera()) {
+        CameraFormat cameraFormat = makeDefaultCameraFormat();
+        cameraFormat.available = true;
+        cameraFormat.caps = "video/x-raw";
+        cameraFormat.name = "CSI";
+        cameraFormat.width = VIDEO_WIDTH;
+        cameraFormat.height = VIDEO_HEIGHT;
+        cameraFormat.framerate = VIDEO_FRAMERATE;
+        string cameraCrop = createCameraCropString(cameraFormat);
+        cout << "Using CSI camera sensor-id=0 at " << VIDEO_WIDTH << "x" << VIDEO_HEIGHT << "." << endl;
+        return "nvarguscamerasrc name=robotcam sensor-id=0 ! nvvidconv name=robotcsiconv ! video/x-raw,format=I420,width=" + to_string(VIDEO_WIDTH) + ",height=" + to_string(VIDEO_HEIGHT) + " ! " + cameraCrop + "videoconvert name=robotconvert ! " + encoder + " ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + createVideoProfileString() + " ! sendrecv.";
+    }
+
     // Pi cameras use libcamera; discrete V4L2 JPEG is unavailable on Pi 5
     if (isGStreamerElementAvailable("libcamerasrc")) {
         CameraFormat cameraFormat = {true, "video/x-raw", "libcamera", LIBCAMERA_WIDTH, LIBCAMERA_HEIGHT, LIBCAMERA_FRAMERATE, 0, 0, 0};
@@ -587,8 +610,7 @@ string createVideoSourceString() {
             "application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + createVideoProfileString() + " ! sendrecv.";
     }
 
-    // Use MJPEG or YUYV V4L2 camera and encode H264
-    string cameraDevice = getCameraDevice();
+    // Fall back to V4L2 with the default format
     CameraFormat cameraFormat = getCameraFormat();
     string cameraCrop = createCameraCropString(cameraFormat);
     string decoder = cameraFormat.caps == "image/jpeg" ? "jpegdec name=robotjpeg ! " : "";
@@ -604,8 +626,15 @@ string createVideoProfileString() {
 // Get camera device path
 string getCameraDevice() {
 #ifndef __APPLE__
-    // Prefer video6, then the first present /dev/videoN, when using the default camera
+    // Prefer a USB camera that already speaks MJPEG or YUYV
     if (activeCameraPath == VIDEO_DEFAULT_CAMERA_PATH) {
+        if (videoFileExists(VIDEO_PREFERRED_CAMERA_PATH) && isUSBCamera(VIDEO_PREFERRED_CAMERA_PATH)) return VIDEO_PREFERRED_CAMERA_PATH;
+        for (int index = 0; index <= VIDEO_MAX_INDEX; index++) {
+            string path = "/dev/video" + to_string(index);
+            if (videoFileExists(path) && isUSBCamera(path)) return path;
+        }
+
+        // Fall through to a CSI node when no USB camera is plugged in
         if (videoFileExists(VIDEO_PREFERRED_CAMERA_PATH)) return VIDEO_PREFERRED_CAMERA_PATH;
         for (int index = 0; index <= VIDEO_MAX_INDEX; index++) {
             string path = "/dev/video" + to_string(index);
@@ -616,6 +645,39 @@ string getCameraDevice() {
 
     // Resolve numeric camera values
     return activeCameraPath.find("/") == string::npos ? "/dev/video" + activeCameraPath : activeCameraPath;
+}
+
+// True when V4L2 already gives JPEG or YUYV, USB webcams do, CSI Bayer nodes do not
+bool isUSBCamera(string path) {
+#ifdef __linux__
+    int fileDescriptor = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+    if (fileDescriptor < 0) return false;
+    v4l2_fmtdesc pixelFormat;
+    memset(&pixelFormat, 0, sizeof(pixelFormat));
+    pixelFormat.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    bool usbFormat = false;
+    while (ioctl(fileDescriptor, VIDIOC_ENUM_FMT, &pixelFormat) == 0) {
+        if (!getCameraPixelCaps(pixelFormat.pixelformat).empty()) {
+            usbFormat = true;
+            break;
+        }
+        pixelFormat.index++;
+    }
+    close(fileDescriptor);
+    return usbFormat;
+#else
+    (void)path;
+    return false;
+#endif
+}
+
+// True when the camera is CSI Bayer and Jetson capture plugins exist
+bool isCSICamera() {
+    if (!isGStreamerElementAvailable("nvarguscamerasrc")) return false;
+    if (!isGStreamerElementAvailable("nvvidconv")) return false;
+    string cameraDevice = getCameraDevice();
+    if (!videoFileExists(cameraDevice)) return false;
+    return !isUSBCamera(cameraDevice);
 }
 
 // Get closest supported camera format
@@ -714,7 +776,7 @@ string getVideoEncoderString() {
     // Prefer Jetson hardware H264 encoding
     if (isVideoHardwareEncoderAvailable()) {
         cout << "Using hardware H264 encoder nvv4l2h264enc." << endl;
-        return "video/x-raw,format=I420 ! nvvidconv name=robotnvconvert ! video/x-raw(memory:NVMM),format=NV12 ! nvv4l2h264enc name=robotenc insert-sps-pps=true iframeinterval=30 bitrate=" + to_string(VIDEO_BITRATE * 1000) + " ! video/x-h264,stream-format=byte-stream,profile=baseline";
+        return "video/x-raw,format=I420 ! nvvidconv name=robotnvconvert ! nvv4l2h264enc name=robotenc insert-sps-pps=true iframeinterval=30 bitrate=" + to_string(VIDEO_BITRATE * 1000) + " ! video/x-h264,stream-format=byte-stream,profile=baseline";
     }
 
     // Prefer x264, then OpenH264 on boards without x264enc
