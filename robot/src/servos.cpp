@@ -66,13 +66,15 @@ const int SERVO_BROADCAST_ID = 0;
 const int SERVO_BUS_BROADCAST_ID = 254;
 const int SERVO_ID_MIN = 1;
 const int SERVO_ID_MAX = 253;
+const int SERVO_SWEEP_SCAN_MAX = 20;
 const int SERVO_POSITION_LOG_MS = 1000;
 const int SERVO_DETECT_ATTEMPTS = 2;
-const int SERVO_DETECT_TIMEOUT_MS = 100;
+const int SERVO_DETECT_TIMEOUT_MS = 50;
 const int SERVO_DETECT_GAP_MS = 20;
 const int SERVO_BAUD_SETTLE_MS = 100;
 const int SERVO_NAME_WIDTH = 4;
 const int SWEEP_LABEL_SIZE = 32;
+const int SWEEP_COMMAND_COLUMN = 14;
 
 // Skip writes and log position with --no-servos
 bool servos_enabled = true;
@@ -89,6 +91,14 @@ extern volatile bool g_quit;
 
 // Probe one servo by position reads, then a ping
 static bool detect_servo(Servo &servo);
+static Servo *known_servo(int id);
+static bool detect_or_promote_servo(Servo &servo);
+static void scan_sweep_ids();
+
+// Extra IDs found while --servos scans 1 to 20
+static Servo sweep_scan_servos[SERVO_SWEEP_SCAN_MAX];
+static char sweep_scan_names[SERVO_SWEEP_SCAN_MAX][8];
+static int sweep_scan_count = 0;
 
 // Put min below max when config.json has them reversed
 static void swap_inverted_limits(Servo &servo) {
@@ -183,7 +193,7 @@ int open_servos() {
     const char *separator = " ";
     for (Servo &servo : servos) {
         if (!servo.found) continue;
-        printf("%s%s to %d, limits %d..%d", separator, servo.name, servo.position, servo.min_limit, servo.max_limit);
+        printf("%s%s to %d", separator, servo.name, servo.position);
         separator = ", ";
     }
     printf("\n");
@@ -303,23 +313,74 @@ void move_servos() {
     }
 }
 
+// Find the named pan, tilt, or hat servo with this bus ID
+static Servo *known_servo(int id) {
+    for (Servo &servo : servos) {
+        if (servo.id == id) return &servo;
+    }
+    return NULL;
+}
+
+// Detect at 1 Mbps, then try leftover 115200 and move that servo to 1 Mbps
+static bool detect_or_promote_servo(Servo &servo) {
+    if (detect_servo(servo)) return true;
+    serial.setBaudRate(SERVO_BAUD_RATE_115200);
+    if (st.ReadPos(servo.id) == -1 && st.Ping(servo.id) == -1) {
+        serial.setBaudRate(SERVO_BAUD_RATE);
+        return false;
+    }
+    printf("Servo ID %d %-*s answered at %d baud, moving it to %d\n", servo.id, SERVO_NAME_WIDTH, servo.name, SERVO_BAUD_RATE_115200, SERVO_BAUD_RATE);
+    fflush(stdout);
+    st.unLockEprom(servo.id);
+    st.writeByte(servo.id, SMS_STS_BAUD_RATE, _1M);
+    st.LockEprom(servo.id);
+    serial.setBaudRate(SERVO_BAUD_RATE);
+    sleep_for(milliseconds(SERVO_BAUD_SETTLE_MS));
+    return detect_servo(servo);
+}
+
+// Probe IDs 1 to 20 so --servos finds more than pan, tilt, and hat
+static void scan_sweep_ids() {
+    sweep_scan_count = 0;
+    for (int id = SERVO_ID_MIN; id <= SERVO_SWEEP_SCAN_MAX; id++) {
+        Servo *known = known_servo(id);
+        if (known) {
+            if (known->found) sweep_scan_servos[sweep_scan_count++] = *known;
+            continue;
+        }
+
+        // Extra IDs use the same default travel as an unconfigured hat
+        snprintf(sweep_scan_names[id - 1], sizeof(sweep_scan_names[id - 1]), "id%d", id);
+        Servo extra = {id, sweep_scan_names[id - 1], 400, 0, 800, false};
+        extra.found = detect_or_promote_servo(extra);
+        if (!extra.found) continue;
+        extra.position = extra.min_limit + (extra.max_limit - extra.min_limit) / 2;
+        st.EnableTorque(extra.id, 1);
+        sweep_scan_servos[sweep_scan_count++] = extra;
+    }
+}
+
 // Center each motor, nudge each servo, then the same at min and max
 static void sweep_line(const char *label, Servo &servo, int position);
-static void sweep_limit(const char *label, Servo &servo, int position);
 void sweep_servos() {
     char label[SWEEP_LABEL_SIZE];
     char center_label[SWEEP_LABEL_SIZE];
+    scan_sweep_ids();
+    Servo *list = sweep_scan_count > 0 ? sweep_scan_servos : servos;
+    int count = sweep_scan_count > 0 ? sweep_scan_count : (int)(sizeof(servos) / sizeof(servos[0]));
 
     // Center one motor at a time
-    for (Servo &servo : servos) {
-        snprintf(label, sizeof(label), "center %s", servo.name);
+    for (int index = 0; index < count; index++) {
+        Servo &servo = list[index];
+        snprintf(label, sizeof(label), "%s center", servo.name);
         sweep_line(label, servo, servo.min_limit + (servo.max_limit - servo.min_limit) / 2);
     }
 
     // Nudge narrow then wide, returning to center between
     int percents[] = {sweep_nudge_percent, sweep_range_percent};
     for (int percent : percents) {
-        for (Servo &servo : servos) {
+        for (int index = 0; index < count; index++) {
+            Servo &servo = list[index];
             int center = servo.min_limit + (servo.max_limit - servo.min_limit) / 2;
             snprintf(center_label, sizeof(center_label), "%s center", servo.name);
             snprintf(label, sizeof(label), "%s %d%% min", servo.name, percent);
@@ -332,22 +393,25 @@ void sweep_servos() {
     }
 
     // Center, walk onto real limits, then park
-    for (Servo &servo : servos) {
-        snprintf(label, sizeof(label), "center %s", servo.name);
+    for (int index = 0; index < count; index++) {
+        Servo &servo = list[index];
+        snprintf(label, sizeof(label), "%s center", servo.name);
         sweep_line(label, servo, servo.min_limit + (servo.max_limit - servo.min_limit) / 2);
     }
-    for (Servo &servo : servos) {
+    for (int index = 0; index < count; index++) {
+        Servo &servo = list[index];
         int center = servo.min_limit + (servo.max_limit - servo.min_limit) / 2;
         snprintf(center_label, sizeof(center_label), "%s center", servo.name);
         snprintf(label, sizeof(label), "%s min", servo.name);
-        sweep_limit(label, servo, servo.min_limit);
+        sweep_line(label, servo, servo.min_limit);
         sweep_line(center_label, servo, center);
         snprintf(label, sizeof(label), "%s max", servo.name);
-        sweep_limit(label, servo, servo.max_limit);
+        sweep_line(label, servo, servo.max_limit);
         sweep_line(center_label, servo, center);
     }
-    for (Servo &servo : servos) {
-        snprintf(label, sizeof(label), "center %s", servo.name);
+    for (int index = 0; index < count; index++) {
+        Servo &servo = list[index];
+        snprintf(label, sizeof(label), "%s center", servo.name);
         sweep_line(label, servo, servo.min_limit + (servo.max_limit - servo.min_limit) / 2);
     }
     printf(g_quit ? "Sweep stopped\n" : "Sweep done\n");
@@ -365,7 +429,6 @@ static void sweep_line(const char *label, Servo &servo, int position) {
     if (g_quit || !servo.found) return;
 
     // Write only the motor for this step
-    int before = read_present_position(servo);
     int command = clamp_to_range(position, servo.min_limit, servo.max_limit);
     {
         lock_guard<recursive_mutex> lock(servo_mutex);
@@ -376,7 +439,7 @@ static void sweep_line(const char *label, Servo &servo, int position) {
             printf("No servos detected, not moving\n");
         }
     }
-    printf("%s  command %d  before %d  limits %d..%d\n", label, command, before, servo.min_limit, servo.max_limit);
+    printf("%-*s command %d\n", SWEEP_COMMAND_COLUMN, label, command);
     fflush(stdout);
 
     // Wait before the next line, stop on Ctrl-C
@@ -386,29 +449,15 @@ static void sweep_line(const char *label, Servo &servo, int position) {
         waited_ms += sweep_poll_ms;
     }
 
-    // Show whether the motor actually moved
+    // Only say when the motor did not get there
     int after = read_present_position(servo);
-    printf("%s  after %d\n", label, after);
-    fflush(stdout);
-}
-
-// After min or max, read where the servo actually stopped
-static void sweep_limit(const char *label, Servo &servo, int position) {
-    sweep_line(label, servo, position);
-    if (g_quit || !servo.found) return;
-
-    // Read the present position after the wait
-    int actual = -1;
-    {
-        lock_guard<recursive_mutex> lock(servo_mutex);
-        if (st.pSerial) actual = st.ReadPos(servo.id);
-    }
-
-    // Warn when the error is more than the allowed amount
-    int delta = actual - position;
+    int delta = after - command;
     if (delta < 0) delta = -delta;
-    if (actual == -1 || delta > sweep_arrival_amount) {
-        printf("%s not within %d, commanded %d got %d\n", label, sweep_arrival_amount, position, actual);
+    if (after == -1) {
+        printf("%s failed, commanded %d, no position reply\n", label, command);
+        fflush(stdout);
+    } else if (delta > sweep_arrival_amount) {
+        printf("%s failed, commanded %d got %d\n", label, command, after);
         fflush(stdout);
     }
 }

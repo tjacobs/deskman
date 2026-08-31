@@ -207,7 +207,7 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             cout << "Options:" << endl;
             cout << "  --no-talk            Do not spawn talk.py" << endl;
             cout << "  --cold               Skip talk.py text model warm-up" << endl;
-            cout << "  --servos             Sweep servos around center a bit, then exit" << endl;
+            cout << "  --servos             Sweep servos around center, scan IDs 1 to 20, then exit" << endl;
             cout << "  --servos-print       Relax servos and print positions every second, then exit" << endl;
             cout << "  --no-servos          Relax servos, print positions every second, run without moving them" << endl;
             cout << "  --id OLD NEW         Set a servo ID, OLD is 0 to address every servo on the bus" << endl;
