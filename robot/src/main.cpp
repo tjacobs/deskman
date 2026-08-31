@@ -188,6 +188,9 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             sweep_only = true;
         } else if (arg == "--no-servos") {
             no_servos = true;
+            g_no_talk = true;
+            use_camera = false;
+            show_camera = false;
         } else if (arg == "--servos-print") {
             print_servos = true;
         } else if (arg == "--id") {
@@ -209,7 +212,7 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             cout << "  --cold               Skip talk.py text model warm-up" << endl;
             cout << "  --servos             Sweep servos around center, scan IDs 1 to 20, then exit" << endl;
             cout << "  --servos-print       Relax servos and print positions every second, then exit" << endl;
-            cout << "  --no-servos          Relax servos, print positions every second, run without moving them" << endl;
+            cout << "  --no-servos          Relax servos, print positions every second, no talk.py, no camera, no face tracking" << endl;
             cout << "  --id OLD NEW         Set a servo ID, OLD is 0 to address every servo on the bus" << endl;
             cout << "  --camera             Show face-tracking video feed on the display" << endl;
             cout << "  --no-camera          Do not open a camera, face tracking off" << endl;
