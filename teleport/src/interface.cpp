@@ -67,6 +67,11 @@ bool isInterfaceConnected() {
     return clientSocketFd >= 0;
 }
 
+// Ask the robot process to exit
+void quitRobot() {
+    writeInterfaceLine("{\"command\":\"quit\"}");
+}
+
 static void logError(const string& message) {
     if (isatty(STDERR_FILENO)) {
         cerr << "\033[1;31m*** ERROR *** : " << message << "\033[0m" << endl;

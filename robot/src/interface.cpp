@@ -4,6 +4,9 @@
 #include "servos.h"
 #include "battery.h"
 
+// Main quit flag, set by Ctrl-C and the Exit button
+extern volatile bool g_quit;
+
 #include "json.hpp"
 
 #include <algorithm>
@@ -150,6 +153,9 @@ static string handle_request(const string& line) {
             reply = {{"ok", true}};
         } else if (command == "battery") {
             reply = {{"ok", true}, {"voltage", battery_voltage()}, {"percent", battery_percent()}, {"current", battery_current()}};
+        } else if (command == "quit") {
+            g_quit = true;
+            reply = {{"ok", true}};
         } else {
             reply = {{"ok", false}, {"error", "unknown command"}};
         }

@@ -70,6 +70,7 @@ static Window overlayXWindow = 0;
 static Window cameraXWindow = 0;
 #endif
 static SDL_Rect backButton;
+static SDL_Rect exitButton;
 static SDL_Rect hangupButton;
 static SDL_Rect muteButton;
 static SDL_Rect acceptButton;
@@ -502,6 +503,7 @@ static void layoutButtons() {
     if (shownView == CALL_INTERFACE_IN_CALL) height = HANGUP_STRIP_HEIGHT;
     else if (shownView == CALL_INTERFACE_INCOMING) height = incomingStripHeight();
     backButton = {20, 20, windowWidth - 40, CALL_BUTTON_HEIGHT};
+    exitButton = {20, windowHeight - 20 - CALL_BUTTON_HEIGHT, windowWidth - 40, CALL_BUTTON_HEIGHT};
 
     // In-call bar, Unmute or Mute on the left, Hang up on the right
     int muteWidth = windowWidth / 2;
@@ -557,7 +559,8 @@ static void drawOverlay() {
             drawButton(peerButtons[index], peers[index], blue, white);
         }
         if (peers.empty()) drawLabel(status.empty() ? "No peers online" : status.c_str(), 30, 20 + CALL_BUTTON_HEIGHT + 20, black);
-        else if (!status.empty()) drawLabel(status.c_str(), 30, windowHeight - 60, black);
+        else if (!status.empty()) drawLabel(status.c_str(), 30, exitButton.y - 40, black);
+        drawButton(exitButton, "Exit", red, white);
     } else if (view == CALL_INTERFACE_INCOMING) {
         string title = incomingCallTitle(incoming);
         drawButton(acceptButton, title, green, white);
@@ -704,6 +707,10 @@ static void handleTap(int x, int y) {
     }
     if (view == CALL_INTERFACE_DIRECTORY && hitRect(backButton, x, y)) {
         showCallIdle();
+        return;
+    }
+    if (view == CALL_INTERFACE_DIRECTORY && hitRect(exitButton, x, y)) {
+        queueAction("exit", "");
         return;
     }
     if (view == CALL_INTERFACE_DIRECTORY) {

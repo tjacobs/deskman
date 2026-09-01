@@ -31,7 +31,8 @@ main() {
     disable_software_updater
     configure_session
     disable_screen_idle
-    disable_screen_keyboard
+    enable_screen_keyboard
+    enable_service_shortcuts
     fix_mdns_name
     echo "Done."
 }
@@ -226,11 +227,16 @@ configure_session() {
     run_as_user gsettings set org.gnome.software download-updates false
     run_as_user gsettings set org.gnome.software download-updates-notify false
 
-    # Hide home, trash, and volume icons on the desktop
+    # Hide home, trash, and volume icons on the desktop and dock
     run_as_user gsettings set org.gnome.shell.extensions.ding show-home false || true
     run_as_user gsettings set org.gnome.shell.extensions.ding show-trash false || true
     run_as_user gsettings set org.gnome.shell.extensions.ding show-volumes false || true
     run_as_user gsettings set org.gnome.shell.extensions.ding show-network-volumes false || true
+    run_as_user gsettings set org.gnome.shell.extensions.dash-to-dock show-trash false || true
+
+    # Show our .desktop launchers, ding was left disabled
+    run_as_user gsettings set org.gnome.shell disabled-extensions "[]" || true
+    run_as_user gsettings set org.gnome.shell enabled-extensions "['ding@rastersoft.com']" || true
     confirm_rm "${RUN_HOME}/Desktop/"*.desktop
     remove_extra_home_folders
 }
@@ -255,22 +261,83 @@ EOF
     chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/user-dirs.conf" "${RUN_HOME}/.config/user-dirs.dirs"
 }
 
-# Keep the on-screen keyboard from popping over the robot face
-disable_screen_keyboard() {
-    echo "Disabling the on-screen keyboard"
+# Let the GNOME and onboard keyboards show again
+enable_screen_keyboard() {
+    echo "Enabling the on-screen keyboard"
 
-    # Turn off the GNOME accessibility keyboard
-    run_as_user gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false
-    run_as_user gsettings set org.gnome.desktop.interface gtk-im-module '' || true
+    # Turn on the GNOME accessibility keyboard
+    run_as_user gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
+    run_as_user gsettings reset org.gnome.desktop.interface gtk-im-module || true
 
-    # Stop onboard from showing itself on text focus
-    run_as_user gsettings set org.onboard.auto-show enabled false || true
-    run_as_user gsettings set org.onboard.auto-show tablet-mode-detection-enabled false || true
-    run_as_user gsettings set org.onboard start-minimized true || true
+    # Let onboard show itself on text focus
+    run_as_user gsettings set org.onboard.auto-show enabled true || true
+    run_as_user gsettings set org.onboard.auto-show tablet-mode-detection-enabled true || true
+    run_as_user gsettings set org.onboard start-minimized false || true
 
-    # Hide the onboard autostart entry and close it if it is up
-    hide_autostart onboard-autostart.desktop
-    pkill -u "${RUN_USER}" -x onboard || true
+    # Drop the hidden autostart override so the system entry runs
+    rm -f "${RUN_HOME}/.config/autostart/onboard-autostart.desktop"
+}
+
+# Desktop icons to start robot.service and teleport.service without a password
+enable_service_shortcuts() {
+    echo "Adding Start Robot and Start Teleport desktop shortcuts"
+
+    # Allow this user to start those two units from the icons
+    sudoers_file="/etc/sudoers.d/deskman-services"
+    printf '%s\n' "${RUN_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start robot.service, /usr/bin/systemctl start teleport.service" > "${sudoers_file}"
+    chmod 0440 "${sudoers_file}"
+
+    # Place the launchers after the desktop wipe above
+    mkdir -p "${RUN_HOME}/Desktop"
+    install_robot_eyes_icon
+    write_service_shortcut "Start Robot" robot "${RUN_HOME}/.local/share/icons/deskman-robot.svg"
+    write_service_shortcut "Start Teleport" teleport camera-web
+}
+
+# White face with two black eyes, same look as the robot window
+install_robot_eyes_icon() {
+    icon_dir="${RUN_HOME}/.local/share/icons"
+    icon_file="${icon_dir}/deskman-robot.svg"
+    mkdir -p "${icon_dir}"
+
+    # Copy from the repo when present, else write the drawing here
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    source_icon="${script_dir}/icons/robot-eyes.svg"
+    if [[ -f "${source_icon}" ]]; then
+        cp "${source_icon}" "${icon_file}"
+    else
+        cat > "${icon_file}" <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="16" fill="#ffffff"/>
+  <ellipse cx="44" cy="64" rx="14" ry="32" fill="#000000"/>
+  <ellipse cx="84" cy="64" rx="14" ry="32" fill="#000000"/>
+</svg>
+EOF
+    fi
+    chown "${RUN_USER}:${RUN_USER}" "${icon_file}"
+}
+
+# One desktop launcher that starts a systemd unit
+write_service_shortcut() {
+    launcher_name="$1"
+    service_name="$2"
+    icon_name="$3"
+    desktop_file="${RUN_HOME}/Desktop/${service_name}.desktop"
+
+    # Write a trusted launcher the desktop will run on tap
+    cat > "${desktop_file}" <<EOF
+[Desktop Entry]
+Type=Application
+Name=${launcher_name}
+Comment=Start ${service_name}.service
+Exec=sudo -n /usr/bin/systemctl start ${service_name}.service
+Icon=${icon_name}
+Terminal=false
+Categories=Utility;
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${desktop_file}"
+    chmod 0755 "${desktop_file}"
+    run_as_user gio set "${desktop_file}" metadata::trusted true || true
 }
 
 # Keep the display on and skip the lock screen

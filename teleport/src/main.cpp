@@ -578,6 +578,9 @@ void pollInterfaceCommands() {
         cancelIncomingCall();
         webSocket.send(deviceName + " VIDEO_STOP");
         showCallIdle();
+    } else if (command == "exit") {
+        quitRobot();
+        showCallIdle();
     }
 }
 
