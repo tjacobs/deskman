@@ -310,7 +310,7 @@ EOF
     chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/disable-screen-blank.desktop"
 }
 
-# Publish this machine as hostname.local, Avahi renames itself when it starts before the network
+# Publish this machine as hostname.local, Avahi renames itself when IPv6 addresses come and go
 fix_mdns_name() {
     host_name="$(cat /etc/hostname)"
     echo "Publishing mDNS name ${host_name}.local"
@@ -323,9 +323,10 @@ fix_mdns_name() {
     # Claim the name from the hostname, not from a leftover announcement
     set_avahi_option host-name "${host_name}"
 
-    # Skip IPv6, Avahi drops the link-local address once a global one arrives and calls that a conflict
+    # Skip IPv6 sockets, Avahi still publishes AAAA on IPv4 unless this is off too
     set_avahi_option use-ipv4 yes
     set_avahi_option use-ipv6 no
+    set_avahi_option publish-aaaa-on-ipv4 no
 
     # Watch only the real network ports, docker and the USB gadget bridge churn addresses and trip the same race
     set_avahi_option allow-interfaces "${AVAHI_ALLOW_INTERFACES}"
