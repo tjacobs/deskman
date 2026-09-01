@@ -22,6 +22,7 @@ extern mutex statusMutex;
 bool create_window();
 bool close_window();
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
+void draw_boxed_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color, SDL_Color box_color);
 void setStatus(const string& status);
 
 #endif

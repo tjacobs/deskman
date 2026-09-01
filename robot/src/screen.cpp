@@ -152,6 +152,24 @@ void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color) 
     }
 }
 
+// Grey bar across the bottom, then the text inset inside it
+void draw_boxed_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color, SDL_Color box_color) {
+    if (!text || !font) return;
+
+    // Fill the whole bottom strip
+    SDL_Rect box = {0, y, screen_width, screen_height - y};
+    SDL_SetRenderDrawColor(renderer, box_color.r, box_color.g, box_color.b, box_color.a);
+    SDL_RenderFillRect(renderer, &box);
+    SDL_SetRenderDrawColor(renderer, 120, 120, 120, 255);
+    SDL_RenderDrawRect(renderer, &box);
+
+    // Center the label vertically in the bar
+    int text_width = 0;
+    int text_height = 0;
+    if (TTF_SizeText(font, text, &text_width, &text_height) != 0) return;
+    draw_text(text, x, y + (box.h - text_height) / 2, font, color);
+}
+
 void draw_coordinate_text(Face* face) {
     // Draw coordinate text
     char coordText[100];

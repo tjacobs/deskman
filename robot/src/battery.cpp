@@ -47,6 +47,11 @@ static const int BATTERY_CELL_COUNT = 3;
 static const float BATTERY_VOLTAGE_EMPTY = 9.0f;
 static const float BATTERY_VOLTAGE_FULL = 12.6f;
 
+// 24V pack when the reading is above this, 0% at 19V and 100% at 25V
+static const float BATTERY_VOLTAGE_24V_DETECT = 15.0f;
+static const float BATTERY_VOLTAGE_24V_EMPTY = 19.0f;
+static const float BATTERY_VOLTAGE_24V_FULL = 25.0f;
+
 // S-curve, 50% near 3.84V/cell on that empty to full span
 static const float BATTERY_CURVE_STEEPNESS = 8.0f;
 static const float BATTERY_CURVE_MID = 0.70f;
@@ -140,7 +145,7 @@ static void update_battery_reading() {
 
     // Face label
     char line[48];
-    snprintf(line, sizeof(line), "%.1f V  %d%%  %.2f A", battery_voltage_value, battery_percent_value, battery_current_value);
+    snprintf(line, sizeof(line), "Battery %d%%, %.1f V, %.2f A", battery_percent_value, battery_voltage_value, battery_current_value);
     battery_label = line;
 
     // Log once
@@ -243,6 +248,17 @@ static float read_shunt_amps() {
 
 // LiPo S-curve from empty to full, 0% and 100% land on those voltages
 static int percent_from_voltage(float packVolts) {
+    // 24V pack is linear from 19V to 25V
+    if (packVolts > BATTERY_VOLTAGE_24V_DETECT) {
+        if (packVolts <= BATTERY_VOLTAGE_24V_EMPTY) return 0;
+        if (packVolts >= BATTERY_VOLTAGE_24V_FULL) return 100;
+        float span = BATTERY_VOLTAGE_24V_FULL - BATTERY_VOLTAGE_24V_EMPTY;
+        int percent = (int)(100.0f * (packVolts - BATTERY_VOLTAGE_24V_EMPTY) / span + 0.5f);
+        if (percent < 0) percent = 0;
+        if (percent > 100) percent = 100;
+        return percent;
+    }
+
     // Hard stop at empty and full pack volts
     if (packVolts <= BATTERY_VOLTAGE_EMPTY) return 0;
     if (packVolts >= BATTERY_VOLTAGE_FULL) return 100;

@@ -299,7 +299,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
 
             // Pack voltage from the INA219
             string battery = battery_text();
-            if (!battery.empty()) draw_text(battery.c_str(), 10, screen_height - 40, face.font, {0, 0, 0, 255});
+            if (!battery.empty()) draw_boxed_text(battery.c_str(), 10, screen_height - 48, face.font, {0, 0, 0, 255}, {180, 180, 180, 255});
 
             if (use_camera && faceTracker.isCameraAvailable()) faceTracker.updateWindow();
 
