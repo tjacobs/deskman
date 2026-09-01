@@ -81,7 +81,7 @@ bool servos_enabled = true;
 static atomic<bool> servo_position_log_running{false};
 static thread servo_position_log_thread;
 
-// Serial port, Jetson ttyTHS1 or Pi ttyAMA0
+// Serial port, USB adapter or onboard UART
 string port_name = servo_port_name();
 SerialPort serial(port_name);
 SMS_STS st;
@@ -91,6 +91,8 @@ extern volatile bool g_quit;
 
 // Probe one servo by position reads, then a ping
 static bool detect_servo(Servo &servo);
+static void probe_known_servos();
+static bool open_first_servo_port();
 static Servo *known_servo(int id);
 static bool detect_or_promote_servo(Servo &servo);
 static void scan_sweep_ids();
@@ -110,6 +112,60 @@ static void swap_inverted_limits(Servo &servo) {
     servo.max_limit = high;
 }
 
+// Detect pan, tilt, and hat at 1 Mbps, then promote leftover 115200 motors
+static void probe_known_servos() {
+    // Find each servo at 1 Mbps
+    for (Servo &servo : servos)
+        servo.found = detect_servo(servo);
+
+    // Promote leftover 115200 servos to 1 Mbps
+    bool missing = false;
+    for (Servo &servo : servos) {
+        if (!servo.found) missing = true;
+    }
+    if (!missing) return;
+
+    // Probe leftover servos at 115200
+    serial.setBaudRate(SERVO_BAUD_RATE_115200);
+    bool promoted = false;
+    for (Servo &servo : servos) {
+        if (servo.found) continue;
+        if (st.ReadPos(servo.id) == -1 && st.Ping(servo.id) == -1) continue;
+        printf("Servo ID %d %-*s answered at %d baud, moving it to %d\n", servo.id, SERVO_NAME_WIDTH, servo.name, SERVO_BAUD_RATE_115200, SERVO_BAUD_RATE);
+        fflush(stdout);
+        st.unLockEprom(servo.id);
+        st.writeByte(servo.id, SMS_STS_BAUD_RATE, _1M);
+        st.LockEprom(servo.id);
+        promoted = true;
+    }
+    serial.setBaudRate(SERVO_BAUD_RATE);
+    sleep_for(milliseconds(SERVO_BAUD_SETTLE_MS));
+    if (!promoted) return;
+    for (Servo &servo : servos) {
+        if (!servo.found) servo.found = detect_servo(servo);
+    }
+}
+
+// Open the first USB or onboard port that exists
+static bool open_first_servo_port() {
+    if (serial.isOpen()) {
+        st.pSerial = &serial;
+        return true;
+    }
+    for (int index = 0; index < SERVO_PORT_CANDIDATE_COUNT; index++) {
+        const char *path = SERVO_PORT_CANDIDATES[index];
+        if (access(path, F_OK) != 0) continue;
+        serial.setPort(path);
+        port_name = path;
+        if (!serial.openPort()) continue;
+        st.pSerial = &serial;
+        serial.setBaudRate(SERVO_BAUD_RATE);
+        st.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
+        return true;
+    }
+    return false;
+}
+
 int open_servos() {
     // Load servo travel limits from config.json
     AppConfig config = loadConfig();
@@ -126,48 +182,33 @@ int open_servos() {
     servos[1].position = servos[1].min_limit + (servos[1].max_limit - servos[1].min_limit) / 2;
     servos[2].position = servos[2].min_limit;
 
-    // Open the bus
-    if (!serial.openPort()) return 1;
-    st.pSerial = &serial;
-    if (!serial.setBaudRate(SERVO_BAUD_RATE)) return 1;
+    // Try USB first, then the onboard UART, keep the first bus that answers
     st.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
-    printf("Servo bus %d baud on %s\n", SERVO_BAUD_RATE, port_name.c_str());
-
-    // Find each servo at 1 Mbps
-    for (Servo &servo : servos)
-        servo.found = detect_servo(servo);
-
-    // Promote leftover 115200 servos to 1 Mbps
-    bool missing = false;
-    for (Servo &servo : servos) {
-        if (!servo.found) missing = true;
-    }
-    if (missing) {
-        // Probe leftover servos at 115200
-        serial.setBaudRate(SERVO_BAUD_RATE_115200);
-        bool promoted = false;
-
-        // Write 1 Mbps into EEPROM when a silent servo answers
+    bool opened = false;
+    for (int index = 0; index < SERVO_PORT_CANDIDATE_COUNT; index++) {
+        const char *path = SERVO_PORT_CANDIDATES[index];
+        if (access(path, F_OK) != 0) continue;
+        serial.setPort(path);
+        port_name = path;
+        if (!serial.openPort()) continue;
+        st.pSerial = &serial;
+        if (!serial.setBaudRate(SERVO_BAUD_RATE)) {
+            serial.closePort();
+            continue;
+        }
+        opened = true;
+        printf("Servo bus %d baud on %s\n", SERVO_BAUD_RATE, port_name.c_str());
+        fflush(stdout);
+        probe_known_servos();
+        int answered = 0;
         for (Servo &servo : servos) {
-            if (servo.found) continue;
-            if (st.ReadPos(servo.id) == -1 && st.Ping(servo.id) == -1) continue;
-            printf("Servo ID %d %-*s answered at %d baud, moving it to %d\n", servo.id, SERVO_NAME_WIDTH, servo.name, SERVO_BAUD_RATE_115200, SERVO_BAUD_RATE);
-            fflush(stdout);
-            st.unLockEprom(servo.id);
-            st.writeByte(servo.id, SMS_STS_BAUD_RATE, _1M);
-            st.LockEprom(servo.id);
-            promoted = true;
+            if (servo.found) answered++;
         }
-
-        // Restore 1 Mbps and detect again
-        serial.setBaudRate(SERVO_BAUD_RATE);
-        sleep_for(milliseconds(SERVO_BAUD_SETTLE_MS));
-        if (promoted) {
-            for (Servo &servo : servos) {
-                if (!servo.found) servo.found = detect_servo(servo);
-            }
-        }
+        if (answered > 0) break;
+        serial.closePort();
+        st.pSerial = NULL;
     }
+    if (!opened) return 1;
 
     // Name silent servos once, then fail only when none answered
     int found = 0;
@@ -228,14 +269,11 @@ int relax_servos() {
     if (!servos_enabled) return 0;
     servos_enabled = false;
 
-    // Open the bus
-    if (!serial.openPort()) {
-        printf("Servos disabled, could not open %s to relax\n", port_name.c_str());
+    // Open USB or the onboard UART
+    if (!open_first_servo_port()) {
+        printf("Servos disabled, could not open a servo port to relax\n");
         return 0;
     }
-    st.pSerial = &serial;
-    serial.setBaudRate(SERVO_BAUD_RATE);
-    st.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
 
     // Relax every servo on the bus, then the known IDs
     st.EnableTorque(SERVO_BUS_BROADCAST_ID, 0);
@@ -605,9 +643,28 @@ int set_servo_id(int old_id, int new_id) {
         return 1;
     }
 
-    // Open serial without requiring the usual pan/tilt IDs
-    if (!serial.openPort()) return 1;
-    st.pSerial = &serial;
+    // Open USB first, then onboard, until this ID answers
+    st.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
+    bool opened = false;
+    for (int index = 0; index < SERVO_PORT_CANDIDATE_COUNT; index++) {
+        const char *path = SERVO_PORT_CANDIDATES[index];
+        if (access(path, F_OK) != 0) continue;
+        serial.setPort(path);
+        port_name = path;
+        if (!serial.openPort()) continue;
+        st.pSerial = &serial;
+        serial.setBaudRate(SERVO_BAUD_RATE);
+        if (old_id == SERVO_BROADCAST_ID || st.ReadPos(old_id) != -1 || st.Ping(old_id) != -1) {
+            opened = true;
+            break;
+        }
+        serial.closePort();
+        st.pSerial = NULL;
+    }
+    if (!opened) {
+        printf("Error: Could not open a servo port for ID %d\n", old_id);
+        return 1;
+    }
 
     // Feetech broadcast on the wire is 254
     int bus_id = old_id;

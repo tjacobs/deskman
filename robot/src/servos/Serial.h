@@ -16,18 +16,29 @@
 #endif
 using namespace std;
 
-// Jetson 40-pin UART, else Pi GPIO UART
 // Servo bus baud, 1 Mbps is Feetech SMS/STS index 0, 115200 is index 4
 const int SERVO_BAUD_RATE_1M = 1000000;
 const int SERVO_BAUD_RATE_115200 = 115200;
 const int SERVO_BAUD_RATE = SERVO_BAUD_RATE_1M;
+
+// USB adapter first, then Jetson 40-pin UART, then Pi GPIO UART
+constexpr const char *SERVO_PORT_CANDIDATES[] = {
+    "/dev/ttyUSB0",
+    "/dev/ttyUSB1",
+    "/dev/ttyUSB2",
+    "/dev/ttyACM0",
+    "/dev/ttyACM1",
+    "/dev/ttyTHS1",
+    "/dev/ttyAMA0",
+};
+constexpr int SERVO_PORT_CANDIDATE_COUNT = sizeof(SERVO_PORT_CANDIDATES) / sizeof(SERVO_PORT_CANDIDATES[0]);
 constexpr char SERVO_PORT_JETSON[] = "/dev/ttyTHS1";
 constexpr char SERVO_PORT_PI[] = "/dev/ttyAMA0";
 
-// Pick the servo UART for this board
+// First port that exists, USB before the onboard UART
 inline string servo_port_name() {
-    if (access(SERVO_PORT_JETSON, F_OK) == 0) {
-        return SERVO_PORT_JETSON;
+    for (int index = 0; index < SERVO_PORT_CANDIDATE_COUNT; index++) {
+        if (access(SERVO_PORT_CANDIDATES[index], F_OK) == 0) return SERVO_PORT_CANDIDATES[index];
     }
     return SERVO_PORT_PI;
 }
@@ -100,6 +111,23 @@ public:
     }
 
     // Change UART speed on an open port
+    // Close so a later open can use another device
+    void closePort() {
+        if (serial_fd == -1) return;
+        close(serial_fd);
+        serial_fd = -1;
+    }
+
+    // Use this device on the next open
+    void setPort(const string &port) {
+        closePort();
+        port_name = port;
+    }
+
+    bool isOpen() {
+        return serial_fd != -1;
+    }
+
     bool setBaudRate(int baud_rate) {
         if (serial_fd == -1) return false;
         if (!configurePort(serial_fd, baud_rate)) return false;
