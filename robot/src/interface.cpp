@@ -3,6 +3,7 @@
 #include "interface.h"
 #include "servos.h"
 #include "battery.h"
+#include "screen.h"
 
 // Main quit flag, set by Ctrl-C and the Exit button
 extern volatile bool g_quit;
@@ -37,6 +38,7 @@ const int CALL_MENU_TAP_DEBOUNCE_MS = 300;
 static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 
 static atomic<bool> g_interface_running{false};
+static atomic<bool> g_overlay_open{false};
 static int g_listen_fd = -1;
 static thread g_interface_thread;
 static string g_socket_path;
@@ -154,7 +156,11 @@ static string handle_request(const string& line) {
         } else if (command == "battery") {
             reply = {{"ok", true}, {"voltage", battery_voltage()}, {"percent", battery_percent()}, {"current", battery_current()}};
         } else if (command == "quit") {
+            send_to_clients(json{{"command", "quit"}}.dump());
             g_quit = true;
+            reply = {{"ok", true}};
+        } else if (command == "overlay") {
+            g_overlay_open = request.value("open", false);
             reply = {{"ok", true}};
         } else {
             reply = {{"ok", false}, {"error", "unknown command"}};
@@ -188,18 +194,36 @@ static void send_menu() {
     auto now = steady_clock::now();
     if (g_last_menu_tap.time_since_epoch().count() != 0 && duration_cast<milliseconds>(now - g_last_menu_tap).count() < CALL_MENU_TAP_DEBOUNCE_MS) return;
     g_last_menu_tap = now;
+    g_overlay_open = !g_overlay_open.load();
     send_to_clients(json{{"command", "menu"}}.dump());
 }
 
+// True while Exit is showing on the bottom bar
+bool call_overlay_open() {
+    return g_overlay_open.load();
+}
+
 void handle_call_event(const SDL_Event& event) {
+    int x = 0;
+    int y = 0;
     bool tap = false;
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
         if (event.button.which == SDL_TOUCH_MOUSEID) return;
         tap = true;
+        x = event.button.x;
+        y = event.button.y;
     } else if (event.type == SDL_FINGERDOWN) {
         tap = true;
+        x = (int)(event.tfinger.x * screen_width);
+        y = (int)(event.tfinger.y * screen_height);
     }
-    if (tap) send_menu();
+    if (!tap) return;
+    if (g_overlay_open.load() && tap_is_exit(x, y)) {
+        send_to_clients(json{{"command", "quit"}}.dump());
+        g_quit = true;
+        return;
+    }
+    send_menu();
 }
 
 static void serve_client(int client_fd) {

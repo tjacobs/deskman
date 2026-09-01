@@ -22,7 +22,8 @@ extern mutex statusMutex;
 bool create_window();
 bool close_window();
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
-void draw_boxed_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color, SDL_Color box_color);
+void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit);
+bool tap_is_exit(int x, int y);
 void setStatus(const string& status);
 
 #endif

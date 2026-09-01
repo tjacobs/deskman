@@ -67,9 +67,10 @@ bool isInterfaceConnected() {
     return clientSocketFd >= 0;
 }
 
-// Ask the robot process to exit
-void quitRobot() {
-    writeInterfaceLine("{\"command\":\"quit\"}");
+// Tell robot the peer list is up or down, so it can show Exit
+void setRobotOverlayOpen(bool open) {
+    string line = open ? "{\"command\":\"overlay\",\"open\":true}" : "{\"command\":\"overlay\",\"open\":false}";
+    writeInterfaceLine(line);
 }
 
 static void logError(const string& message) {

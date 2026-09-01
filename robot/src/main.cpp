@@ -297,9 +297,8 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             string temperature_warning = temperature_warning_text();
             if (!temperature_warning.empty()) draw_text(temperature_warning.c_str(), 10, 90, face.font, {200, 0, 0, 255});
 
-            // Pack voltage from the INA219
-            string battery = battery_text();
-            if (!battery.empty()) draw_boxed_text(battery.c_str(), 10, screen_height - 48, face.font, {0, 0, 0, 255}, {180, 180, 180, 255});
+            // Pack voltage and Exit on the bottom bar
+            draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
 
             if (use_camera && faceTracker.isCameraAvailable()) faceTracker.updateWindow();
 

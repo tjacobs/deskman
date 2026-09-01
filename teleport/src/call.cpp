@@ -5,6 +5,7 @@
 #include "call.h"
 #include "audio.h"
 #include "video.h"
+#include "interface.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -26,6 +27,7 @@ using namespace std;
 const int CALL_BUTTON_HEIGHT = 88;
 const int CALL_ROW_HEIGHT = 80;
 const int HANGUP_STRIP_HEIGHT = 96;
+const int DIRECTORY_BOTTOM_GAP = 96;
 const int CAMERA_ICON_WIDTH = 78;
 const int CAMERA_ICON_HEIGHT = 58;
 const int CAMERA_ICON_PAD = 16;
@@ -70,7 +72,6 @@ static Window overlayXWindow = 0;
 static Window cameraXWindow = 0;
 #endif
 static SDL_Rect backButton;
-static SDL_Rect exitButton;
 static SDL_Rect hangupButton;
 static SDL_Rect muteButton;
 static SDL_Rect acceptButton;
@@ -80,7 +81,7 @@ static vector<SDL_Rect> peerButtons;
 static void applyRequestedView();
 static void readDisplaySize();
 static bool ensureOverlayWindow();
-static void mapOverlay(int y, int height);
+static void mapOverlay(int y, int height, bool grabPointer);
 static void unmapOverlay();
 static void destroyOverlayWindow();
 static bool ensureCameraWindow();
@@ -238,6 +239,7 @@ static void applyRequestedView() {
         unmapCameraIcon();
         unmapOverlay();
         shownView = CALL_INTERFACE_IDLE;
+        setRobotOverlayOpen(false);
         return;
     }
     if (view == shownView && overlayMapped) return;
@@ -251,12 +253,17 @@ static void applyRequestedView() {
     } else if (view == CALL_INTERFACE_INCOMING) {
         height = incomingStripHeight();
         y = windowHeight - height;
+    } else if (view == CALL_INTERFACE_DIRECTORY) {
+        height = windowHeight - DIRECTORY_BOTTOM_GAP;
+        if (height < CALL_BUTTON_HEIGHT + 40) height = CALL_BUTTON_HEIGHT + 40;
+        y = 0;
     }
-    mapOverlay(y, height);
+    mapOverlay(y, height, view != CALL_INTERFACE_DIRECTORY);
     if (view == CALL_INTERFACE_IN_CALL) mapCameraIcon();
     else unmapCameraIcon();
     shownView = view;
     layoutButtons();
+    setRobotOverlayOpen(view == CALL_INTERFACE_DIRECTORY);
 }
 
 #ifdef __linux__
@@ -329,7 +336,7 @@ static bool ensureOverlayWindow() {
     return true;
 }
 
-static void mapOverlay(int y, int height) {
+static void mapOverlay(int y, int height, bool grabPointer) {
 #ifdef __linux__
     if (overlayDisplay && overlayXWindow) {
         // Match SDL to the strip first, it drags the window back to the position it last saw
@@ -338,7 +345,11 @@ static void mapOverlay(int y, int height) {
         // Place the strip last, so X has the final say on where it sits
         XMoveResizeWindow(overlayDisplay, overlayXWindow, 0, y, windowWidth, height);
         XMapRaised(overlayDisplay, overlayXWindow);
-        XGrabPointer(overlayDisplay, overlayXWindow, True, ButtonPressMask | ButtonReleaseMask, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
+        if (grabPointer) {
+            XGrabPointer(overlayDisplay, overlayXWindow, True, ButtonPressMask | ButtonReleaseMask, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
+        } else {
+            XUngrabPointer(overlayDisplay, CurrentTime);
+        }
         XFlush(overlayDisplay);
         overlayMapped = true;
         return;
@@ -502,8 +513,8 @@ static void layoutButtons() {
     int height = windowHeight;
     if (shownView == CALL_INTERFACE_IN_CALL) height = HANGUP_STRIP_HEIGHT;
     else if (shownView == CALL_INTERFACE_INCOMING) height = incomingStripHeight();
+    else if (shownView == CALL_INTERFACE_DIRECTORY) height = windowHeight - DIRECTORY_BOTTOM_GAP;
     backButton = {20, 20, windowWidth - 40, CALL_BUTTON_HEIGHT};
-    exitButton = {20, windowHeight - 20 - CALL_BUTTON_HEIGHT, windowWidth - 40, CALL_BUTTON_HEIGHT};
 
     // In-call bar, Unmute or Mute on the left, Hang up on the right
     int muteWidth = windowWidth / 2;
@@ -558,9 +569,8 @@ static void drawOverlay() {
         for (size_t index = 0; index < peers.size() && index < peerButtons.size(); index++) {
             drawButton(peerButtons[index], peers[index], blue, white);
         }
-        if (peers.empty()) drawLabel(status.empty() ? "No peers online" : status.c_str(), 30, 20 + CALL_BUTTON_HEIGHT + 20, black);
-        else if (!status.empty()) drawLabel(status.c_str(), 30, exitButton.y - 40, black);
-        drawButton(exitButton, "Exit", red, white);
+        if (peers.empty() && !status.empty()) drawLabel(status.c_str(), 30, 20 + CALL_BUTTON_HEIGHT + 20, black);
+        else if (!status.empty()) drawLabel(status.c_str(), 30, windowHeight - DIRECTORY_BOTTOM_GAP - 40, black);
     } else if (view == CALL_INTERFACE_INCOMING) {
         string title = incomingCallTitle(incoming);
         drawButton(acceptButton, title, green, white);
@@ -707,10 +717,6 @@ static void handleTap(int x, int y) {
     }
     if (view == CALL_INTERFACE_DIRECTORY && hitRect(backButton, x, y)) {
         showCallIdle();
-        return;
-    }
-    if (view == CALL_INTERFACE_DIRECTORY && hitRect(exitButton, x, y)) {
-        queueAction("exit", "");
         return;
     }
     if (view == CALL_INTERFACE_DIRECTORY) {

@@ -16,6 +16,11 @@ int screen_height = 600;
 
 static const char* DEFAULT_DISPLAY = ":0";
 
+// Bottom strip, battery on the left and Exit on the right
+static const int BOTTOM_BAR_HEIGHT = 96;
+static const int BOTTOM_BAR_PAD = 12;
+static const int EXIT_BUTTON_WIDTH = 180;
+
 // A dead IBus socket, GNOME pops its touch keyboard when SDL takes input method focus
 static const char* DEAD_IBUS_ADDRESS = "unix:path=/nonexistent";
 
@@ -152,22 +157,48 @@ void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color) 
     }
 }
 
-// Grey bar across the bottom, then the text inset inside it
-void draw_boxed_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color, SDL_Color box_color) {
-    if (!text || !font) return;
+// Place Exit on the right of the bottom bar
+static SDL_Rect exit_button_rect() {
+    int bar_y = screen_height - BOTTOM_BAR_HEIGHT;
+    return {screen_width - BOTTOM_BAR_PAD - EXIT_BUTTON_WIDTH, bar_y + BOTTOM_BAR_PAD, EXIT_BUTTON_WIDTH, BOTTOM_BAR_HEIGHT - BOTTOM_BAR_PAD * 2};
+}
 
-    // Fill the whole bottom strip
-    SDL_Rect box = {0, y, screen_width, screen_height - y};
-    SDL_SetRenderDrawColor(renderer, box_color.r, box_color.g, box_color.b, box_color.a);
-    SDL_RenderFillRect(renderer, &box);
+// Grey bar with battery text and a red Exit button
+void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit) {
+    int bar_y = screen_height - BOTTOM_BAR_HEIGHT;
+    SDL_Rect bar = {0, bar_y, screen_width, BOTTOM_BAR_HEIGHT};
+    SDL_SetRenderDrawColor(renderer, 180, 180, 180, 255);
+    SDL_RenderFillRect(renderer, &bar);
     SDL_SetRenderDrawColor(renderer, 120, 120, 120, 255);
-    SDL_RenderDrawRect(renderer, &box);
+    SDL_RenderDrawRect(renderer, &bar);
 
-    // Center the label vertically in the bar
-    int text_width = 0;
-    int text_height = 0;
-    if (TTF_SizeText(font, text, &text_width, &text_height) != 0) return;
-    draw_text(text, x, y + (box.h - text_height) / 2, font, color);
+    // Battery on the left, vertically centered
+    if (battery && battery[0] && font) {
+        int text_width = 0;
+        int text_height = 0;
+        if (TTF_SizeText(font, battery, &text_width, &text_height) == 0) {
+            draw_text(battery, BOTTOM_BAR_PAD, bar_y + (BOTTOM_BAR_HEIGHT - text_height) / 2, font, {0, 0, 0, 255});
+        }
+    }
+
+    // Exit on the right, only while the peer list is up
+    if (!show_exit) return;
+    SDL_Rect exit_rect = exit_button_rect();
+    SDL_SetRenderDrawColor(renderer, 180, 40, 40, 255);
+    SDL_RenderFillRect(renderer, &exit_rect);
+    if (font) {
+        int text_width = 0;
+        int text_height = 0;
+        if (TTF_SizeText(font, "Exit", &text_width, &text_height) == 0) {
+            draw_text("Exit", exit_rect.x + (exit_rect.w - text_width) / 2, exit_rect.y + (exit_rect.h - text_height) / 2, font, {255, 255, 255, 255});
+        }
+    }
+}
+
+// True when a tap lands on Exit
+bool tap_is_exit(int x, int y) {
+    SDL_Rect exit_rect = exit_button_rect();
+    return x >= exit_rect.x && x < exit_rect.x + exit_rect.w && y >= exit_rect.y && y < exit_rect.y + exit_rect.h;
 }
 
 void draw_coordinate_text(Face* face) {
