@@ -29,6 +29,8 @@ SAY_HI = True
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
+RESTART_MESSAGE = 'Restarting!'
+RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
 TALK_READY = 'Robot ready and listening. Say "Robot" to talk.'
 
 # Config wake tone
@@ -255,6 +257,16 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             if command is None:
                 break
             print(f'Command: {command}', flush=True)
+
+            # Restart robot and teleport when asked
+            if wants_to_restart(command):
+                print(f'Reply: {RESTART_MESSAGE}', flush=True)
+                text_ask.last_tool_log.clear()
+                log_talk(command, RESTART_MESSAGE)
+                speak_muted(listener, kokoro_pipeline, RESTART_MESSAGE)
+                restart_services()
+                print('Done.')
+                break
 
             # Say goodbye and stop when asked to quit
             if wants_to_quit(command):
@@ -567,6 +579,19 @@ def text_after_wake(text):
 def transcribe(whisper_model, audio):
     segments, info = whisper_model.transcribe(audio, language='en', vad_filter=True)
     return ' '.join(segment.text.strip() for segment in segments).strip()
+
+# Return true when the command asks to restart the services
+def wants_to_restart(command):
+    text = command.lower()
+    return 'restart' in text
+
+# Schedule robot and teleport to restart after this process finishes
+def restart_services():
+    print('Restarting robot and teleport.', flush=True)
+    try:
+        subprocess.Popen(['sudo', '-n', RESTART_COMMAND], start_new_session=True)
+    except Exception as error:
+        print_error('restart services', error)
 
 # Return true when the command asks to stop
 def wants_to_quit(command):
