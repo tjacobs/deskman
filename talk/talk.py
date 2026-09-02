@@ -31,6 +31,7 @@ TALK_LISTENING = 'Robot listening...'
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
+RESTART_WORD = 'restart'
 RESTART_MESSAGE = 'Restarting!'
 RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
 
@@ -619,7 +620,10 @@ def transcribe(whisper_model, audio):
 # Return true when the command asks to restart the services
 def wants_to_restart(command):
     text = command.lower()
-    return 'restart' in text
+    text = re.sub(r'[^\w\s]', ' ', text)
+    text = WAKE_WORD_PATTERN.sub(' ', text)
+    text = ' '.join(text.split())
+    return text == RESTART_WORD or text.startswith(RESTART_WORD)
 
 # Schedule robot and teleport to restart after this process finishes
 def restart_services():
