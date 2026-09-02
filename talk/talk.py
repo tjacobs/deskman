@@ -26,13 +26,13 @@ WAKE_WORD = 'robot'
 NEAR_WAKE_WORDS = ('rob', 'rub')
 GREETING = 'Hi!'
 SAY_HI = True
+TALK_READY = 'Robot ready.'
+TALK_LISTENING = 'Robot listening...'
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
 RESTART_MESSAGE = 'Restarting!'
 RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
-TALK_READY = 'Robot ready.'
-TALK_LISTENING = 'Robot listening...'
 
 # Config wake tone
 WAKE_TONE_RATE = 24000
