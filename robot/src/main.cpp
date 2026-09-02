@@ -59,6 +59,9 @@ VectorRenderer vectorRenderer;
 static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos);
 static void setup_display_env();
 static void rotate_screen();
+static void show_face();
+static void draw_face();
+static int start_servos();
 static string repo_path(const char* relative);
 static pid_t find_talk_pid();
 static bool start_talk_process(bool cold_talk);
@@ -105,8 +108,11 @@ int main(int argc, char **argv) {
     // Rotate the screen and keep touch aligned
     rotate_screen();
 
-    // Spawn talk before servos and camera so a fast talk.py crash is not mid libcamera
+    // Put the face on screen before talk and the servo bus scan
     bool quit = false;
+    if (!sweep_only) show_face();
+
+    // Spawn talk before the camera so a fast talk.py crash is not mid libcamera
     if (!sweep_only && !g_no_talk) {
         start_talk_process(g_cold_talk);
         wait_for_talk_early_exit();
@@ -121,7 +127,7 @@ int main(int argc, char **argv) {
     // Connect to servos, or relax them and leave them disabled
     if (no_servos) {
         relax_servos();
-    } else if (open_servos() != 0) {
+    } else if (start_servos() != 0) {
         if (sweep_only) return 1;
     }
 
@@ -141,15 +147,6 @@ int main(int argc, char **argv) {
     // Create face tracker after args so --camera / --no-camera apply
     FaceTracker faceTracker(show_camera, use_camera);
     rotate_screen();
-
-    // Create window, continue headless if display is unavailable
-    if (show_window && !create_window()) {
-        show_window = false;
-    }
-
-    // Create face
-    face = create_face(screen_width, screen_height);
-    reset_face_animation(&face);
 
     // Start face tracking if camera is available
     if (use_camera && faceTracker.isCameraAvailable()) {
@@ -397,6 +394,59 @@ static void rotate_screen() {
 #endif
 }
 
+// Open the window and draw the face before slower startup work
+static void show_face() {
+    // Create the window, continue headless if the display is missing
+    if (show_window && !create_window()) show_window = false;
+
+    // Build the face at the current screen size
+    face = create_face(screen_width, screen_height);
+    reset_face_animation(&face);
+
+    // Pump a few frames so the compositor actually shows the eyes
+    for (int frame = 0; frame < 8 && !g_quit; frame++) draw_face();
+}
+
+// Draw one face frame and give X a chance to map the window
+static void draw_face() {
+    if (!show_window || !renderer) {
+        sleep_for(milliseconds(1000 / MAX_FPS));
+        return;
+    }
+
+    // Deliver expose and map events, a blocked main thread leaves the window black
+    SDL_PumpEvents();
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_QUIT) g_quit = true;
+    }
+
+    // Animate the face and keep the battery strip on the first frames
+    check_battery();
+    update_face_animation(&face, 1000.0f / MAX_FPS);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    SDL_RenderClear(renderer);
+    vectorRenderer.render(renderer);
+    draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
+    SDL_RenderPresent(renderer);
+    SDL_Delay(1000 / MAX_FPS);
+}
+
+// Open the servo bus on a worker so the face can keep drawing
+static int start_servos() {
+    atomic<bool> done{false};
+    int result = 0;
+    thread worker([&]() {
+        result = open_servos();
+        done = true;
+    });
+
+    // Keep drawing until the bus scan finishes
+    while (!done && !g_quit) draw_face();
+    worker.join();
+    return result;
+}
+
 static void signalHandler(int) {
     g_quit = true;
 }
@@ -547,8 +597,8 @@ static void wait_for_talk_early_exit() {
     while (g_talk_pid > 0 && waited_ms < TALK_EARLY_WAIT_MS) {
         reap_talk_process();
         if (g_talk_pid <= 0) return;
-        sleep_for(milliseconds(TALK_EARLY_POLL_MS));
-        waited_ms += TALK_EARLY_POLL_MS;
+        draw_face();
+        waited_ms += 1000 / MAX_FPS;
     }
 }
 
