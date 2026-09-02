@@ -951,7 +951,7 @@ def start_text_server(require_success=True):
         print_memory('after text server')
         return None
 
-    print('Loading text model server...', flush=True)
+    print('Starting model...', flush=True)
     warn_if_low_memory_for('text server', TEXT_SERVER_EXPECTED_GB)
     load_start = time.perf_counter()
 
@@ -1179,7 +1179,7 @@ def stop_text_server(process):
 
 # Run one hello ask so the system prompt is prefilled into the text model cache
 def warm_text():
-    print('Starting text model inference...', flush=True)
+    print('Loading inference...', flush=True)
     load_start = time.perf_counter()
     try:
         text_ask.ask_model(WARMUP_PROMPT)
