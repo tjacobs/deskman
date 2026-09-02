@@ -29,9 +29,19 @@ DIRECTION_ALIASES = {
     "hat_up": "hat_up",
     "hat up": "hat_up",
     "raise": "hat_up",
+    "open": "hat_up",
+    "opened": "hat_up",
+    "hat open": "hat_up",
+    "hat_open": "hat_up",
     "hat_down": "hat_down",
     "hat down": "hat_down",
     "lower": "hat_down",
+    "close": "hat_down",
+    "closed": "hat_down",
+    "shut": "hat_down",
+    "hat close": "hat_down",
+    "hat closed": "hat_down",
+    "hat_close": "hat_down",
 }
 
 # Main

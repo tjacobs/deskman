@@ -9,7 +9,7 @@ import sys
 # Config
 ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 90
-LOOK_DIRECTIONS = ["left", "right", "center", "forward", "straight", "up", "down", "hat_up", "hat_down"]
+LOOK_DIRECTIONS = ["left", "right", "center", "forward", "straight", "up", "down", "hat_up", "hat_down", "hat_open", "hat_close"]
 
 # Tools the local model can call for head movement
 TOOLS = [
@@ -17,14 +17,14 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "look",
-            "description": "Move my head or hat. left and right are my left and my right. forward, straight, and center look straight forward. hat_up raises my hat, hat_down lowers it. Default is all the way, 90. After the tool, say my right or my hat, not your.",
+            "description": "Move my head or hat. left and right are my left and my right. forward, straight, and center look straight forward. hat_up or hat_open raises my hat, hat_down or hat_close lowers it. Default is all the way, 90. After the tool, say my right or my hat, not your.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "direction": {
                         "type": "string",
                         "enum": LOOK_DIRECTIONS,
-                        "description": "Which way to face. Use forward or straight to look straight ahead. hat_up is my hat up, hat_down is my hat down.",
+                        "description": "Which way to face. Use forward or straight to look straight ahead. hat_up or hat_open is my hat up, hat_down or hat_close is my hat down.",
                     },
                     "degrees": {
                         "type": "number",
