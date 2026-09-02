@@ -282,9 +282,11 @@ enable_screen_keyboard() {
 enable_service_shortcuts() {
     echo "Adding Start Robot and Start Teleport desktop shortcuts"
 
-    # Allow this user to start those two units from the icons
+    # Allow this user to start those two units from the icons, and restart them by voice
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    install -m 0755 "${script_dir}/restart_services.sh" /usr/local/bin/deskman-restart-services
     sudoers_file="/etc/sudoers.d/deskman-services"
-    printf '%s\n' "${RUN_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start robot.service, /usr/bin/systemctl start teleport.service" > "${sudoers_file}"
+    printf '%s\n' "${RUN_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start robot.service, /usr/bin/systemctl start teleport.service, /usr/local/bin/deskman-restart-services" > "${sudoers_file}"
     chmod 0440 "${sudoers_file}"
 
     # Place the launchers after the desktop wipe above
