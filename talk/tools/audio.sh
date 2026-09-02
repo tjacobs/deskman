@@ -27,6 +27,8 @@ ONBOARD_AUDIO_ON="^dtparam=audio=on"
 ONBOARD_AUDIO_OFF="dtparam=audio=off"
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
+USB_AUDIO_DRIVER_PATH="/sys/bus/usb/drivers/snd-usb-audio"
+USB_VIDEO_CLASS="0e"
 
 # State
 TARGET_USER=""
@@ -39,6 +41,7 @@ main() {
     parse_args "$@"
     become_root "$@"
     find_target_user
+    ignore_camera_audio
     configure_audio
     install_udev_rule
     disable_internal_audio
@@ -63,6 +66,7 @@ print_usage() {
     echo "Usage: ./tools/audio.sh"
     echo "  Routes ALSA and pulse to the USB soundcard, for this user and for services."
     echo "  Disables onboard HDMI audio, and sets audio up again when a card is replugged."
+    echo "  Unbinds dummy USB audio on cameras, they have no speaker or mic."
     echo "  Asks for sudo, since it writes system config."
 }
 
@@ -97,6 +101,68 @@ find_target_user() {
     # Read the home directory and id for later steps
     TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
     TARGET_USER_ID="$(id -u "${TARGET_USER}")"
+}
+
+# Drop dummy USB audio that cameras expose, they have no speaker or mic
+ignore_camera_audio() {
+    local card_path sound_link usb_device vendor product
+    local cameras=()
+
+    # Collect USB devices that own both a sound card and a camera
+    shopt -s nullglob
+    for card_path in /sys/class/sound/card[0-9]*; do
+        sound_link="${card_path}/device"
+        if [[ ! -e "${sound_link}" ]]; then
+            continue
+        fi
+        usb_device="$(dirname "$(readlink -f "${sound_link}")")"
+        if usb_device_is_camera "${usb_device}"; then
+            cameras+=("${usb_device}")
+        fi
+    done
+
+    # Stop the audio driver from claiming those devices again this boot
+    for usb_device in "${cameras[@]}"; do
+        vendor="$(cat "${usb_device}/idVendor")"
+        product="$(cat "${usb_device}/idProduct")"
+        echo "${vendor} ${product}" > "${USB_AUDIO_DRIVER_PATH}/remove_id" 2>/dev/null || true
+        unbind_usb_audio "${usb_device}"
+        echo "Ignored camera USB audio ${vendor}:${product}"
+    done
+    shopt -u nullglob
+}
+
+# Return true when this USB device has a video interface
+usb_device_is_camera() {
+    local usb_device="$1"
+    local interface
+    shopt -s nullglob
+    for interface in "${usb_device}"/*:*; do
+        if [[ -f "${interface}/bInterfaceClass" && "$(cat "${interface}/bInterfaceClass")" == "${USB_VIDEO_CLASS}" ]]; then
+            shopt -u nullglob
+            return 0
+        fi
+    done
+    shopt -u nullglob
+    return 1
+}
+
+# Unbind snd-usb-audio from every interface on this USB device
+unbind_usb_audio() {
+    local usb_device="$1"
+    local interface driver
+    shopt -s nullglob
+    for interface in "${usb_device}"/*:*; do
+        if [[ ! -e "${interface}/driver" ]]; then
+            continue
+        fi
+        driver="$(basename "$(readlink -f "${interface}/driver")")"
+        if [[ "${driver}" != "snd-usb-audio" ]]; then
+            continue
+        fi
+        echo -n "$(basename "${interface}")" > "${USB_AUDIO_DRIVER_PATH}/unbind" || true
+    done
+    shopt -u nullglob
 }
 
 # Point ALSA and pulse at the USB soundcard
@@ -138,20 +204,41 @@ find_usb_card() {
         fi
     done < /proc/asound/cards
 
-    # Prefer the speaker only card, one without a mic
+    # Drop cameras, they expose dummy USB audio with no speaker
+    local speaker_cards=()
     for card_index in "${usb_cards[@]}"; do
+        if card_is_camera "${card_index}"; then
+            continue
+        fi
+        speaker_cards+=("${card_index}")
+    done
+
+    # Prefer the speaker only card, one without a mic
+    for card_index in "${speaker_cards[@]}"; do
         if ! card_has_capture "${card_index}"; then
             echo "${card_index}"
             return 0
         fi
     done
 
-    # Otherwise take the first USB card
-    if [[ "${#usb_cards[@]}" -gt 0 ]]; then
-        echo "${usb_cards[0]}"
+    # Otherwise take the first real USB speaker
+    if [[ "${#speaker_cards[@]}" -gt 0 ]]; then
+        echo "${speaker_cards[0]}"
         return 0
     fi
     return 1
+}
+
+# Return true when this sound card is on a USB camera
+card_is_camera() {
+    local card_index="$1"
+    local sound_link usb_device
+    sound_link="/sys/class/sound/card${card_index}/device"
+    if [[ ! -e "${sound_link}" ]]; then
+        return 1
+    fi
+    usb_device="$(dirname "$(readlink -f "${sound_link}")")"
+    usb_device_is_camera "${usb_device}"
 }
 
 # Return true when a card has a capture stream

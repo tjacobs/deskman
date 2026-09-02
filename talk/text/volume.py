@@ -127,8 +127,9 @@ def run_set_volume(arguments):
     except (TypeError, ValueError):
         return "Volume percent must be a number."
     percent = max(0, min(100, percent))
-    if not set_speaker_volume(percent):
-        return "Could not set the volume."
+    error = set_speaker_volume(percent)
+    if error:
+        return error
 
     # Remember the requested value, ALSA rounds and should not be spoken back
     last_volume_percent = percent
@@ -137,8 +138,8 @@ def run_set_volume(arguments):
 # Read speaker volume for the tool
 def run_get_volume(arguments=None):
     percent = read_speaker_volume()
-    if percent is None:
-        return "Could not read the volume."
+    if isinstance(percent, str):
+        return percent
     return f"Volume is {percent} percent."
 
 # Read a volume percent from the user text when present
@@ -154,27 +155,33 @@ def parse_volume_percent(prompt):
         return max(0, min(100, int(match.group(1))))
     return None
 
-# Set the USB speaker volume with amixer
+# Set the USB speaker volume with amixer, return an error string or None
 def set_speaker_volume(percent):
     card = find_volume_card()
+    if card is None:
+        return "No USB speaker card found."
     control = find_volume_control(card)
-    if card is None or control is None:
-        return False
+    if control is None:
+        return f"No speaker volume control on card {card}."
     result = subprocess.run(["amixer", "-c", str(card), "set", control, f"{percent}%", "unmute"], capture_output=True, text=True)
-    return result.returncode == 0
+    if result.returncode == 0:
+        return None
+    return command_error(result, f"amixer set failed on card {card} {control}.")
 
-# Read the current USB speaker volume percent
+# Read the current USB speaker volume percent, or an error string
 def read_speaker_volume():
     card = find_volume_card()
+    if card is None:
+        return "No USB speaker card found."
     control = find_volume_control(card)
-    if card is None or control is None:
-        return None
+    if control is None:
+        return f"No speaker volume control on card {card}."
     result = subprocess.run(["amixer", "-c", str(card), "get", control], capture_output=True, text=True)
     if result.returncode != 0:
-        return None
+        return command_error(result, f"amixer get failed on card {card} {control}.")
     match = re.search(r"\[(\d+)%\]", result.stdout)
     if not match:
-        return None
+        return f"No volume percent in amixer output on card {card} {control}."
     return int(match.group(1))
 
 # Find the first playback volume control on a card
@@ -203,13 +210,20 @@ def find_volume_card():
             if card_index_text.isdigit():
                 usb_cards.append(int(card_index_text))
 
-    # Prefer the speaker-only card, one without a mic
+    # Skip cards with no speaker control, camera dummies only have Mic
+    speaker_cards = []
     for card_index in usb_cards:
+        if find_volume_control(card_index) is None:
+            continue
+        speaker_cards.append(card_index)
+
+    # Prefer the speaker-only card, one without a mic
+    for card_index in speaker_cards:
         if not volume_card_has_capture(card_index):
             return card_index
-    if usb_cards:
-        return usb_cards[0]
-    return 0 if os.path.exists("/proc/asound/card0") else None
+    if speaker_cards:
+        return speaker_cards[0]
+    return None
 
 # Return true when a card has a capture stream
 def volume_card_has_capture(card_index):
@@ -218,6 +232,15 @@ def volume_card_has_capture(card_index):
         return False
     with open(stream_path) as stream_file:
         return "Capture:" in stream_file.read()
+
+# Prefer stderr from amixer, then stdout, then a fallback
+def command_error(result, fallback):
+    text = (result.stderr or "").strip()
+    if not text:
+        text = (result.stdout or "").strip()
+    if text:
+        return text
+    return fallback
 
 # Main
 if __name__ == "__main__":
