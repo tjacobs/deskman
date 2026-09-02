@@ -47,6 +47,12 @@ TEST_HEAR_SECONDS = 8.0
 # Config daily reminders
 REMINDER_CHECK_SECONDS = 20.0
 
+# Config low battery voice
+LOW_BATTERY_PERCENT = 10
+LOW_BATTERY_SECONDS = 60.0
+LOW_BATTERY_ASK = "Invent one new short spoken line, eight words or fewer, that I have low battery. Soft and polite, a gentle request, not a command. In the spirit of I'm tired, could you plug me in, low battery, I'm sleepy, so hungry."
+LOW_BATTERY_FALLBACKS = ("Low battery", "Could you plug me in?", "I'm sleepy.", "So hungry.")
+
 # Config replay flags
 REPLAY_WAKE_FLAG = f'--replay-{WAKE_WORD}'
 NO_REPLAY_WAKE_FLAG = f'--no-replay-{WAKE_WORD}'
@@ -112,6 +118,8 @@ REPLAY_WAKE_MODE = True
 MEMORY_MODE = False
 COLD_MODE = False
 LAST_ASK_AT = 0.0
+LAST_LOW_BATTERY_AT = 0.0
+LOW_BATTERY_FALLBACK_INDEX = 0
 kokoro_model = None
 kokoro_pipelines = {}
 speak_lock = threading.Lock()
@@ -123,6 +131,7 @@ sys.path.insert(0, TEXT_DIR)
 import ask as text_ask
 import client as text_client
 import reminders
+import robot_move
 text_ask.set_talk_module(sys.modules[__name__])
 
 # Main
@@ -653,9 +662,37 @@ def reminder_loop(listener, kokoro_pipeline):
     while True:
         try:
             fire_due_reminders(listener, kokoro_pipeline)
+            speak_low_battery(listener, kokoro_pipeline)
         except Exception as error:
             print(f'Reminder check failed: {error}', flush=True)
         time.sleep(REMINDER_CHECK_SECONDS)
+
+# Speak a fresh low-battery line about once a minute
+def speak_low_battery(listener, kokoro_pipeline):
+    global LAST_LOW_BATTERY_AT
+    percent = robot_move.battery_percent()
+    if percent is None or percent >= LOW_BATTERY_PERCENT:
+        return
+    now = time.time()
+    if LAST_LOW_BATTERY_AT > 0.0 and (now - LAST_LOW_BATTERY_AT) < LOW_BATTERY_SECONDS:
+        return
+    LAST_LOW_BATTERY_AT = now
+    line = low_battery_line()
+    print(f'Low battery {percent}%: {line}', flush=True)
+    speak_muted(listener, kokoro_pipeline, line)
+
+# Ask the LLM for a short variation, or use a fallback phrase
+def low_battery_line():
+    global LOW_BATTERY_FALLBACK_INDEX
+    try:
+        line = text_ask.ask_one_liner(LOW_BATTERY_ASK)
+        if line:
+            return line
+    except Exception as error:
+        print(f'Low battery line failed: {error}', flush=True)
+    line = LOW_BATTERY_FALLBACKS[LOW_BATTERY_FALLBACK_INDEX % len(LOW_BATTERY_FALLBACKS)]
+    LOW_BATTERY_FALLBACK_INDEX += 1
+    return line
 
 # Speak any reminders due in the current minute
 def fire_due_reminders(listener, kokoro_pipeline):
@@ -715,6 +752,7 @@ class Listener:
         self.vad_model = vad_model
         self.blocks = queue.Queue(maxsize=MAX_QUEUED_BLOCKS)
         self.muted = False
+        self.discard_utterance = False
         self.recorder = utils.start_recorder(record)
         self.reader = threading.Thread(target=self.read_blocks, daemon=True)
         self.reader.start()
@@ -756,6 +794,14 @@ class Listener:
         silence_blocks = 0
         deadline = time.time() + timeout_seconds if timeout_seconds > 0 else None
         while True:
+            # Drop a capture that started while the speaker was talking
+            if self.discard_utterance:
+                self.discard_utterance = False
+                pre_roll.clear()
+                utterance = []
+                speech_blocks = 0
+                silence_blocks = 0
+
             # Give up when the hear timeout is reached, so --test can fall back
             if deadline is not None:
                 remaining = deadline - time.time()
@@ -771,6 +817,10 @@ class Listener:
             # Stop when the recorder has gone away
             if block is None:
                 return None
+
+            # Skip leftover speaker audio queued before mute
+            if self.discard_utterance:
+                continue
             speaking = speech_probability(self.vad_model, block) > VAD_THRESHOLD
 
             # Wait for speech, keeping a little audio from before it started
@@ -801,10 +851,17 @@ class Listener:
     # Drop microphone audio, used while speaking
     def mute(self):
         self.muted = True
+        self.discard_utterance = True
+        self.drain_blocks()
 
     # Listen again, throwing away anything captured while muted
     def unmute(self):
         self.muted = False
+        self.discard_utterance = True
+        self.drain_blocks()
+
+    # Empty the block queue
+    def drain_blocks(self):
         while not self.blocks.empty():
             self.blocks.get()
 

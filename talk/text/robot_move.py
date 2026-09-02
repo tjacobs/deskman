@@ -100,6 +100,19 @@ def normalize_direction(direction):
         return DIRECTION_ALIASES[text]
     return text.replace(" ", "_")
 
+# Read pack percent from the robot, or None when the socket is down
+def battery_percent():
+    try:
+        reply = send_command({"command": "battery"})
+    except Exception:
+        return None
+    if not reply.get("ok"):
+        return None
+    try:
+        return int(round(float(reply.get("percent"))))
+    except (TypeError, ValueError):
+        return None
+
 # Send one JSON line and read one JSON reply line
 def send_command(payload):
     raw = (json.dumps(payload) + "\n").encode("utf-8")
