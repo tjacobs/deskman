@@ -25,6 +25,7 @@ void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
 void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit);
 bool tap_is_exit(int x, int y);
 void setStatus(const string& status);
+string last_log_line();
 
 #endif
 

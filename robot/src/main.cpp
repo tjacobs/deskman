@@ -282,19 +282,13 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             SDL_RenderClear(renderer);
             vectorRenderer.render(renderer);
 
-            string status;
-            unique_lock<mutex> lock(statusMutex);
-            status = currentStatus;
-            lock.unlock();
-            if (!status.empty()) draw_text(status.c_str(), 10, 10, face.font, {0, 0, 0, 255});
-
             string fan_warning = fan_warning_text();
-            if (!fan_warning.empty()) draw_text(fan_warning.c_str(), 10, 50, face.font, {200, 0, 0, 255});
+            if (!fan_warning.empty()) draw_text(fan_warning.c_str(), 10, 10, face.font, {200, 0, 0, 255});
 
             string temperature_warning = temperature_warning_text();
-            if (!temperature_warning.empty()) draw_text(temperature_warning.c_str(), 10, 90, face.font, {200, 0, 0, 255});
+            if (!temperature_warning.empty()) draw_text(temperature_warning.c_str(), 10, 50, face.font, {200, 0, 0, 255});
 
-            // Pack voltage and Exit on the bottom bar
+            // Last log line, pack voltage, and Exit, only while the overlay is up
             draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
 
             if (use_camera && faceTracker.isCameraAvailable()) faceTracker.updateWindow();
