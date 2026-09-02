@@ -123,6 +123,13 @@ def battery_percent():
     except (TypeError, ValueError):
         return None
 
+# Ask the robot process to exit, it also tells teleport to exit
+def quit_robot():
+    reply = send_command({"command": "quit"})
+    if not reply.get("ok"):
+        error = reply.get("error", "unknown error")
+        raise RuntimeError(error)
+
 # Send one JSON line and read one JSON reply line
 def send_command(payload):
     raw = (json.dumps(payload) + "\n").encode("utf-8")

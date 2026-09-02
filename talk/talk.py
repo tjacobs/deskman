@@ -52,7 +52,7 @@ REMINDER_CHECK_SECONDS = 20.0
 
 # Config low battery voice
 LOW_BATTERY_PERCENT = 10
-LOW_BATTERY_SECONDS = 60.0
+LOW_BATTERY_SECONDS = 60
 LOW_BATTERY_ASK = "Invent one new short spoken line, eight words or fewer, that I have low battery. Soft and polite, a gentle request, not a command. In the spirit of I'm tired, could you plug me in, low battery, I'm sleepy, so hungry."
 LOW_BATTERY_FALLBACKS = ("Low battery", "Could you plug me in?", "I'm sleepy.", "So hungry.")
 
@@ -269,12 +269,13 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 print('Done.')
                 break
 
-            # Say goodbye and stop when asked to quit
+            # Say goodbye and stop robot and teleport when asked to quit
             if wants_to_quit(command):
                 print(f'Reply: {GOODBYE}', flush=True)
                 text_ask.last_tool_log.clear()
                 log_talk(command, GOODBYE)
                 speak_muted(listener, kokoro_pipeline, GOODBYE)
+                quit_robot()
                 print('Done.')
                 break
 
@@ -632,6 +633,13 @@ def restart_services():
 def wants_to_quit(command):
     text = command.lower()
     return any(word in text for word in QUIT_WORDS)
+
+# Tell robot to exit, it also tells teleport to exit
+def quit_robot():
+    try:
+        robot_move.quit_robot()
+    except Exception as error:
+        print_error('quit robot', error)
 
 # Return a short reason for an LLM connection failure
 def format_llm_error(error):
