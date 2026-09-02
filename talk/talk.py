@@ -31,7 +31,8 @@ GOODBYE = 'Goodbye!'
 QUIT_WORDS = ('quit', 'exit')
 RESTART_MESSAGE = 'Restarting!'
 RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
-TALK_READY = 'Robot ready and listening. Say "Robot" to talk.'
+TALK_READY = 'Robot ready.'
+TALK_LISTENING = 'Robot listening...'
 
 # Config wake tone
 WAKE_TONE_RATE = 24000
@@ -286,7 +287,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
             # Keep the conversation open so the next line needs no wake word
             LAST_ASK_AT = time.time()
-            print(TALK_READY, flush=True)
+            print_talk_status()
             if TEST_MODE:
                 print('Test done.')
                 break
@@ -300,8 +301,15 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 def print_talk_help():
     if TEST_MODE:
         print(f'Test mode, asking itself "{TEST_QUESTION}" and answering.', flush=True)
-    else:
-        print(TALK_READY, flush=True)
+        return
+    print_talk_status()
+
+# Show listening during the follow-up window, ready otherwise
+def print_talk_status():
+    if conversation_open():
+        print(TALK_LISTENING, flush=True)
+        return
+    print(TALK_READY, flush=True)
 
 # Ask the local text model for a spoken reply
 def make_reply(command):
@@ -482,17 +490,24 @@ def normalize_voice_name(voice_name):
 # Wait for the wake word, or a follow-up while the conversation is still open
 def hear_wake_command(whisper_model, kokoro_pipeline, listener):
     while True:
-        # Listen for the next utterance, using follow-up replay while the window is open
-        text = hear_utterance(whisper_model, kokoro_pipeline, listener, conversation_open(), 0.0)
+        # Time out when the follow-up window ends so the log can switch to ready
+        remaining = conversation_remaining()
+        if LAST_ASK_AT > 0.0 and remaining <= 0.0:
+            close_conversation()
+        follow_up = remaining > 0.0
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener, follow_up, remaining)
         if text is None:
             return None
+        if follow_up and not text:
+            close_conversation()
+            continue
 
         # While the follow-up window is still open, treat any speech as the command
         if conversation_open():
             if not text:
                 continue
             if has_wake_word(text):
-                play_wake_tone(listener)
+                acknowledge_wake(listener)
                 command = text_after_wake(text)
                 return command if command else text
             return text
@@ -502,15 +517,35 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
             continue
 
         # Tone on wake, then use the rest of the utterance or listen for more
-        play_wake_tone(listener)
+        acknowledge_wake(listener)
         command = text_after_wake(text)
         if command:
             return command
         return hear_command(whisper_model, kokoro_pipeline, listener, '')
 
+# Beep and show listening after the wake word
+def acknowledge_wake(listener):
+    play_wake_tone(listener)
+    print(TALK_LISTENING, flush=True)
+
 # Return true when a recent ask still allows wake-free follow-ups
 def conversation_open():
-    return LAST_ASK_AT > 0.0 and (time.time() - LAST_ASK_AT) < FOLLOW_UP_SECONDS
+    return conversation_remaining() > 0.0
+
+# Seconds left in the follow-up window, or 0 when it is closed
+def conversation_remaining():
+    if LAST_ASK_AT <= 0.0:
+        return 0.0
+    remaining = FOLLOW_UP_SECONDS - (time.time() - LAST_ASK_AT)
+    if remaining < 0.0:
+        return 0.0
+    return remaining
+
+# Close the follow-up window and show ready
+def close_conversation():
+    global LAST_ASK_AT
+    LAST_ASK_AT = 0.0
+    print(TALK_READY, flush=True)
 
 # Transcribe the next utterance, falling back when nothing was heard
 def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
