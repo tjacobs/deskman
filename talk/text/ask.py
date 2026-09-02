@@ -492,6 +492,25 @@ def ask_model(prompt):
     remember_turn(messages, reply)
     return reply
 
+# One short spoken line with no tools and no conversation history
+def ask_one_liner(prompt):
+    messages = [
+        {"role": "system", "content": "Reply with one short sentence for speaking aloud. Do not call tools. No quotes."},
+        {"role": "user", "content": prompt},
+    ]
+    body = {
+        "model": resolve_model_name(),
+        "messages": messages,
+        "max_tokens": 32,
+        "temperature": 0.9,
+    }
+    response = client.request_chat(body, client.API_KEY, client.REQUEST_TIMEOUT_SECONDS)
+    reply = ((response.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+    reply = reply.strip().strip('"').strip("'")
+    if "\n" in reply:
+        reply = reply.splitlines()[0].strip()
+    return reply
+
 # Build the chat messages for one ask
 def build_messages(prompt):
     # Start with text_prompt.json alone so that prefix stays identical across asks for KV cache reuse
