@@ -62,7 +62,7 @@ void FaceTracker::startTracking() {
     if (isTracking()) {
         return;
     }
-    cout << "Starting face tracking" << endl;
+    cout << "Starting camera..." << endl;
 
     // Only start tracking if camera is available
     if (!cameraAvailable) {
