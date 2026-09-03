@@ -13,6 +13,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <string>
 
 // Shorthand for names used below
@@ -230,11 +231,12 @@ int open_servos() {
         if (servo.found) st.EnableTorque(servo.id, 1);
     }
     servos_enabled = true;
-    printf("Moving");
-    const char *separator = " ";
+
+    // Log the park pose
+    const char *separator = "";
     for (Servo &servo : servos) {
         if (!servo.found) continue;
-        printf("%s%s to %d", separator, servo.name, servo.position);
+        printf("%s%c%s: %d", separator, toupper(static_cast<unsigned char>(servo.name[0])), servo.name + 1, servo.position);
         separator = ", ";
     }
     printf("\n");

@@ -150,7 +150,7 @@ static int count_video_devices() {
 
 // Try each video node until one returns a frame
 static bool open_usb_camera(cv::VideoCapture& cap, int& camera_index, int width, int height, int framerate) {
-    cout << "Starting camera" << endl;
+    cout << "Starting camera..." << endl;
 
     // Prefer camera 2 when a stereo pair exposes four nodes
     int probe_order[MAX_VIDEO_INDEX];
