@@ -121,6 +121,7 @@ REPLAY_MODE = False
 REPLAY_WAKE_MODE = True
 MEMORY_MODE = False
 COLD_MODE = False
+PROMPT_MODE = False
 LAST_ASK_AT = 0.0
 LAST_LOW_BATTERY_AT = 0.0
 LOW_BATTERY_FALLBACK_INDEX = 0
@@ -141,8 +142,8 @@ text_ask.set_talk_module(sys.modules[__name__])
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE = parse_args()
 
     # Make sure only one running
     check_already_running()
@@ -188,6 +189,7 @@ def parse_args():
     replay_wake_mode = True
     memory_mode = False
     cold_mode = False
+    prompt_mode = False
     for argument in sys.argv[1:]:
         if argument == '--test':
             test_mode = True
@@ -199,6 +201,8 @@ def parse_args():
             memory_mode = True
         elif argument == '--cold':
             cold_mode = True
+        elif argument == '--prompt':
+            prompt_mode = True
         elif argument == REPLAY_WAKE_FLAG:
             replay_wake_mode = True
         elif argument == NO_REPLAY_WAKE_FLAG:
@@ -210,16 +214,17 @@ def parse_args():
             print(f"Unknown argument: {argument}")
             print_usage()
             sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode
 
 # Print usage help
 def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [{NO_REPLAY_WAKE_FLAG}]')
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [{NO_REPLAY_WAKE_FLAG}]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
     print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
     print('  --memory           print available memory while loading models')
     print('  --cold             skip text model warm-up ask')
+    print('  --prompt           print the full model context, messages, tools, and rendered prompt')
     print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, asks the local LLM, and speaks the reply')
     print(f'                     by default plays back what was said to "{WAKE_WORD}"')
@@ -326,7 +331,9 @@ def make_reply(command):
 
     # Ask the local LLM, fall back when the server is down
     try:
-        # Ask
+        # Show the full request when --prompt is set
+        if PROMPT_MODE:
+            text_ask.print_context(command)
         return text_ask.ask_model(command)
     except urllib.error.URLError as error:
         # Error?
