@@ -37,6 +37,7 @@ AppConfig loadConfig() {
         in >> j;
         if (j.contains("useCamera")) config.useCamera = j["useCamera"].get<bool>();
         if (j.contains("faceTracking")) config.faceTracking = j["faceTracking"].get<bool>();
+        if (j.contains("statusOpen")) config.statusOpen = j["statusOpen"].get<bool>();
 
         // Use servo limits only when every axis min and max is present
         bool has_pan_min = read_travel_limit(j, "pan_min", "min_x", config.pan_min);
@@ -57,6 +58,7 @@ void saveConfig(const AppConfig& config) {
     json j;
     j["useCamera"] = config.useCamera;
     j["faceTracking"] = config.faceTracking;
+    j["statusOpen"] = config.statusOpen;
 
     // Keep existing travel limits, do not invent defaults
     if (config.has_servo_limits) {
@@ -73,4 +75,11 @@ void saveConfig(const AppConfig& config) {
     } catch (const exception& error) {
         cerr << "Failed to write config.json: " << error.what() << endl;
     }
+}
+
+// Remember whether the status bar was showing
+void saveStatusOpen(bool open) {
+    AppConfig config = loadConfig();
+    config.statusOpen = open;
+    saveConfig(config);
 }

@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "video.h"
 #include "interface.h"
+#include "config.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -169,13 +170,23 @@ bool toggleCallDirectory() {
     if (requestedView == CALL_INTERFACE_DIRECTORY) {
         requestedView = CALL_INTERFACE_IDLE;
         callStatus.clear();
+        saveStatusOpen(false);
         return false;
     }
     if (requestedView != CALL_INTERFACE_IDLE) return false;
     requestedView = CALL_INTERFACE_DIRECTORY;
     callPeers.clear();
     callStatus.clear();
+    saveStatusOpen(true);
     return true;
+}
+
+// Show the peer list after a restart that left it open
+void restoreCallDirectory() {
+    lock_guard<mutex> lock(callInterfaceMutex);
+    requestedView = CALL_INTERFACE_DIRECTORY;
+    callPeers.clear();
+    callStatus.clear();
 }
 
 void showIncomingCall(string peer) {

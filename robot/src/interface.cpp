@@ -4,6 +4,7 @@
 #include "servos.h"
 #include "battery.h"
 #include "screen.h"
+#include "config.h"
 
 // Main quit flag, set by Ctrl-C and the Exit button
 extern volatile bool g_quit;
@@ -160,7 +161,9 @@ static string handle_request(const string& line) {
             g_quit = true;
             reply = {{"ok", true}};
         } else if (command == "overlay") {
-            g_overlay_open = request.value("open", false);
+            bool open = request.value("open", false);
+            g_overlay_open = open;
+            saveStatusOpen(open);
             reply = {{"ok", true}};
         } else {
             reply = {{"ok", false}, {"error", "unknown command"}};
@@ -195,12 +198,18 @@ static void send_menu() {
     if (g_last_menu_tap.time_since_epoch().count() != 0 && duration_cast<milliseconds>(now - g_last_menu_tap).count() < CALL_MENU_TAP_DEBOUNCE_MS) return;
     g_last_menu_tap = now;
     g_overlay_open = !g_overlay_open.load();
+    saveStatusOpen(g_overlay_open.load());
     send_to_clients(json{{"command", "menu"}}.dump());
 }
 
 // True while Exit is showing on the bottom bar
 bool call_overlay_open() {
     return g_overlay_open.load();
+}
+
+// Restore the status bar after a restart
+void set_call_overlay_open(bool open) {
+    g_overlay_open = open;
 }
 
 void handle_call_event(const SDL_Event& event) {

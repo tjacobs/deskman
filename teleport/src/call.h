@@ -7,6 +7,7 @@ void startCallInterface();
 void stopCallInterface();
 void pollCallInterface();
 bool toggleCallDirectory();
+void restoreCallDirectory();
 void showIncomingCall(std::string peer);
 void showCallInProgress();
 void showCallIdle();

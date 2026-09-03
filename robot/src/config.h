@@ -5,6 +5,7 @@
 struct AppConfig {
     bool useCamera = true;
     bool faceTracking = true;
+    bool statusOpen = false;
     int pan_min = 2230;
     int pan_max = 3620;
     int tilt_min = 2600;
@@ -16,3 +17,4 @@ struct AppConfig {
 
 AppConfig loadConfig();
 void saveConfig(const AppConfig& config);
+void saveStatusOpen(bool open);

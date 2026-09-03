@@ -228,7 +228,7 @@ static SDL_Rect exit_button_rect() {
     return {screen_width - BOTTOM_BAR_PAD - EXIT_BUTTON_WIDTH, bar_y + BOTTOM_BAR_PAD, EXIT_BUTTON_WIDTH, BOTTOM_BAR_HEIGHT - BOTTOM_BAR_PAD * 2};
 }
 
-// Grey bar with the last log line, battery text, and a red Exit button
+// Status bar with the last log line, battery text, and a red Exit button
 void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit) {
     if (!show_exit) return;
     int bar_y = screen_height - BOTTOM_BAR_HEIGHT;
