@@ -7,6 +7,11 @@ import os
 import re
 import sys
 import time
+
+# Clock from launch for the Started in line
+PROGRAM_START = time.perf_counter()
+
+# Imports
 import queue
 import shutil
 import traceback
@@ -1211,8 +1216,8 @@ def warm_text():
     # Drop the warm-up turn so the first spoken ask starts a fresh conversation
     text_ask.conversation_history.clear()
     text_ask.last_tool_log.clear()
-    print(f'Started in {time.perf_counter() - load_start:.1f} sec', flush=True)
-    print_memory('after warm text')
+    print(f'Started inference in {time.perf_counter() - load_start:.1f} sec', flush=True)
+    print(f'Started in {time.perf_counter() - PROGRAM_START:.1f} sec', flush=True)
 
 # Warn when free RAM is below the expected cost of loads that are not already up
 def warn_if_low_memory():
