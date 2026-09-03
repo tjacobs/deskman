@@ -11,6 +11,8 @@ import time
 import urllib.error
 import urllib.request
 
+import accounts.google
+import accounts.sonos
 import ask
 import client
 import memory
@@ -50,9 +52,11 @@ TOOL_TESTS = [
     {"name": "set_reminder", "prompt": f"Remind me about {TEST_REMINDER_NAME} at {TEST_REMINDER_TIME}.", "tools": ["set_reminder"], "contains": [TEST_REMINDER_NAME]},
     {"name": "cancel_reminder", "prompt": f"Cancel the {TEST_REMINDER_NAME} reminder.", "tools": ["cancel_reminder"], "contains": [TEST_REMINDER_NAME]},
     # {"name": "look", "prompt": "Look center.", "tools": ["look"], "rejects": ["unavailable", "failed"]},
-    {"name": "list_sonos_speakers", "prompt": "List the Sonos speakers.", "tools": ["list_sonos_speakers"], "contains": ["not configured"]},
-    {"name": "get_next_calendar_event", "prompt": "What is my next calendar event?", "tools": ["get_next_calendar_event"], "contains": ["not configured"]},
 ]
+if accounts.google.account_is_configured():
+    TOOL_TESTS.append({"name": "get_next_calendar_event", "prompt": "What is my next calendar event?", "tools": ["get_next_calendar_event"]})
+if accounts.sonos.sonos_is_configured():
+    TOOL_TESTS.append({"name": "list_sonos_speakers", "prompt": "List the Sonos speakers.", "tools": ["list_sonos_speakers"]})
 
 # Main
 def main():

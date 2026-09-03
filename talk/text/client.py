@@ -132,7 +132,7 @@ CONTENT_TOOLS_MODEL = "gemma-3-1b"
 # System add-on that teaches that model to emit tool JSON in content
 def content_tools_instruction(tool_names):
     names = ", ".join(tool_names)
-    return (
+    text = (
         "When you need a tool, reply with ONLY valid JSON and nothing else, "
         'for example {"name":"get_time","arguments":{}}. '
         f"Allowed names: {names}. "
@@ -146,8 +146,15 @@ def content_tools_instruction(tool_names):
         'For cancel_reminder use {"name":"..."}. '
         'For load_talk_log use {"date":"today"|"yesterday"|"YYYY-MM-DD"}. '
         'For get_system_info use {"name":"get_system_info","arguments":{}}. '
-        'For play_sonos or pause_sonos use {} or {"room":"all"}. '
-        'For set_sonos_volume use {"percent":N} or {"percent":N,"room":"all"}. '
-        'For list_calendar_events use {"day":"today"|"tomorrow"|"YYYY-MM-DD"}. '
-        'For get_next_calendar_event use {"name":"get_next_calendar_event","arguments":{}}.'
     )
+    if "play_sonos" in tool_names:
+        text += (
+            'For play_sonos or pause_sonos use {} or {"room":"all"}. '
+            'For set_sonos_volume use {"percent":N} or {"percent":N,"room":"all"}. '
+        )
+    if "list_calendar_events" in tool_names:
+        text += (
+            'For list_calendar_events use {"day":"today"|"tomorrow"|"YYYY-MM-DD"}. '
+            'For get_next_calendar_event use {"name":"get_next_calendar_event","arguments":{}}.'
+        )
+    return text

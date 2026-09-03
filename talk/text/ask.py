@@ -41,10 +41,8 @@ MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
 PROMPT_EXTRAS_HEADER = "Do not mention this context unless the user asks."
 
-# Tools the local model can call
-TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS + accounts.sonos.TOOLS + accounts.google.TOOLS
-TOOL_NAMES = [tool["function"]["name"] for tool in TOOLS]
-TOOL_NAME_SET = set(TOOL_NAMES)
+# Tools the local model can call, Sonos and Google Calendar are added when an account is saved
+BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS
 
 # Conversation history kept across asks in this process
 conversation_history = []
@@ -518,7 +516,7 @@ def build_messages(prompt):
 
     # Teach 1b to emit tool JSON in content, its chat template has no tool path
     if uses_content_tools():
-        system_prompt = system_prompt + "\n\n" + client.content_tools_instruction(TOOL_NAMES)
+        system_prompt = system_prompt + "\n\n" + client.content_tools_instruction(active_tool_names())
 
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -611,6 +609,19 @@ def message_has_prompt_extras(message):
     content = message.get("content") or ""
     return content.startswith(PROMPT_EXTRAS_HEADER)
 
+# Tools sent to the model this ask, Sonos and Google Calendar only when an account is saved
+def active_tools():
+    tools = list(BASE_TOOLS)
+    if accounts.sonos.sonos_is_configured():
+        tools.extend(accounts.sonos.TOOLS)
+    if accounts.google.account_is_configured():
+        tools.extend(accounts.google.TOOLS)
+    return tools
+
+# Names of tools sent to the model this ask
+def active_tool_names():
+    return [tool["function"]["name"] for tool in active_tools()]
+
 # Load the system prompt from ../text_prompt.json
 def load_system_prompt():
     with open(PROMPT_PATH, encoding="utf-8") as prompt_file:
@@ -622,6 +633,10 @@ def load_system_prompt():
         prompt = str(system or "").strip()
     if not prompt:
         raise ValueError(f"Missing system prompt in {PROMPT_PATH}")
+    if accounts.sonos.sonos_is_configured():
+        prompt = prompt + "\n\n" + accounts.sonos.PROMPT
+    if accounts.google.account_is_configured():
+        prompt = prompt + "\n\n" + accounts.google.PROMPT
     return prompt
 
 # Long-term memories and reminders for the user turn, empty when none are saved
@@ -677,7 +692,7 @@ def build_request_body(messages):
 
     # Native tools only for models whose chat template supports them
     if not uses_content_tools():
-        body["tools"] = TOOLS
+        body["tools"] = active_tools()
         body["tool_choice"] = "auto"
     return body
 
@@ -960,7 +975,7 @@ def parse_tool_calls_from_content(content):
 
 # Build one synthetic tool_call dict when the name is a known tool
 def make_content_tool_call(name, arguments, index):
-    if name not in TOOL_NAME_SET:
+    if name not in set(active_tool_names()):
         return None
     parsed_arguments = parse_tool_arguments(arguments)
     return {
@@ -1022,7 +1037,7 @@ def recover_tool_json(text):
     if not name_match:
         return None
     name = name_match.group(1)
-    if name not in TOOL_NAME_SET:
+    if name not in set(active_tool_names()):
         return None
     arguments = {}
     arguments_match = re.search(r'"arguments"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})', text)

@@ -24,6 +24,7 @@ GOOGLE_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/{calendar_
 NOT_CONFIGURED = "Google account not configured."
 REDIRECT_URI_PASTE = "urn:ietf:wg:oauth:2.0:oob"
 MAX_EVENTS = 8
+PROMPT = "Call list_calendar_events or get_next_calendar_event for Google Calendar. Never invent calendar events."
 
 # Tools the local model can call for Google Calendar
 TOOLS = [
@@ -145,6 +146,10 @@ def print_usage():
     print("  list             list google accounts")
     print("  remove --id ID   remove one account")
     print("  --client-id --client-secret --calendar-id --accounts --code")
+
+# True when an enabled Google account is already saved
+def account_is_configured():
+    return accounts_store.get_account("google") is not None
 
 # List events for a day from tool arguments
 def run_list_calendar_events(arguments):

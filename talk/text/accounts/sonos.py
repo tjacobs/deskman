@@ -30,6 +30,7 @@ SONOS_MENTION = r"\b(sonos|sono'?s|sonar)\b"
 PAUSE_SONOS_RETRY_PROMPT = "Do not guess. Call pause_sonos now. Omit room to use the default speaker, or pass room all for every room, then answer using only the tool result."
 PLAY_SONOS_RETRY_PROMPT = "Do not guess. Call play_sonos now. Omit room to use the default speaker, then answer using only the tool result."
 SET_SONOS_VOLUME_RETRY_PROMPT = "Do not guess. Call set_sonos_volume now with the requested percent. Omit room to use the default speaker, then answer using only the tool result."
+PROMPT = "Call list_sonos_speakers, play_sonos, pause_sonos, or set_sonos_volume for Sonos, music, song volume, or a named Sonos room like Media Room. Omit room to use the default speaker. For all rooms, pass room all. Never ask which room. Never use set_volume for Sonos or music volume. Never claim music started, paused, or changed volume without the tool result."
 
 # Tools the local model can call for Sonos
 TOOLS = [
