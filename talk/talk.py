@@ -963,7 +963,7 @@ def start_text_server(require_success=True):
         print_memory('after text server')
         return None
 
-    print('Starting model...', flush=True)
+    print('Loading model...', flush=True)
     warn_if_low_memory_for('text server', TEXT_SERVER_EXPECTED_GB)
     load_start = time.perf_counter()
 
