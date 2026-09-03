@@ -124,7 +124,6 @@ void Camera::release() {
     capturing = false;
     if (cap.isOpened()) {
         cap.release();
-        cout << "Camera hardware released" << endl;
     }
 }
 

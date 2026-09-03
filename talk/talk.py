@@ -267,7 +267,6 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 log_talk(command, RESTART_MESSAGE)
                 speak_muted(listener, kokoro_pipeline, RESTART_MESSAGE)
                 restart_services()
-                print('Done.')
                 break
 
             # Say goodbye and stop robot and teleport when asked to quit
@@ -277,7 +276,6 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 log_talk(command, GOODBYE)
                 speak_muted(listener, kokoro_pipeline, GOODBYE)
                 quit_robot()
-                print('Done.')
                 break
 
             # Reply, mic muted so it does not hear itself
@@ -294,7 +292,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 print('Test done.')
                 break
     except KeyboardInterrupt:
-        print('\nDone.')
+        pass
     except Exception as error:
         print_error('talk loop failed', error)
         raise
