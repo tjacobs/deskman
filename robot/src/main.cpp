@@ -85,7 +85,6 @@ int main(int argc, char **argv) {
     // Load config, then overlay flags
     AppConfig config = loadConfig();
     use_camera = config.useCamera;
-    set_call_overlay_open(config.statusOpen);
     bool sweep_only = false;
     bool no_servos = false;
     bool print_servos = false;

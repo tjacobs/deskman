@@ -50,7 +50,6 @@ TeleportConfig loadConfig() {
         in >> settings;
         if (settings.contains("autoAnswer")) config.autoAnswer = settings["autoAnswer"].get<int>();
         if (settings.contains("deviceId")) config.deviceId = settings["deviceId"].get<int>();
-        if (settings.contains("statusOpen")) config.statusOpen = settings["statusOpen"].get<bool>();
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
     }
@@ -111,17 +110,10 @@ static void migrateDeviceIdFile(TeleportConfig& config) {
 // Write ./config.json
 void saveConfig(const TeleportConfig& config) {
     try {
-        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}, {"statusOpen", config.statusOpen}};
+        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}};
         ofstream out(CONFIG_PATH);
         out << settings.dump(2);
     } catch (const exception& error) {
         cerr << "Failed to write config.json: " << error.what() << endl;
     }
-}
-
-// Remember whether the peer list was showing
-void saveStatusOpen(bool open) {
-    TeleportConfig config = loadConfig();
-    config.statusOpen = open;
-    saveConfig(config);
 }

@@ -14,10 +14,8 @@ const int FALLBACK_DEVICE_ID = 1;
 struct TeleportConfig {
     int autoAnswer = AUTO_ANSWER_SECONDS;
     int deviceId;
-    bool statusOpen = false;
 };
 
 // Read and write ./config.json
 TeleportConfig loadConfig();
 void saveConfig(const TeleportConfig& config);
-void saveStatusOpen(bool open);

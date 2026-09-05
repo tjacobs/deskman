@@ -162,9 +162,6 @@ int main(int argumentCount, char** argumentValues) {
     startInterface();
     startCallInterface();
 
-    // Put the peer list back if it was open when we quit
-    if (settings.statusOpen) restoreCallDirectory();
-
     // Connect
     connectWebSocket();
 
