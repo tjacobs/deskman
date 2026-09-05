@@ -317,8 +317,10 @@ def print_talk_help():
 # Show listening during the follow-up window, ready otherwise
 def print_talk_status():
     if conversation_open():
+        set_robot_listening(True)
         print(TALK_LISTENING, flush=True)
         return
+    set_robot_listening(False)
     print(TALK_READY, flush=True)
 
 # Ask the local text model for a spoken reply
@@ -538,6 +540,7 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
 # Beep and show listening after the wake word
 def acknowledge_wake(listener):
     play_wake_tone(listener)
+    set_robot_listening(True)
     print(TALK_LISTENING, flush=True)
 
 # Return true when a recent ask still allows wake-free follow-ups
@@ -557,7 +560,15 @@ def conversation_remaining():
 def close_conversation():
     global LAST_ASK_AT
     LAST_ASK_AT = 0.0
+    set_robot_listening(False)
     print(TALK_READY, flush=True)
+
+# Face tracking follows only while talk is listening
+def set_robot_listening(open):
+    try:
+        robot_move.set_listen(open)
+    except Exception:
+        pass
 
 # Transcribe the next utterance, falling back when nothing was heard
 def hear_command(whisper_model, kokoro_pipeline, listener, fallback):

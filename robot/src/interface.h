@@ -15,3 +15,4 @@ void complete_call_handoff(bool ok);
 void handle_call_event(const SDL_Event& event);
 bool call_overlay_open();
 void set_call_overlay_open(bool open);
+bool listen_open();

@@ -123,6 +123,10 @@ def battery_percent():
     except (TypeError, ValueError):
         return None
 
+# Tell the robot whether talk is listening, so it can track a face
+def set_listen(open):
+    send_command({"command": "listen", "open": bool(open)})
+
 # Ask the robot process to exit, it also tells teleport to exit
 def quit_robot():
     reply = send_command({"command": "quit"})

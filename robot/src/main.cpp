@@ -266,9 +266,9 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             handle_call_event(event);
         }
 
-        // Point eyes and head at the tracked face
+        // Point eyes and head at the tracked face only while talk is listening
         float faceX, faceY;
-        bool hasFaceTracking = use_camera && faceTracker.isCameraAvailable() && faceTracker.getFacePosition(faceX, faceY);
+        bool hasFaceTracking = use_camera && listen_open() && faceTracker.isCameraAvailable() && faceTracker.getFacePosition(faceX, faceY);
         if (hasFaceTracking) {
             face.lookTiltX = -faceX * 30;
             face.lookTiltY = faceY * 30;

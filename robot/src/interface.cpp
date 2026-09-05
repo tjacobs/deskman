@@ -40,6 +40,7 @@ static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 
 static atomic<bool> g_interface_running{false};
 static atomic<bool> g_overlay_open{false};
+static atomic<bool> g_listen_open{false};
 static int g_listen_fd = -1;
 static thread g_interface_thread;
 static string g_socket_path;
@@ -160,6 +161,9 @@ static string handle_request(const string& line) {
             send_to_clients(json{{"command", "quit"}}.dump());
             g_quit = true;
             reply = {{"ok", true}};
+        } else if (command == "listen") {
+            g_listen_open = request.value("open", false);
+            reply = {{"ok", true}};
         } else if (command == "overlay") {
             bool open = request.value("open", false);
             g_overlay_open = open;
@@ -210,6 +214,11 @@ bool call_overlay_open() {
 // Restore the status bar after a restart
 void set_call_overlay_open(bool open) {
     g_overlay_open = open;
+}
+
+// True while talk is in the listening window
+bool listen_open() {
+    return g_listen_open.load();
 }
 
 void handle_call_event(const SDL_Event& event) {
