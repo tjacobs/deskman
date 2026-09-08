@@ -27,12 +27,13 @@ main() {
     echo "Configuring system for ${RUN_USER}"
     enable_graphical_boot
     enable_autologin
+    disable_hot_surface_alert
     disable_crash_dialog
     disable_software_updater
     configure_session
     disable_screen_idle
-    enable_screen_keyboard
     enable_service_shortcuts
+    enable_screen_keyboard
     fix_mdns_name
     echo "Done."
 }
@@ -45,7 +46,7 @@ parse_args() {
         # Print help and quit
         if [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
             echo "Usage: ./install_system.sh"
-            echo "  Boot to X, auto-login, black empty desktop, no crash dialogs."
+            echo "  Boot to X, auto-login, black empty desktop, no crash or hot-surface dialogs."
             exit 0
         fi
 
@@ -137,6 +138,15 @@ confirm_rm() {
     printf '  %s\n' "${delete_paths[@]}"
     read -r confirm_enter </dev/tty
     rm -rf -- "${delete_paths[@]}"
+}
+
+# Stop nvpmodel from popping Caution, Hot surface, Do Not Touch
+disable_hot_surface_alert() {
+    echo "Disabling hot surface warning"
+
+    # Hide the tray indicator that shows that dialog
+    hide_autostart nvpmodel_indicator.desktop
+    pkill -u "${RUN_USER}" -f nvpmodel_indicator.py || true
 }
 
 # Turn off Apport System program problem detected
@@ -237,8 +247,33 @@ configure_session() {
     # Show our .desktop launchers, ding was left disabled
     run_as_user gsettings set org.gnome.shell disabled-extensions "[]" || true
     run_as_user gsettings set org.gnome.shell enabled-extensions "['ding@rastersoft.com']" || true
-    confirm_rm "${RUN_HOME}/Desktop/"*.desktop
+    remove_extra_desktop_launchers
     remove_extra_home_folders
+}
+
+# Drop leftover Desktop launchers, keep Start Robot and Start Teleport
+remove_extra_desktop_launchers() {
+    extra_desktops=()
+    for desktop_file in "${RUN_HOME}/Desktop/"*.desktop; do
+
+        # Skip a missing glob when Desktop has no launchers
+        if [[ ! -e "${desktop_file}" ]]; then
+            continue
+        fi
+
+        # Keep the Start Robot and Start Teleport icons
+        base_name="$(basename "${desktop_file}")"
+        if [[ "${base_name}" == "robot.desktop" || "${base_name}" == "teleport.desktop" ]]; then
+            continue
+        fi
+        extra_desktops+=("${desktop_file}")
+    done
+
+    # Nothing else to remove
+    if [[ "${#extra_desktops[@]}" -eq 0 ]]; then
+        return
+    fi
+    confirm_rm "${extra_desktops[@]}"
 }
 
 # Drop unused XDG folders so login does not recreate them
@@ -261,26 +296,9 @@ EOF
     chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/user-dirs.conf" "${RUN_HOME}/.config/user-dirs.dirs"
 }
 
-# Let the GNOME and onboard keyboards show again
-enable_screen_keyboard() {
-    echo "Enabling the on-screen keyboard"
-
-    # Turn on the GNOME accessibility keyboard
-    run_as_user gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
-    run_as_user gsettings reset org.gnome.desktop.interface gtk-im-module || true
-
-    # Let onboard show itself on text focus
-    run_as_user gsettings set org.onboard.auto-show enabled true || true
-    run_as_user gsettings set org.onboard.auto-show tablet-mode-detection-enabled true || true
-    run_as_user gsettings set org.onboard start-minimized false || true
-
-    # Drop the hidden autostart override so the system entry runs
-    rm -f "${RUN_HOME}/.config/autostart/onboard-autostart.desktop"
-}
-
 # Desktop icons to start robot.service and teleport.service without a password
 enable_service_shortcuts() {
-    echo "Adding Start Robot and Start Teleport desktop shortcuts"
+    echo "Adding Robot and Teleport desktop items"
 
     # Allow this user to start those two units from the icons, and restart them by voice
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -289,7 +307,7 @@ enable_service_shortcuts() {
     printf '%s\n' "${RUN_USER} ALL=(root) NOPASSWD: /usr/bin/systemctl start robot.service, /usr/bin/systemctl start teleport.service, /usr/local/bin/deskman-restart-services" > "${sudoers_file}"
     chmod 0440 "${sudoers_file}"
 
-    # Place the launchers after the desktop wipe above
+    # Add the launchers when they are missing
     mkdir -p "${RUN_HOME}/Desktop"
     install_robot_eyes_icon
     write_service_shortcut "Start Robot" robot "${RUN_HOME}/.local/share/icons/deskman-robot.svg"
@@ -326,6 +344,11 @@ write_service_shortcut() {
     icon_name="$3"
     desktop_file="${RUN_HOME}/Desktop/${service_name}.desktop"
 
+    # Leave an existing launcher as it is
+    if [[ -e "${desktop_file}" ]]; then
+        return
+    fi
+
     # Write a trusted launcher the desktop will run on tap
     cat > "${desktop_file}" <<EOF
 [Desktop Entry]
@@ -340,6 +363,23 @@ EOF
     chown "${RUN_USER}:${RUN_USER}" "${desktop_file}"
     chmod 0755 "${desktop_file}"
     run_as_user gio set "${desktop_file}" metadata::trusted true || true
+}
+
+# Let the GNOME and onboard keyboards show again
+enable_screen_keyboard() {
+    echo "Enabling the on-screen keyboard"
+
+    # Turn on the GNOME accessibility keyboard
+    run_as_user gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
+    run_as_user gsettings reset org.gnome.desktop.interface gtk-im-module || true
+
+    # Let onboard show itself on text focus
+    run_as_user gsettings set org.onboard.auto-show enabled true || true
+    run_as_user gsettings set org.onboard.auto-show tablet-mode-detection-enabled true || true
+    run_as_user gsettings set org.onboard start-minimized false || true
+
+    # Drop the hidden autostart override so the system entry runs
+    rm -f "${RUN_HOME}/.config/autostart/onboard-autostart.desktop"
 }
 
 # Keep the display on and skip the lock screen
@@ -434,6 +474,7 @@ skip_gnome_setup() {
     hide_autostart gnome-software-service.desktop
     hide_autostart update-manager.desktop
     hide_autostart user-dirs-update-gtk.desktop
+    hide_autostart nvpmodel_indicator.desktop
 
     # Stop updater windows already running
     pkill -u "${RUN_USER}" -f update-notifier || true
