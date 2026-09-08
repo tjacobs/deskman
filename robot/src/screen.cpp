@@ -285,7 +285,7 @@ bool tap_is_exit(int x, int y) {
 void draw_coordinate_text(Face* face) {
     // Draw coordinate text
     char coordText[100];
-    snprintf(coordText, sizeof(coordText), "Head X: %.1f  Y: %.1f", face->currentHeadX * HEAD_SCALE, face->currentHeadY * HEAD_SCALE);
+    snprintf(coordText, sizeof(coordText), "Head X: %.1f  Y: %.1f", face->currentHeadX * HEAD_LOOK_DEGREES, face->currentHeadY * HEAD_LOOK_DEGREES);
     SDL_Color textColor = {0, 0, 0, 255};
     //draw_text(coordText, 10, 10, face->font, textColor);
 }

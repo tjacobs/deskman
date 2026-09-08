@@ -1,6 +1,5 @@
 // Drive pan, tilt, and hat
 
-#include <string>
 #include <SDL2/SDL.h>
 #include "face.h"
 
@@ -14,13 +13,9 @@ void stop_servo_position_log();
 int set_servo_id(int old_id, int new_id);
 void move_servos();
 void sweep_servos();
-void move_head(int pan_diff, int tilt_diff, int hat_diff);
-void move_head(const string &direction);
-void look_head(const string &direction, double degrees);
-void center();
-void get_head_position(int &pan, int &tilt, int &hat);
-void set_head_position(int pan, int tilt, int hat);
-void get_percent(int &pan, int &tilt, int &hat);
-void set_percent(int pan, int tilt, int hat);
-void move_percent(int pan_diff, int tilt_diff, int hat_diff);
+void get_degrees(int &pan, int &tilt, int &hat);
+void set_degrees(int pan, int tilt, int hat);
+float pan_degrees_from_counts(float counts);
+float tilt_degrees_from_counts(float counts);
+void move_degrees(float pan_delta, float tilt_delta, float hat_delta);
 void handle_servo_keyboard_input(SDL_Event* event, Face* face);

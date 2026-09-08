@@ -39,6 +39,7 @@ static const int TALK_EARLY_POLL_MS = 100;
 static const int TALK_STOP_WAIT_MS = 200;
 static const int TALK_STOP_POLL_MS = 50;
 static const int MAX_FPS = 30;
+static const int FACE_TRACK_COUNTS = 20;
 static const char* TALK_SCRIPT_NAME = "talk.py";
 static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
@@ -271,7 +272,11 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (hasFaceTracking) {
             face.lookTiltX = -faceX * 30;
             face.lookTiltY = faceY * 30;
-            move_head(-faceX * 20, faceY * 20, 0);
+
+            // Truncate to whole counts, so |face offset| under 1/20 stays still
+            int pan_nudge = (int)(-faceX * FACE_TRACK_COUNTS);
+            int tilt_nudge = (int)(faceY * FACE_TRACK_COUNTS);
+            move_degrees(pan_degrees_from_counts(pan_nudge), tilt_degrees_from_counts(tilt_nudge), 0);
         }
 
         update_face_animation(&face, 1000.0f / MAX_FPS);

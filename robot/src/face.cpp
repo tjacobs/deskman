@@ -17,7 +17,7 @@ const float BLINK_SPEED = 8.0f;
 const float BLINK_INTERVAL = 10.0f;
 const float LOOK_INTERVAL = 5.0f;
 const float EYE_MOVE_DURATION = 0.5f;
-const float HEAD_SCALE = 200.0f;
+const float HEAD_LOOK_DEGREES = 15.0f;
 const float WAIT_DURATION = 1.2f;
 
 Face create_face(int center_x, int center_y) {
@@ -232,7 +232,7 @@ void update_face_looking(Face* face, float deltaTime, bool hasFaceTracking) {
                 break;
 
             case 2:  // Move head
-                move_head(face->targetX * HEAD_SCALE, face->targetY * HEAD_SCALE, 0);
+                move_degrees(face->targetX * HEAD_LOOK_DEGREES, face->targetY * HEAD_LOOK_DEGREES, 0);
                 face->currentHeadX = face->targetX;
                 face->currentHeadY = face->targetY;
                 face->lookState = 3;
@@ -253,7 +253,7 @@ void update_face_looking(Face* face, float deltaTime, bool hasFaceTracking) {
                 break;
 
             case 4:  // Move back
-                move_head(-face->targetX * HEAD_SCALE, -face->targetY * HEAD_SCALE, 0);
+                move_degrees(-face->targetX * HEAD_LOOK_DEGREES, -face->targetY * HEAD_LOOK_DEGREES, 0);
                 face->currentHeadX = 0.0f;
                 face->currentHeadY = 0.0f;
                 face->lookState = 5;

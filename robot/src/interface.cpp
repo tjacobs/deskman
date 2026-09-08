@@ -31,8 +31,6 @@ using json = nlohmann::json;
 using namespace std;
 using namespace std::chrono;
 
-const int HEAD_PERCENT_TILT_STEP = 20;
-const int HEAD_PERCENT_HAT_STEP = 20;
 const int CALL_HANDOFF_WAIT_SECONDS = 8;
 const int CALL_MENU_TAP_DEBOUNCE_MS = 300;
 static const char* ROBOT_INTERFACE_NAME = "robot.interface";
@@ -96,8 +94,16 @@ static json position_reply() {
     int pan = 0;
     int tilt = 0;
     int hat = 0;
-    get_percent(pan, tilt, hat);
-    return {{"ok", true}, {"x", pan}, {"y", tilt}, {"hat", hat}};
+    get_degrees(pan, tilt, hat);
+    return {{"ok", true}, {"pan", pan}, {"tilt", tilt}, {"hat", hat}};
+}
+
+// Read a JSON number as int, or the fallback when the key is missing
+static int request_int(const json& request, const char* key, int fallback) {
+    if (!request.contains(key)) return fallback;
+    if (request[key].is_number_integer()) return request[key].get<int>();
+    if (request[key].is_number()) return static_cast<int>(request[key].get<double>());
+    return fallback;
 }
 
 static string handle_request(const string& line) {
@@ -106,44 +112,21 @@ static string handle_request(const string& line) {
         json request = json::parse(line);
         string command = request.value("command", "");
 
-        if (command == "center") {
-            center();
-            reply = position_reply();
-        } else if (command == "get") {
+        if (command == "get") {
             reply = position_reply();
         } else if (command == "move") {
-            if (request.contains("direction")) {
-                string direction = request["direction"].get<string>();
-                double degrees = request.value("degrees", 60.0);
-                if (direction == "center" || direction == "left" || direction == "right") {
-                    look_head(direction, degrees);
-                } else if (direction == "up") {
-                    move_percent(0, HEAD_PERCENT_TILT_STEP, 0);
-                } else if (direction == "down") {
-                    move_percent(0, -HEAD_PERCENT_TILT_STEP, 0);
-                } else if (direction == "raise") {
-                    move_percent(0, 0, -HEAD_PERCENT_HAT_STEP);
-                } else if (direction == "lower") {
-                    move_percent(0, 0, HEAD_PERCENT_HAT_STEP);
-                } else {
-                    reply = {{"ok", false}, {"error", "unknown direction"}};
-                    return reply.dump();
-                }
-            } else if (request.contains("x") || request.contains("y") || request.contains("hat")) {
-                int pan = 0;
-                int tilt = 0;
-                int hat = 0;
-                get_percent(pan, tilt, hat);
-                if (request.contains("x")) pan = request["x"].get<int>();
-                if (request.contains("y")) tilt = request["y"].get<int>();
-                if (request.contains("hat")) hat = request["hat"].get<int>();
-                set_percent(pan, tilt, hat);
-            } else {
-                int pan_diff = request.value("dx", 0);
-                int tilt_diff = request.value("dy", 0);
-                int hat_diff = request.value("dhat", 0);
-                move_percent(pan_diff, tilt_diff, hat_diff);
-            }
+            // Start from the current pose in degrees, then apply absolute and delta keys
+            int pan = 0;
+            int tilt = 0;
+            int hat = 0;
+            get_degrees(pan, tilt, hat);
+            if (request.contains("pan")) pan = request_int(request, "pan", pan);
+            if (request.contains("tilt")) tilt = request_int(request, "tilt", tilt);
+            if (request.contains("hat")) hat = request_int(request, "hat", hat);
+            pan += request_int(request, "pan_delta", 0);
+            tilt += request_int(request, "tilt_delta", 0);
+            hat += request_int(request, "hat_delta", 0);
+            set_degrees(pan, tilt, hat);
             reply = position_reply();
         } else if (command == "pause") {
             if (!wait_call_handoff(CALL_HANDOFF_PAUSE)) reply = {{"ok", false}, {"error", "pause timeout"}};

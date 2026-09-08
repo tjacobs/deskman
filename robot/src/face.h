@@ -61,7 +61,7 @@ extern const float BLINK_SPEED;
 extern const float BLINK_INTERVAL;
 extern const float LOOK_INTERVAL;
 extern const float EYE_MOVE_DURATION;
-extern const float HEAD_SCALE;
+extern const float HEAD_LOOK_DEGREES;
 extern const float WAIT_DURATION;
 
 Face create_face(int center_x, int center_y);

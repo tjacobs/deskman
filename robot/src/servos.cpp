@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <string>
 
 // Shorthand for names used below
@@ -26,21 +27,23 @@ const int SERVO_ID_PAN = 1;
 const int SERVO_ID_TILT = 2;
 const int SERVO_ID_HAT = 3;
 
-// One servo, its travel limits, and commanded position
+// One servo, count limits, degree labels, and commanded position
 struct Servo {
     int id;
     const char *name;
     int position;
     int min_limit;
     int max_limit;
+    int degrees_min;
+    int degrees_high;
     bool found;
 };
 
-// Pan and tilt come first so leftover UART bytes do not land on hat
+// Pan, tilt, and hat
 static Servo servos[] = {
-    {SERVO_ID_PAN,  "pan",  400, 0,   800, false},
-    {SERVO_ID_TILT, "tilt", 500, 200, 800, false},
-    {SERVO_ID_HAT,  "hat",  400, 0,   800, false},
+    {SERVO_ID_PAN,  "pan",  400, 0,   800, -90, 90, false},
+    {SERVO_ID_TILT, "tilt", 500, 200, 800, -10, 30, false},
+    {SERVO_ID_HAT,  "hat",  400, 0,   800, -35, 90, false},
 };
 
 // Serialize servo writes
@@ -48,6 +51,12 @@ static recursive_mutex servo_mutex;
 
 // On-screen face yaw for a left or right look
 const float LOOK_FACE_PAN = 20.0f;
+
+// Keyboard nudges in degrees
+const int HEAD_KEY_NUDGE_DEGREES = 4;
+const int HEAD_KEY_PAN_DEGREES = 20;
+const int HEAD_KEY_TILT_DEGREES = 8;
+const int HEAD_KEY_HAT_DEGREES = 8;
 
 // Servo parameters
 int speed = 1800;
@@ -97,6 +106,10 @@ static bool open_first_servo_port();
 static Servo *known_servo(int id);
 static bool detect_or_promote_servo(Servo &servo);
 static void scan_sweep_ids();
+static int degrees_to_servo(const Servo &servo, float degrees);
+static float servo_to_degrees(const Servo &servo, int position);
+static float counts_to_degrees(const Servo &servo, float counts);
+static int degrees_to_counts(const Servo &servo, float degrees);
 
 // Extra IDs found while --servos scans 1 to 20
 static Servo sweep_scan_servos[SERVO_SWEEP_SCAN_MAX];
@@ -111,6 +124,9 @@ static void swap_inverted_limits(Servo &servo) {
     int high = servo.min_limit;
     servo.min_limit = servo.max_limit;
     servo.max_limit = high;
+    int degrees_high = servo.degrees_min;
+    servo.degrees_min = servo.degrees_high;
+    servo.degrees_high = degrees_high;
 }
 
 // Detect pan, tilt, and hat at 1 Mbps, then promote leftover 115200 motors
@@ -179,9 +195,9 @@ int open_servos() {
     for (Servo &servo : servos) {
         swap_inverted_limits(servo);
     }
-    servos[0].position = servos[0].min_limit + (servos[0].max_limit - servos[0].min_limit) / 2;
-    servos[1].position = servos[1].min_limit + (servos[1].max_limit - servos[1].min_limit) / 2;
-    servos[2].position = servos[2].min_limit;
+    servos[0].position = degrees_to_servo(servos[0], 0);
+    servos[1].position = degrees_to_servo(servos[1], 0);
+    servos[2].position = degrees_to_servo(servos[2], servos[2].degrees_min);
 
     // Try USB first, then the onboard UART, keep the first bus that answers
     st.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
@@ -391,7 +407,7 @@ static void scan_sweep_ids() {
 
         // Extra IDs use the same default travel as an unconfigured hat
         snprintf(sweep_scan_names[id - 1], sizeof(sweep_scan_names[id - 1]), "id%d", id);
-        Servo extra = {id, sweep_scan_names[id - 1], 400, 0, 800, false};
+        Servo extra = {id, sweep_scan_names[id - 1], 400, 0, 800, -90, 90, false};
         extra.found = detect_or_promote_servo(extra);
         if (!extra.found) continue;
         extra.position = extra.min_limit + (extra.max_limit - extra.min_limit) / 2;
@@ -502,139 +518,97 @@ static void sweep_line(const char *label, Servo &servo, int position) {
     }
 }
 
-// Move pan, tilt, and hat some relative amount
-void move_head(int pan_diff, int tilt_diff, int hat_diff) {
+// Map an axis degree onto its config.json count range
+static int degrees_to_servo(const Servo &servo, float degrees) {
+    if (degrees < servo.degrees_min) degrees = servo.degrees_min;
+    if (degrees > servo.degrees_high) degrees = servo.degrees_high;
+    int servo_span = servo.max_limit - servo.min_limit;
+    int degrees_span = servo.degrees_high - servo.degrees_min;
+    if (degrees_span == 0) return servo.min_limit;
+    return servo.min_limit + (int)lround((degrees - servo.degrees_min) * servo_span / degrees_span);
+}
+
+// Map a servo count back onto that axis degree range
+static float servo_to_degrees(const Servo &servo, int position) {
+    int servo_span = servo.max_limit - servo.min_limit;
+    if (servo_span == 0) return servo.degrees_min;
+    int degrees_span = servo.degrees_high - servo.degrees_min;
+    return servo.degrees_min + (float)(position - servo.min_limit) * degrees_span / servo_span;
+}
+
+// Turn a count nudge into degrees on that servo's mapped range
+static float counts_to_degrees(const Servo &servo, float counts) {
+    int servo_span = servo.max_limit - servo.min_limit;
+    if (servo_span == 0) return 0;
+    int degrees_span = servo.degrees_high - servo.degrees_min;
+    return counts * (float)degrees_span / servo_span;
+}
+
+// Turn a degree nudge into STS counts on that servo's mapped range
+static int degrees_to_counts(const Servo &servo, float degrees) {
+    int degrees_span = servo.degrees_high - servo.degrees_min;
+    if (degrees_span == 0) return 0;
+    int servo_span = servo.max_limit - servo.min_limit;
+    return (int)lround(degrees * servo_span / (float)degrees_span);
+}
+
+// Pan degrees that match this many STS counts
+float pan_degrees_from_counts(float counts) {
+    return counts_to_degrees(servos[0], counts);
+}
+
+// Tilt degrees that match this many STS counts
+float tilt_degrees_from_counts(float counts) {
+    return counts_to_degrees(servos[1], counts);
+}
+
+// Current commanded pan, tilt, and hat in degrees
+void get_degrees(int &pan, int &tilt, int &hat) {
     lock_guard<recursive_mutex> lock(servo_mutex);
-    servos[0].position += pan_diff;
-    servos[1].position += tilt_diff;
-    servos[2].position += hat_diff;
-    move_servos();
+    pan = (int)lround(servo_to_degrees(servos[0], servos[0].position));
+    tilt = (int)lround(servo_to_degrees(servos[1], servos[1].position));
+    hat = (int)lround(servo_to_degrees(servos[2], servos[2].position));
 }
 
-// Move head to a specific direction
-void move_head(const string &direction) {
-    if      (direction == "Up")    move_head(  0,  200, 0);
-    else if (direction == "Down")  move_head(  0, -200, 0);
-    else if (direction == "Left")  move_head(-600,   0, 0);
-    else if (direction == "Right") move_head( 600,   0, 0);
-}
-
-// Map -100..100 onto a servo min..max range
-static int percent_to_servo(int percent, int min_value, int max_value) {
-    percent = clamp_to_range(percent, -100, 100);
-    int span = max_value - min_value;
-    return min_value + (percent + 100) * span / 200;
-}
-
-// Map a servo position back onto -100..100
-static int servo_to_percent(int position, int min_value, int max_value) {
-    int span = max_value - min_value;
-    if (span == 0) return 0;
-    return -100 + ((position - min_value) * 200 + span / 2) / span;
-}
-
-// Face left, right, or center from the midpoint, not from the current pose
-void look_head(const string &direction, double degrees) {
+// Set pan, tilt, and hat from degrees, clamp to each axis range
+void set_degrees(int pan, int tilt, int hat) {
     lock_guard<recursive_mutex> lock(servo_mutex);
-
-    // Clamp degrees onto 0-90, 90 is full pan travel
-    if (degrees < 0) degrees = 0;
-    if (degrees > 90) degrees = 90;
-    int pan_percent = static_cast<int>((degrees / 90.0) * 100);
-
-    // Set absolute pan from center, tilt stays centered
-    servos[1].position = percent_to_servo(0, servos[1].min_limit, servos[1].max_limit);
-    if (direction == "center") {
-        servos[0].position = percent_to_servo(0, servos[0].min_limit, servos[0].max_limit);
-        servos[2].position = servos[2].min_limit;
-        face.lookTiltX = 0.0f;
-        face.lookTiltY = 0.0f;
-    } else if (direction == "left") {
-        servos[0].position = percent_to_servo(-pan_percent, servos[0].min_limit, servos[0].max_limit);
-        face.lookTiltX = LOOK_FACE_PAN * static_cast<float>(degrees / 90.0);
-        face.lookTiltY = 0.0f;
-    } else if (direction == "right") {
-        servos[0].position = percent_to_servo(pan_percent, servos[0].min_limit, servos[0].max_limit);
-        face.lookTiltX = -LOOK_FACE_PAN * static_cast<float>(degrees / 90.0);
-        face.lookTiltY = 0.0f;
-    } else {
-        return;
-    }
-
-    // Write servos and keep the on-screen face matching
-    move_servos();
-    printf("Look %s to pan %d, tilt %d\n", direction.c_str(), servos[0].position, servos[1].position);
+    servos[0].position = degrees_to_servo(servos[0], pan);
+    servos[1].position = degrees_to_servo(servos[1], tilt);
+    servos[2].position = degrees_to_servo(servos[2], hat);
+    pan = (int)lround(servo_to_degrees(servos[0], servos[0].position));
+    tilt = (int)lround(servo_to_degrees(servos[1], servos[1].position));
+    hat = (int)lround(servo_to_degrees(servos[2], servos[2].position));
+    face.lookTiltX = -LOOK_FACE_PAN * static_cast<float>(pan) / 90.0f;
+    face.lookTiltY = 0.0f;
+    printf("Move head to pan %d, tilt %d, hat %d\n", pan, tilt, hat);
     fflush(stdout);
-}
-
-// Park pan and tilt at center, hat at min, all the way up
-void center() {
-    lock_guard<recursive_mutex> lock(servo_mutex);
-    servos[0].position = servos[0].min_limit + (servos[0].max_limit - servos[0].min_limit) / 2;
-    servos[1].position = servos[1].min_limit + (servos[1].max_limit - servos[1].min_limit) / 2;
-    servos[2].position = servos[2].min_limit;
     move_servos();
 }
 
-// Current commanded pan, tilt, and hat
-void get_head_position(int &pan, int &tilt, int &hat) {
+// Add pan, tilt, and hat by converting each degree nudge into STS counts
+void move_degrees(float pan_delta, float tilt_delta, float hat_delta) {
     lock_guard<recursive_mutex> lock(servo_mutex);
-    pan = servos[0].position;
-    tilt = servos[1].position;
-    hat = servos[2].position;
-}
-
-// Set absolute pan, tilt, and hat
-void set_head_position(int pan, int tilt, int hat) {
-    lock_guard<recursive_mutex> lock(servo_mutex);
-    servos[0].position = pan;
-    servos[1].position = tilt;
-    servos[2].position = hat;
+    servos[0].position += degrees_to_counts(servos[0], pan_delta);
+    servos[1].position += degrees_to_counts(servos[1], tilt_delta);
+    servos[2].position += degrees_to_counts(servos[2], hat_delta);
     move_servos();
-}
-
-// Current commanded pan, tilt, and hat as -100..100
-void get_percent(int &pan, int &tilt, int &hat) {
-    lock_guard<recursive_mutex> lock(servo_mutex);
-    pan = servo_to_percent(servos[0].position, servos[0].min_limit, servos[0].max_limit);
-    tilt = servo_to_percent(servos[1].position, servos[1].min_limit, servos[1].max_limit);
-    hat = servo_to_percent(servos[2].position, servos[2].min_limit, servos[2].max_limit);
-}
-
-// Set pan, tilt, and hat from percent commands
-void set_percent(int pan, int tilt, int hat) {
-    printf("Move head to pan %d, tilt %d, hat %d", pan, tilt, hat);
-    for (Servo &servo : servos) {
-        if (!servo.found) printf(", %s dead", servo.name);
-    }
-    printf("\n");
-    fflush(stdout);
-    set_head_position(percent_to_servo(pan, servos[0].min_limit, servos[0].max_limit), percent_to_servo(tilt, servos[1].min_limit, servos[1].max_limit), percent_to_servo(hat, servos[2].min_limit, servos[2].max_limit));
-}
-
-// Nudge pan, tilt, and hat in percent
-void move_percent(int pan_diff, int tilt_diff, int hat_diff) {
-    int pan = 0;
-    int tilt = 0;
-    int hat = 0;
-    get_percent(pan, tilt, hat);
-    set_percent(pan + pan_diff, tilt + tilt_diff, hat + hat_diff);
 }
 
 // Arrow keys and ijkluo nudge pan, tilt, and hat
 void handle_servo_keyboard_input(SDL_Event* event, Face* face) {
     if (event->type != SDL_KEYDOWN) return;
     switch (event->key.keysym.sym) {
-        case SDLK_UP:    move_head(0, 40, 0);     update_face(face, 0, 1); break;
-        case SDLK_DOWN:  move_head(0, -40, 0);    update_face(face, 0, -1); break;
-        case SDLK_RIGHT: move_head(-40, 0, 0);    break;
-        case SDLK_LEFT:  move_head(40, 0, 0);     break;
-        case SDLK_j:     move_head(900, 0, 0);    update_face(face, 5, 0); break;
-        case SDLK_l:     move_head(-900, 0, 0);   update_face(face, -5, 0); break;
-        case SDLK_i:     move_head(0, 200, 0);    update_face(face, 5, 0); break;
-        case SDLK_k:     move_head(0, -200, 0);   update_face(face, -5, 0); break;
-        case SDLK_u:     move_head(0, 0, 40);     break;
-        case SDLK_o:     move_head(0, 0, -40);    break;
+        case SDLK_UP:    move_degrees(0, HEAD_KEY_NUDGE_DEGREES, 0);     update_face(face, 0, 1); break;
+        case SDLK_DOWN:  move_degrees(0, -HEAD_KEY_NUDGE_DEGREES, 0);    update_face(face, 0, -1); break;
+        case SDLK_RIGHT: move_degrees(HEAD_KEY_NUDGE_DEGREES, 0, 0);     break;
+        case SDLK_LEFT:  move_degrees(-HEAD_KEY_NUDGE_DEGREES, 0, 0);    break;
+        case SDLK_j:     move_degrees(HEAD_KEY_PAN_DEGREES, 0, 0);      update_face(face, 5, 0); break;
+        case SDLK_l:     move_degrees(-HEAD_KEY_PAN_DEGREES, 0, 0);     update_face(face, -5, 0); break;
+        case SDLK_i:     move_degrees(0, HEAD_KEY_TILT_DEGREES, 0);     update_face(face, 5, 0); break;
+        case SDLK_k:     move_degrees(0, -HEAD_KEY_TILT_DEGREES, 0);    update_face(face, -5, 0); break;
+        case SDLK_u:     move_degrees(0, 0, HEAD_KEY_HAT_DEGREES);      break;
+        case SDLK_o:     move_degrees(0, 0, -HEAD_KEY_HAT_DEGREES);     break;
     }
 }
 

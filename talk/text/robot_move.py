@@ -9,8 +9,8 @@ import socket
 
 # Config
 LOOK_DEFAULT_DEGREES = 90
-LOOK_MAX_DEGREES = 90
-HEAD_PERCENT_MAX = 100
+HAT_OPEN_DEGREES = -35
+HAT_CLOSED_DEGREES = 90
 CONNECT_TIMEOUT_SEC = 2.0
 READ_TIMEOUT_SEC = 5.0
 
@@ -52,19 +52,21 @@ def main():
 # Turn the head via the deskman control socket
 def look(direction, degrees):
     direction = normalize_direction(direction)
-    percent = degrees_to_percent(degrees)
+    amount = look_degrees(degrees)
     if direction == "center":
-        reply = send_command({"command": "center"})
-    elif direction == "left" or direction == "right":
-        reply = send_command({"command": "move", "direction": direction, "degrees": float(percent * LOOK_MAX_DEGREES / HEAD_PERCENT_MAX)})
+        reply = send_command({"command": "move", "pan": 0, "tilt": 0})
+    elif direction == "left":
+        reply = send_command({"command": "move", "pan": -amount})
+    elif direction == "right":
+        reply = send_command({"command": "move", "pan": amount})
     elif direction == "up":
-        reply = send_command({"command": "move", "y": percent})
+        reply = send_command({"command": "move", "tilt": amount})
     elif direction == "down":
-        reply = send_command({"command": "move", "y": -percent})
+        reply = send_command({"command": "move", "tilt": -amount})
     elif direction == "hat_up":
-        reply = send_command({"command": "move", "hat": HEAD_PERCENT_MAX - percent})
+        reply = send_command({"command": "move", "hat": HAT_OPEN_DEGREES})
     elif direction == "hat_down":
-        reply = send_command({"command": "move", "hat": percent})
+        reply = send_command({"command": "move", "hat": HAT_CLOSED_DEGREES})
     else:
         raise RuntimeError(f"unknown direction {direction}")
 
@@ -85,22 +87,20 @@ def look(direction, degrees):
     if direction == "down":
         return "Looked down."
     if direction == "hat_up":
-        return "Moved my hat up."
+        return "My hat is up."
     if direction == "hat_down":
-        return "Moved my hat down."
+        return "My hat is down."
     return f"Moved {direction}."
 
-# Map 0-90 degrees onto 0-100 percent of travel
-def degrees_to_percent(degrees):
+# Read a look amount in degrees, default all the way
+def look_degrees(degrees):
     try:
         value = float(degrees)
     except (TypeError, ValueError):
         value = float(LOOK_DEFAULT_DEGREES)
     if value <= 0:
         value = float(LOOK_DEFAULT_DEGREES)
-    if value > LOOK_MAX_DEGREES:
-        value = LOOK_MAX_DEGREES
-    return int(round(value / LOOK_MAX_DEGREES * HEAD_PERCENT_MAX))
+    return int(round(value))
 
 # Lowercase and collapse aliases like hat up
 def normalize_direction(direction):

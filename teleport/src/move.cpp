@@ -19,8 +19,9 @@ using namespace std;
 using namespace std::chrono;
 
 static const char* ROBOT_INTERFACE_NAME = "robot.interface";
-const int HEAD_STEP = 8;
-const int HEAD_HAT_STEP = 20;
+const int HEAD_PAN_STEP_DEGREES = 4;
+const int HEAD_TILT_STEP_DEGREES = 3;
+const int HEAD_HAT_STEP_DEGREES = 8;
 const int HEAD_REPEAT_MS = 100;
 
 static mutex headMutex;
@@ -42,20 +43,22 @@ void move(const string& command, int value) {
     string axis;
     int* lastValue = NULL;
     steady_clock::time_point* lastMove = NULL;
-    int step = HEAD_STEP;
+    int step = HEAD_PAN_STEP_DEGREES;
     if (command == "x") {
-        axis = "dy";
+        axis = "tilt_delta";
         lastValue = &lastX;
         lastMove = &lastMoveX;
+        step = HEAD_TILT_STEP_DEGREES;
     } else if (command == "y") {
-        axis = "dx";
+        axis = "pan_delta";
         lastValue = &lastY;
         lastMove = &lastMoveY;
+        step = HEAD_PAN_STEP_DEGREES;
     } else if (command == "hat") {
-        axis = "dhat";
+        axis = "hat_delta";
         lastValue = &lastHat;
         lastMove = &lastMoveHat;
-        step = HEAD_HAT_STEP;
+        step = HEAD_HAT_STEP_DEGREES;
     } else {
         return;
     }
@@ -72,9 +75,9 @@ void move(const string& command, int value) {
     *lastValue = value;
     *lastMove = now;
 
-    // Web sends 1 or 100, both mean one step. Hat up is negative percent
+    // Web sends 1 or 100, both mean one step. Hat up is negative degrees
     int delta = value > 0 ? step : -step;
-    if (axis == "dhat") delta = -delta;
+    if (axis == "hat_delta") delta = -delta;
     string line = "{\"command\":\"move\",\"" + axis + "\":" + to_string(delta) + "}";
     if (!writeHeadLine(line)) {
         closeHead();
