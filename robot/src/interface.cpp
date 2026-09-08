@@ -185,7 +185,7 @@ static void send_menu() {
     send_to_clients(json{{"command", "menu"}}.dump());
 }
 
-// True while Exit is showing on the bottom bar
+// True while the peer list is up and Exit is showing
 bool call_overlay_open() {
     return g_overlay_open.load();
 }
@@ -210,12 +210,20 @@ void handle_call_event(const SDL_Event& event) {
         y = (int)(event.tfinger.y * screen_height);
     }
     if (!tap) return;
-    if (g_overlay_open.load() && tap_is_exit(x, y)) {
+
+    // Overlay keeps the bar up so Exit and Call stay reachable
+    bool bar_showing = status_bar_visible() || g_overlay_open.load();
+    if (bar_showing && g_overlay_open.load() && tap_is_exit(x, y)) {
         send_to_clients(json{{"command", "quit"}}.dump());
         g_quit = true;
         return;
     }
-    send_menu();
+    if (bar_showing && tap_is_call(x, y)) {
+        send_menu();
+        return;
+    }
+    if (g_overlay_open.load()) return;
+    set_status_bar_visible(!bar_showing);
 }
 
 static void serve_client(int client_fd) {

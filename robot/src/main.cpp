@@ -301,7 +301,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             string temperature_warning = temperature_warning_text();
             if (!temperature_warning.empty()) draw_text(temperature_warning.c_str(), 10, 50, face.font, {200, 0, 0, 255});
 
-            // Last log line, pack voltage, and Exit, only while the overlay is up
+            // Last log line, pack voltage, Call, and Exit while the overlay is up
             draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
 
             if (use_camera && faceTracker.isCameraAvailable()) faceTracker.updateWindow();

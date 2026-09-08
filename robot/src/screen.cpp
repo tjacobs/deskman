@@ -42,6 +42,9 @@ static const char* DAY_NAMES[] = {
 // A dead IBus socket, GNOME pops its touch keyboard when SDL takes input method focus
 static const char* DEAD_IBUS_ADDRESS = "unix:path=/nonexistent";
 
+// Grey bar and Call start visible, a tap on the face hides them
+static bool g_status_bar_visible = true;
+
 // Status text
 string currentStatus;
 mutex statusMutex;
@@ -300,15 +303,37 @@ void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color) 
     }
 }
 
-// Place Exit on the right of the bottom bar
-static SDL_Rect exit_button_rect() {
+// True when a tap lands inside a button
+static bool tap_in_rect(int x, int y, SDL_Rect rect) {
+    return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
+}
+
+// Draw a filled button with centered label
+static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font) {
+    SDL_SetRenderDrawColor(renderer, fill.r, fill.g, fill.b, fill.a);
+    SDL_RenderFillRect(renderer, &rect);
+    if (!font || !label) return;
+    int text_width = 0;
+    int text_height = 0;
+    if (TTF_SizeText(font, label, &text_width, &text_height) != 0) return;
+    draw_text(label, rect.x + (rect.w - text_width) / 2, rect.y + (rect.h - text_height) / 2, font, {255, 255, 255, 255});
+}
+
+// Place Call on the right of the bottom bar
+static SDL_Rect call_button_rect() {
     int bar_y = screen_height - BOTTOM_BAR_HEIGHT;
     return {screen_width - BOTTOM_BAR_PAD - EXIT_BUTTON_WIDTH, bar_y + BOTTOM_BAR_PAD, EXIT_BUTTON_WIDTH, BOTTOM_BAR_HEIGHT - BOTTOM_BAR_PAD * 2};
 }
 
-// Status bar with the last log line, battery text, and a red Exit button
+// Place Exit to the left of Call
+static SDL_Rect exit_button_rect() {
+    SDL_Rect call_rect = call_button_rect();
+    return {call_rect.x - BOTTOM_BAR_PAD - EXIT_BUTTON_WIDTH, call_rect.y, call_rect.w, call_rect.h};
+}
+
+// Status bar with the last log line, battery text, Call, and Exit while the overlay is up
 void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit) {
-    if (!show_exit) return;
+    if (!show_exit && !g_status_bar_visible) return;
     int bar_y = screen_height - BOTTOM_BAR_HEIGHT;
     SDL_Rect bar = {0, bar_y, screen_width, BOTTOM_BAR_HEIGHT};
     SDL_SetRenderDrawColor(renderer, 180, 180, 180, 255);
@@ -316,7 +341,7 @@ void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit) {
     SDL_SetRenderDrawColor(renderer, 120, 120, 120, 255);
     SDL_RenderDrawRect(renderer, &bar);
 
-    // Battery above the last log line on the left, clipped so it does not run into Exit
+    // Battery above the last log line on the left, clipped so it does not run into the buttons
     string log_line = last_log_line();
     bool have_log = !log_line.empty() && font;
     bool have_battery = battery && battery[0] && font;
@@ -329,7 +354,7 @@ void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit) {
     int block_height = log_height + battery_height;
     if (have_log && have_battery) block_height += BOTTOM_BAR_LINE_GAP;
     int text_y = bar_y + (BOTTOM_BAR_HEIGHT - block_height) / 2;
-    int text_right = exit_button_rect().x - BOTTOM_BAR_PAD;
+    int text_right = (show_exit ? exit_button_rect() : call_button_rect()).x - BOTTOM_BAR_PAD;
     int clip_width = text_right - BOTTOM_BAR_PAD;
     if (clip_width < 0) clip_width = 0;
     SDL_Rect text_clip = {BOTTOM_BAR_PAD, bar_y, clip_width, BOTTOM_BAR_HEIGHT};
@@ -341,23 +366,29 @@ void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit) {
     if (have_log) draw_text(log_line.c_str(), BOTTOM_BAR_PAD, text_y, font, {0, 0, 0, 255});
     SDL_RenderSetClipRect(renderer, nullptr);
 
-    // Exit on the right
-    SDL_Rect exit_rect = exit_button_rect();
-    SDL_SetRenderDrawColor(renderer, 180, 40, 40, 255);
-    SDL_RenderFillRect(renderer, &exit_rect);
-    if (font) {
-        int text_width = 0;
-        int text_height = 0;
-        if (TTF_SizeText(font, "Exit", &text_width, &text_height) == 0) {
-            draw_text("Exit", exit_rect.x + (exit_rect.w - text_width) / 2, exit_rect.y + (exit_rect.h - text_height) / 2, font, {255, 255, 255, 255});
-        }
-    }
+    // Call on the right, Exit to its left while the overlay is up
+    if (show_exit) draw_bar_button(exit_button_rect(), "Exit", {180, 40, 40, 255}, font);
+    draw_bar_button(call_button_rect(), "Call", {40, 90, 180, 255}, font);
 }
 
 // True when a tap lands on Exit
 bool tap_is_exit(int x, int y) {
-    SDL_Rect exit_rect = exit_button_rect();
-    return x >= exit_rect.x && x < exit_rect.x + exit_rect.w && y >= exit_rect.y && y < exit_rect.y + exit_rect.h;
+    return tap_in_rect(x, y, exit_button_rect());
+}
+
+// True when a tap lands on Call
+bool tap_is_call(int x, int y) {
+    return tap_in_rect(x, y, call_button_rect());
+}
+
+// True when the grey bar and Call are on screen
+bool status_bar_visible() {
+    return g_status_bar_visible;
+}
+
+// Show or hide the grey bar and Call
+void set_status_bar_visible(bool visible) {
+    g_status_bar_visible = visible;
 }
 
 void draw_coordinate_text(Face* face) {
