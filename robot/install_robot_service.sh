@@ -76,8 +76,8 @@ main() {
     cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=Robot service
-After=network.target sound.target graphical.target
-Wants=graphical.target
+After=network.target sound.target graphical.target display-manager.service
+Wants=graphical.target display-manager.service
 
 [Service]
 Type=simple

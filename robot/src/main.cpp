@@ -62,6 +62,7 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
 static void check_already_running();
 static pid_t find_other_running();
 static void setup_display_env();
+static bool display_is_rotated_left();
 static void rotate_screen();
 static void show_face();
 static void draw_face();
@@ -155,7 +156,6 @@ int main(int argc, char **argv) {
 
     // Create face tracker after args so --camera / --no-camera apply
     FaceTracker faceTracker(show_camera, use_camera);
-    rotate_screen();
 
     // Start face tracking if camera is available
     if (use_camera && faceTracker.isCameraAvailable()) {
@@ -369,6 +369,11 @@ static void setup_display_env() {
     }
 }
 
+// True when DP-1 is already in the portrait left orientation
+static bool display_is_rotated_left() {
+    return system("xrandr --query 2>/dev/null | grep -q '^DP-1 connected.* left ('") == 0;
+}
+
 static void rotate_screen() {
 #ifdef __linux__
     const int tries = 2;
@@ -386,14 +391,14 @@ static void rotate_screen() {
     // Skip quietly when this machine has no Waveshare panel
     if (!connected) return;
 
-    // Apply left rotation, use right for the other direction
-    system("xrandr --output DP-1 --rotate left 2>/dev/null");
-
-    // Wait until xrandr reports left, GNOME can overwrite it during login
-    for (int try_index = 0; try_index < tries; try_index++) {
-        if (system("xrandr --query 2>/dev/null | grep -q '^DP-1 connected.* left ('") == 0) break;
+    // Leave the panel alone when it is already left, a second xrandr flashes the NVIDIA splash
+    if (!display_is_rotated_left()) {
         system("xrandr --output DP-1 --rotate left 2>/dev/null");
-        sleep_for(milliseconds(SCREEN_WAIT_MS));
+        for (int try_index = 0; try_index < tries; try_index++) {
+            if (display_is_rotated_left()) break;
+            system("xrandr --output DP-1 --rotate left 2>/dev/null");
+            sleep_for(milliseconds(SCREEN_WAIT_MS));
+        }
     }
 
     // Keep the touch device mapped to the rotated output

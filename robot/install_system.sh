@@ -31,6 +31,7 @@ main() {
     disable_crash_dialog
     disable_software_updater
     configure_session
+    persist_display_rotation
     disable_screen_idle
     enable_service_shortcuts
     enable_screen_keyboard
@@ -249,6 +250,58 @@ configure_session() {
     run_as_user gsettings set org.gnome.shell enabled-extensions "['ding@rastersoft.com']" || true
     remove_extra_desktop_launchers
     remove_extra_home_folders
+}
+
+# Keep the Waveshare panel in portrait so GNOME does not flip it after the face
+persist_display_rotation() {
+    echo "Keeping DP-1 rotated left"
+
+    # Same EDID as the 1024x600 Waveshare on DP-1
+    monitors_xml="${RUN_HOME}/.config/monitors.xml"
+    mkdir -p "${RUN_HOME}/.config"
+    cat > "${monitors_xml}" <<'EOF'
+<monitors version="2">
+  <configuration>
+    <logicalmonitor>
+      <x>0</x>
+      <y>0</y>
+      <scale>1</scale>
+      <primary>yes</primary>
+      <transform>
+        <rotation>left</rotation>
+        <flipped>no</flipped>
+      </transform>
+      <monitor>
+        <monitorspec>
+          <connector>DP-1</connector>
+          <vendor>ADA</vendor>
+          <product>0x0004</product>
+          <serial>0x00000001</serial>
+        </monitorspec>
+        <mode>
+          <width>1024</width>
+          <height>600</height>
+          <rate>59.85</rate>
+        </mode>
+      </monitor>
+    </logicalmonitor>
+  </configuration>
+</monitors>
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${monitors_xml}"
+
+    # Login screen uses the same layout
+    mkdir -p /var/lib/gdm3/.config
+    cp "${monitors_xml}" /var/lib/gdm3/.config/monitors.xml
+    chown gdm:gdm /var/lib/gdm3/.config/monitors.xml 2>/dev/null || true
+
+    # Rotate at X start so the first frame is already portrait
+    cat > /etc/X11/xorg.conf.d/10-deskman-rotate.conf <<'EOF'
+Section "Monitor"
+    Identifier "DP-1"
+    Option "Rotate" "left"
+EndSection
+EOF
 }
 
 # Drop leftover Desktop launchers, keep Start Robot and Start Teleport
