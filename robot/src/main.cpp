@@ -27,6 +27,8 @@
 #include <system_error>
 #include <vector>
 #include <iterator>
+#include <sstream>
+#include <cstdio>
 
 using namespace std;
 using namespace std::chrono;
@@ -40,6 +42,7 @@ static const int TALK_STOP_WAIT_MS = 200;
 static const int TALK_STOP_POLL_MS = 50;
 static const int MAX_FPS = 30;
 static const int FACE_TRACK_COUNTS = 20;
+static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
 static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
@@ -58,6 +61,8 @@ static bool g_call_had_talk = false;
 VectorRenderer vectorRenderer;
 
 static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos);
+static void check_already_running();
+static pid_t find_other_running();
 static void setup_display_env();
 static void rotate_screen();
 static void show_face();
@@ -91,6 +96,9 @@ int main(int argc, char **argv) {
     bool print_servos = false;
     int parse_result = parse_arguments(argc, argv, sweep_only, no_servos, print_servos);
     if (parse_result != 0) return parse_result == 1 ? 0 : 1;
+
+    // Make sure only one robot is running
+    check_already_running();
 
     // Relax servos on any later exit
     atexit([]() { relax_servos(); });
@@ -619,4 +627,56 @@ static void stop_talk_process() {
     kill(g_talk_pid, SIGKILL);
     waitpid(g_talk_pid, &status, WNOHANG);
     g_talk_pid = -1;
+}
+
+// Make sure only one robot is running
+static void check_already_running() {
+    pid_t existing_pid = find_other_running();
+    if (existing_pid <= 0) return;
+    cout << "Robot already running, pid " << existing_pid << endl;
+    cout << "sudo service robot stop" << endl;
+    exit(1);
+}
+
+// Find another robot process
+static pid_t find_other_running() {
+    FILE* pipe = popen("ps aux", "r");
+    if (!pipe) return -1;
+
+    // Skip the ps header, then parse pid and command
+    pid_t my_pid = getpid();
+    char line[4096];
+    bool header = true;
+    pid_t found_pid = -1;
+    while (fgets(line, sizeof(line), pipe)) {
+        if (header) {
+            header = false;
+            continue;
+        }
+
+        // Skip user, pid, cpu, mem, and the other ps columns so the rest is the command
+        stringstream stream(line);
+        string user, cpu, memory, vsz, rss, tty, stat, start, time;
+        pid_t pid = 0;
+        if (!(stream >> user >> pid >> cpu >> memory >> vsz >> rss >> tty >> stat >> start >> time)) continue;
+        if (pid == my_pid) continue;
+
+        // Command is the remainder of the line
+        string command;
+        getline(stream, command);
+        if (!command.empty() && command[0] == ' ') command.erase(0, 1);
+
+        // Match the robot binary, not robot_service.sh or journalctl
+        stringstream command_stream(command);
+        string executable;
+        command_stream >> executable;
+        size_t slash = executable.find_last_of('/');
+        if (slash != string::npos) executable = executable.substr(slash + 1);
+        if (executable == BINARY_NAME) {
+            found_pid = pid;
+            break;
+        }
+    }
+    pclose(pipe);
+    return found_pid;
 }
