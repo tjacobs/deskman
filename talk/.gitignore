@@ -11,4 +11,5 @@ tools/memory.log
 memory.json
 reminders.json
 accounts.json
+openai.env
 talks/

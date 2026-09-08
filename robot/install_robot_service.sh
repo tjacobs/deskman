@@ -87,6 +87,7 @@ WorkingDirectory=${PROJECT_DIR}
 Environment=HOME=${RUN_HOME}
 Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/${RUN_UID}
+EnvironmentFile=-${TALK_DIR}/openai.env
 ExecStart=${LAUNCHER_SCRIPT}
 Restart=on-failure
 RestartSec=5

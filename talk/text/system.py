@@ -157,6 +157,10 @@ def read_memory_summary():
 
 # Read model alias, params, quant, context, and file date from the server
 def read_model_info():
+    # Cloud reports the hosted model name, not a local GGUF
+    if client.use_cloud():
+        return [f"LLM model: {client.cloud_model_name()}", f"Provider: {client.cloud_provider_name()}"]
+
     lines = []
     try:
         models_payload = get_json(client.MODELS_URL)

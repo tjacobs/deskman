@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 
-# Interface to the local LLM server.
-# Grows context when a request exceeds the window.
+# Interface to the local or cloud LLM.
+# Grows context on the local server when a request exceeds the window.
 
 # Imports
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
 
 # Config
 DEFAULT_MODEL = "gemma-4-e2b"
+DEFAULT_CLOUD_MODEL = "gpt-4o-mini"
+DEFAULT_CLOUD_BASE = "https://api.openai.com"
 DEFAULT_CONTEXT_SIZE = 4096
 MAX_TOKENS = 100
 API_BASE = "http://127.0.0.1:8080"
@@ -23,6 +26,12 @@ HEALTH_URL = f"{API_BASE}/health"
 APPLY_TEMPLATE_URL = f"{API_BASE}/apply-template"
 TOKENIZE_URL = f"{API_BASE}/tokenize"
 CACHE_URL = f"{API_BASE}/slots"
+LLM_LOCAL = "local"
+LLM_CLOUD = "cloud"
+LLM_ENV_NAME = "TALK_LLM"
+CLOUD_MODEL_ENV_NAME = "TALK_CLOUD_MODEL"
+CLOUD_BASE_ENV_NAME = "TALK_CLOUD_BASE"
+OPENAI_KEY_ENV_NAME = "OPENAI_API_KEY"
 MAX_CONTEXT_SIZE = 16384
 REQUEST_TIMEOUT_SECONDS = 300
 GROW_HEADROOM = 256
@@ -31,9 +40,105 @@ READY_TIMEOUT_SECONDS = 180
 READY_POLL_SECONDS = 0.5
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GROW_REQUEST_PATH = os.path.join(SCRIPT_DIR, "cache", "grow_to")
+OPENAI_ENV_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "openai.env")
+
+# Cloud path state, TALK_LLM and flags fill these in
+cloud_enabled = False
+cloud_model = DEFAULT_CLOUD_MODEL
+cloud_base = DEFAULT_CLOUD_BASE
+
+# Read OPENAI_API_KEY from talk/openai.env when the environment has none
+def load_openai_env_file():
+    if os.environ.get(OPENAI_KEY_ENV_NAME, "").strip():
+        return
+    if not os.path.isfile(OPENAI_ENV_FILE):
+        return
+    with open(OPENAI_ENV_FILE, encoding="utf-8") as env_file:
+        for line in env_file:
+            line = line.strip()
+            if not line.startswith(OPENAI_KEY_ENV_NAME + "="):
+                continue
+            value = line.split("=", 1)[1].strip().strip("'\"")
+            if value:
+                os.environ[OPENAI_KEY_ENV_NAME] = value
+            return
+
+# Read TALK_LLM, model, and base from the environment
+def load_cloud_env():
+    global cloud_enabled, cloud_model, cloud_base
+    load_openai_env_file()
+    if env_wants_cloud():
+        cloud_enabled = True
+    env_model = os.environ.get(CLOUD_MODEL_ENV_NAME, "").strip()
+    if env_model:
+        cloud_model = env_model
+    env_base = os.environ.get(CLOUD_BASE_ENV_NAME, "").strip()
+    if env_base:
+        cloud_base = env_base.rstrip("/")
+
+# Turn on cloud from --cloud or TALK_LLM, and pick model and base URL
+def apply_cloud_settings(cloud_flag, model_name):
+    global cloud_enabled, cloud_model
+    load_cloud_env()
+    if cloud_flag:
+        cloud_enabled = True
+    if model_name:
+        cloud_model = model_name
+    if cloud_enabled:
+        require_cloud_key()
+
+# True when TALK_LLM selects the cloud path
+def env_wants_cloud():
+    return os.environ.get(LLM_ENV_NAME, LLM_LOCAL).strip().lower() == LLM_CLOUD
+
+# True when chat completions go to the cloud
+def use_cloud():
+    return cloud_enabled
+
+# Quit when cloud is on and OPENAI_API_KEY is missing
+def require_cloud_key():
+    if cloud_api_key():
+        return
+    print("Error: OPENAI_API_KEY is required for --cloud or TALK_LLM=cloud.", flush=True)
+    sys.exit(1)
+
+# Cloud API key from the environment
+def cloud_api_key():
+    return os.environ.get(OPENAI_KEY_ENV_NAME, "").strip()
+
+# Bearer token for the current chat path
+def chat_api_key():
+    if use_cloud():
+        return cloud_api_key()
+    return API_KEY
+
+# Chat completions URL for local llama-server or the cloud host
+def chat_api_url():
+    if use_cloud():
+        return f"{cloud_base}/v1/chat/completions"
+    return API_URL
+
+# Cloud model alias
+def cloud_model_name():
+    return cloud_model
+
+# Short provider label for logs
+def cloud_provider_name():
+    if "openai.com" in cloud_base:
+        return "OpenAI"
+    return cloud_base
+
+# Apply TALK_LLM from the environment at import
+load_cloud_env()
 
 # Send a chat-completions request, asking server.sh to grow context on overflow
 def request_chat(body, api_key, timeout_seconds):
+    if use_cloud():
+        try:
+            return post_chat(body, api_key, timeout_seconds)
+        except urllib.error.HTTPError as error:
+            error_body = error.read().decode(errors="replace")
+            raise urllib.error.URLError(f"HTTP {error.code}: {error_body.strip() or error.reason}") from error
     last_error = None
     for attempt in range(GROW_ATTEMPTS + 1):
         try:
@@ -46,9 +151,9 @@ def request_chat(body, api_key, timeout_seconds):
                 raise urllib.error.URLError(f"HTTP {error.code}: {error_body.strip() or error.reason}") from error
     raise urllib.error.URLError(str(getattr(last_error, "reason", last_error) or "chat failed after context grow"))
 
-# POST one chat-completions request to the server
+# POST one chat-completions request to the current server
 def post_chat(body, api_key, timeout_seconds):
-    request = urllib.request.Request(API_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"})
+    request = urllib.request.Request(chat_api_url(), data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"})
     with urllib.request.urlopen(request, timeout=timeout_seconds) as result:
         return json.load(result)
 

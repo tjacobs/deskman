@@ -127,6 +127,7 @@ REPLAY_WAKE_MODE = True
 MEMORY_MODE = False
 COLD_MODE = False
 PROMPT_MODE = False
+CLOUD_MODE = False
 LAST_ASK_AT = 0.0
 LAST_LOW_BATTERY_AT = 0.0
 LOW_BATTERY_FALLBACK_INDEX = 0
@@ -147,8 +148,8 @@ text_ask.set_talk_module(sys.modules[__name__])
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE = parse_args()
 
     # Make sure only one running
     check_already_running()
@@ -167,10 +168,13 @@ def main():
         # Load speech models
         whisper_model, vad_model, kokoro_pipeline = load_speech_models()
 
-        # Load text server
-        text_server_process = start_text_server()
-        if not COLD_MODE:
-            warm_text()
+        # Cloud uses OpenAI, local starts llama-server
+        if CLOUD_MODE:
+            print_cloud_text_model()
+        else:
+            text_server_process = start_text_server()
+            if not COLD_MODE:
+                warm_text()
 
         # Run
         run_talk(record, whisper_model, vad_model, kokoro_pipeline)
@@ -195,7 +199,12 @@ def parse_args():
     memory_mode = False
     cold_mode = False
     prompt_mode = False
-    for argument in sys.argv[1:]:
+    cloud_mode = False
+    model_name = ""
+    arguments = sys.argv[1:]
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
         if argument == '--test':
             test_mode = True
         elif argument == '--repeat':
@@ -208,6 +217,15 @@ def parse_args():
             cold_mode = True
         elif argument == '--prompt':
             prompt_mode = True
+        elif argument == '--cloud':
+            cloud_mode = True
+        elif argument == '--model':
+            if index + 1 >= len(arguments):
+                print('Error: --model needs a model name.')
+                print_usage()
+                sys.exit(1)
+            index += 1
+            model_name = arguments[index]
         elif argument == REPLAY_WAKE_FLAG:
             replay_wake_mode = True
         elif argument == NO_REPLAY_WAKE_FLAG:
@@ -219,17 +237,22 @@ def parse_args():
             print(f"Unknown argument: {argument}")
             print_usage()
             sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode
+        index += 1
+    text_client.apply_cloud_settings(cloud_mode, model_name)
+    cloud_mode = text_client.use_cloud()
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode, cloud_mode
 
 # Print usage help
 def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [{NO_REPLAY_WAKE_FLAG}]')
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--model name] [{NO_REPLAY_WAKE_FLAG}]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
     print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
     print('  --memory           print available memory while loading models')
     print('  --cold             skip text model warm-up ask')
     print('  --prompt           print the full model context, messages, tools, and rendered prompt')
+    print('  --cloud            ask OpenAI instead of the local llama-server')
+    print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
     print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, asks the local LLM, and speaks the reply')
     print(f'                     by default plays back what was said to "{WAKE_WORD}"')
@@ -330,22 +353,25 @@ def make_reply(command):
         return "I didn't catch that."
 
     # Restart the text server a few times when it died, often from OOM
-    if not ensure_text_server_alive():
+    if not text_client.use_cloud() and not ensure_text_server_alive():
         text_ask.last_tool_log.clear()
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         return TEXT_UNAVAILABLE
 
-    # Ask the local LLM, fall back when the server is down
+    # Ask the LLM, fall back to a local restart only when not using the cloud
     try:
         # Show the full request when --prompt is set
         if PROMPT_MODE:
             text_ask.print_context(command)
         return text_ask.ask_model(command)
     except urllib.error.URLError as error:
-        # Error?
         text_ask.last_tool_log.clear()
+        print(f'Error: {format_llm_error(error)}', flush=True)
+        if text_client.use_cloud():
+            print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+            return TEXT_UNAVAILABLE
 
-        # Start server again
+        # Start the local server again
         if ensure_text_server_alive():
             try:
                 # Ask
@@ -356,7 +382,6 @@ def make_reply(command):
 
         # Fail
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-        print(f'Error: {format_llm_error(error)}', flush=True)
         print_memory('ask failed')
         return TEXT_UNAVAILABLE
     except Exception as error:
@@ -977,6 +1002,10 @@ def check_ready():
 
 # Start the local text model server when needed, return the process we started
 def start_text_server(require_success=True):
+    # Cloud never starts llama-server
+    if text_client.use_cloud():
+        return None
+
     # Reuse a server that is already healthy
     if text_server_healthy():
         print_text_server_already_running()
@@ -1116,9 +1145,17 @@ def print_log_tail_if_quiet(log_state):
     if not log_state['printed']:
         print_log_tail(TEXT_SERVER_LOG)
 
+# Print the cloud model instead of a local load line
+def print_cloud_text_model():
+    print(f'Text model: {text_ask.resolve_model_name()} on {text_client.cloud_provider_name()}.', flush=True)
+
 # Restart the text server when it died, return true when healthy again
 def ensure_text_server_alive():
     global text_server_process
+
+    # Cloud has no local server to restart
+    if text_client.use_cloud():
+        return True
 
     # Already up
     if text_server_healthy():
@@ -1231,9 +1268,9 @@ def warm_text():
 
 # Warn when free RAM is below the expected cost of loads that are not already up
 def warn_if_low_memory():
-    # Skip the text server budget when it is already loaded
+    # Skip the text server budget when it is already loaded or using the cloud
     available_gb = available_memory_gb()
-    text_server_running = text_server_healthy()
+    text_server_running = text_client.use_cloud() or text_server_healthy()
     if text_server_running:
         expected_gb = SPEECH_MODELS_EXPECTED_GB
     else:

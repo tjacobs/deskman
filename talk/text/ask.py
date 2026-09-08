@@ -95,29 +95,44 @@ def parse_args():
     print_prompt = False
     clear_cache = False
     run_tests = False
+    cloud_flag = False
+    model_name = ""
     words = []
-    for argument in sys.argv[1:]:
+    arguments = sys.argv[1:]
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
         if argument == "--prompt":
             print_prompt = True
-            continue
-        if argument == "--clear":
+        elif argument == "--clear":
             clear_cache = True
-            continue
-        if argument == "--test":
+        elif argument == "--test":
             run_tests = True
-            continue
-        if argument in ("-h", "--help"):
+        elif argument == "--cloud":
+            cloud_flag = True
+        elif argument == "--model":
+            if index + 1 >= len(arguments):
+                print("Error: --model needs a model name.", flush=True)
+                sys.exit(1)
+            index += 1
+            model_name = arguments[index]
+        elif argument in ("-h", "--help"):
             print_usage()
             sys.exit(0)
-        words.append(argument)
+        else:
+            words.append(argument)
+        index += 1
+    client.apply_cloud_settings(cloud_flag, model_name)
     return " ".join(words) if words else "Say hello.", print_prompt, clear_cache, run_tests
 
 # Print usage help
 def print_usage():
-    print("Usage: ./ask.py [--prompt] [--clear] [--test] [question...]")
+    print("Usage: ./ask.py [--prompt] [--clear] [--test] [--cloud] [--model name] [question...]")
     print("  --prompt  print the full model context, messages, tools, and rendered prompt")
     print("  --clear   clear the server cache before asking")
     print("  --test    run tests.py, one ask per tool")
+    print("  --cloud   ask OpenAI instead of the local llama-server")
+    print("  --model   cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL")
     print("  (no arg)  say hello.")
 
 # Ask the model, running any tool calls it requests
@@ -505,7 +520,7 @@ def ask_one_liner(prompt):
         "max_tokens": 32,
         "temperature": 0.9,
     }
-    response = client.request_chat(body, client.API_KEY, client.REQUEST_TIMEOUT_SECONDS)
+    response = client.request_chat(body, client.chat_api_key(), client.REQUEST_TIMEOUT_SECONDS)
     reply = ((response.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     reply = reply.strip().strip('"').strip("'")
     if "\n" in reply:
@@ -668,6 +683,12 @@ def print_context(prompt):
     print(json.dumps(body, indent=2))
     print()
 
+    # Cloud has no llama chat template endpoint
+    if client.use_cloud():
+        print("Rendered prompt: cloud chat completions, no local template.")
+        print()
+        return
+
     # Show the chat-template rendered prompt when the server is up
     rendered = apply_chat_template(messages, body.get("tools") or [])
     if rendered is None:
@@ -731,6 +752,8 @@ def count_tokens(text):
 # Read the model alias from the running server, fall back to the default
 def resolve_model_name():
     global resolved_model
+    if client.use_cloud():
+        return client.cloud_model_name()
     if resolved_model:
         return resolved_model
     request = urllib.request.Request(client.MODELS_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
@@ -749,6 +772,8 @@ def resolve_model_name():
 # Read the context window size from the running server
 def resolve_context_size():
     global resolved_context_size
+    if client.use_cloud():
+        return DEFAULT_CONTEXT_SIZE
     if resolved_context_size:
         return resolved_context_size
     request = urllib.request.Request(client.PROPS_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
@@ -780,7 +805,7 @@ def chat_completion(messages):
 
     # Send request, client.py asks server.sh to enlarge context when the window is full
     model_start = time.perf_counter()
-    response = client.request_chat(body, client.API_KEY, client.REQUEST_TIMEOUT_SECONDS)
+    response = client.request_chat(body, client.chat_api_key(), client.REQUEST_TIMEOUT_SECONDS)
     model_seconds = time.perf_counter() - model_start
     resolved_model = None
     resolved_context_size = None
@@ -1129,6 +1154,11 @@ def format_token_speed(speed):
 
 # Erase the server prompt cache so the next ask is a cold prefill
 def clear_prompt_cache():
+    # Cloud has no llama slot cache
+    if client.use_cloud():
+        print("Cleared cache.", flush=True)
+        return
+
     # List cache contexts, then erase each one
     list_request = urllib.request.Request(client.CACHE_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
     try:
@@ -1171,6 +1201,7 @@ if __name__ == "__main__":
     try:
         main()
     except urllib.error.URLError as error:
-        print(f"LLM unavailable at {client.API_URL}: {error.reason}")
-        print(f"Start the model server first, run {SERVER_SCRIPT}")
+        print(f"LLM unavailable at {client.chat_api_url()}: {error.reason}")
+        if not client.use_cloud():
+            print(f"Start the model server first, run {SERVER_SCRIPT}")
         sys.exit(1)
