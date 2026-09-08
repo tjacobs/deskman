@@ -360,6 +360,9 @@ def ask_model(prompt):
             tool_name = (tool_call.get("function") or {}).get("name")
             if tool_name:
                 used.add(tool_name)
+            if tool_name == "look" and result.startswith("My hat"):
+                remember_turn(messages, result)
+                return result
             if tool_name == "calculate":
                 arguments = parse_tool_arguments((tool_call.get("function") or {}).get("arguments"))
                 last_calculate_expression = arguments.get("expression", "")
