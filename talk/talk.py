@@ -320,7 +320,6 @@ def print_talk_status():
         set_robot_listening(True)
         print(TALK_LISTENING, flush=True)
         return
-    set_robot_listening(False)
     print(TALK_READY, flush=True)
 
 # Ask the local text model for a spoken reply
@@ -563,7 +562,7 @@ def close_conversation():
     set_robot_listening(False)
     print(TALK_READY, flush=True)
 
-# Face tracking follows only while talk is listening
+# Tell the robot when talk is listening or has gone back to ready
 def set_robot_listening(open):
     try:
         robot_move.set_listen(open)

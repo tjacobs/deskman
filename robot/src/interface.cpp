@@ -37,7 +37,7 @@ static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 
 static atomic<bool> g_interface_running{false};
 static atomic<bool> g_overlay_open{false};
-static atomic<bool> g_listen_open{false};
+static atomic<bool> g_listen_open{true};
 static int g_listen_fd = -1;
 static thread g_interface_thread;
 static string g_socket_path;
@@ -190,7 +190,7 @@ bool call_overlay_open() {
     return g_overlay_open.load();
 }
 
-// True while talk is in the listening window
+// True while face tracking should follow, off after ready following a listen
 bool listen_open() {
     return g_listen_open.load();
 }
