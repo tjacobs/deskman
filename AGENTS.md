@@ -11,9 +11,9 @@ Functions:
 
 Comments:
 
-- Every group of lines in the file needs a comment above it, including includes, namespace, and consts, with a blank line above the comment
+- Every group of lines in the file needs a comment above it: includes, namespace, consts, code
 - No line of code should exist just by itself, put a comment above it or group it
-- Comments are short descriptions of what code blocks do, like "# Create the thing", not a passive "# Thing"
+- Comments are short descriptions of what code does, like "# Create the thing", not a passive "# Thing"
 - Always insert a blank line immediately before every comment block, except for at top of functions
 - No need for blank lines at the start of functions above the first comment
 - No doc strings, just put a single line comment above each function
@@ -34,7 +34,7 @@ Naming:
 - Keep code simple and minimal number of lines
 - No underscores in front of functions
 - Use full variable and function names
-- Acronyms are uppercase in function names (e.g. findUSBMicDevice and isEchoCancelAEC3, not findUsbMicDevice)
+- Acronyms are uppercase in function names (e.g. findUSBMicDevice, not findUsbMicDevice)
 - Prefer arg names load and save
 
 
@@ -53,11 +53,11 @@ Run talk scripts from `talk/`. Shebangs are relative, `#!.venv/bin/python`, so `
 
 The cloud VM has no audio hardware, no ALSA card in `/proc/asound`, no microphone, and no GPU. Kernel modules and `/dev/snd` are absent and `/proc/asound` cannot be created, so no real or dummy ALSA card can be loaded.
 
-- `talk/speak.py` and `talk/say.py` detect the missing soundcard, print `Audio playback unavailable: ..., generating without playback.`, and keep running, so they still write WAVs to `talk/audio/` and `talk/test.py` passes here. Only speaker playback is skipped, generation is unaffected.
+The`talk/speak.py` and `talk/say.py` scripts detect the missing soundcard, print `Audio playback unavailable: ..., generating without playback.`, and keep running, so they still write WAVs to `talk/audio/` and `talk/test.py` passes here. Only speaker playback is skipped, generation is unaffected.
 
-The Kokoro model and voices download into `talk/cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
+The Kokoro model and voices download into `talk/cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline. 
 
-`talk/listen.py` and `talk/talk.py` need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --talk` from `talk/`, where `--talk` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `talk/text/tests.py` needs that server running. Stop `llama-server` when done.
+The`talk/listen.py` and `talk/talk.py` scripts need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --talk` from `talk/`, where `--talk` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. `talk/text/tests.py` needs that server running. Stop `llama-server` when done.
 
 When you start or use `talk/text/server.sh` / `llama-server` for testing, benches, or debugging:
 
@@ -65,6 +65,4 @@ When you start or use `talk/text/server.sh` / `llama-server` for testing, benche
 - Prefer killing the `llama-server` process, or Ctrl+C equivalent, so port 8080 is free
 - Do not leave a background model server running after the task is finished
 - Exception: only leave it running if the user explicitly asks to keep the server up
-
-
 

@@ -76,7 +76,7 @@ static float read_bus_volts();
 static float read_shunt_amps();
 static int percent_from_voltage(float packVolts);
 
-// Recheck the INA219 about once a second
+// Recheck the INA219 battery voltage and current
 void check_battery() {
 #ifdef __linux__
     // Skip until a second has passed
