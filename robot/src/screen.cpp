@@ -6,6 +6,10 @@
 #include <iostream>
 #include <cstdlib>
 #include <unistd.h>
+#include <fcntl.h>
+#include <thread>
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -27,6 +31,13 @@ static const int EXIT_BUTTON_WIDTH = 100;
 static const int LOG_TAIL_BYTES = 8192;
 static const int LOG_LINE_MAX = 160;
 static const char* LOG_FILE_NAME = "log.txt";
+static const char* MONTH_NAMES[] = {
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+};
+static const char* DAY_NAMES[] = {
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+};
 
 // A dead IBus socket, GNOME pops its touch keyboard when SDL takes input method focus
 static const char* DEAD_IBUS_ADDRESS = "unix:path=/nonexistent";
@@ -57,6 +68,73 @@ static string robot_log_path() {
     filesystem::path executable = filesystem::read_symlink("/proc/self/exe", error);
     if (error) return string("../") + LOG_FILE_NAME;
     return (executable.parent_path().parent_path() / LOG_FILE_NAME).string();
+}
+
+static int g_log_console_fd = -1;
+static int g_log_file_fd = -1;
+static int g_log_pipe_read = -1;
+
+// Copy each chunk to the console and to log.txt
+static void write_robot_log_loop() {
+    char buffer[4096];
+    while (true) {
+        ssize_t count = read(g_log_pipe_read, buffer, sizeof(buffer));
+        if (count <= 0) break;
+        if (g_log_console_fd >= 0) write(g_log_console_fd, buffer, count);
+        if (g_log_file_fd >= 0) write(g_log_file_fd, buffer, count);
+    }
+}
+
+// Append stdout and stderr to robot/log.txt, and still print to the console
+void start_robot_log() {
+    string path = robot_log_path();
+
+    // Keep the original console so lines still print when run from a terminal
+    int console_fd = dup(STDOUT_FILENO);
+    if (console_fd < 0) return;
+
+    // Create or append robot/log.txt
+    int log_fd = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (log_fd < 0) {
+        close(console_fd);
+        return;
+    }
+
+    int pipe_fds[2];
+    if (pipe(pipe_fds) != 0) {
+        close(console_fd);
+        close(log_fd);
+        return;
+    }
+
+    g_log_console_fd = console_fd;
+    g_log_file_fd = log_fd;
+    g_log_pipe_read = pipe_fds[0];
+    thread(write_robot_log_loop).detach();
+
+    // Point stdout and stderr at the tee pipe so talk inherits it too
+    dup2(pipe_fds[1], STDOUT_FILENO);
+    dup2(pipe_fds[1], STDERR_FILENO);
+    if (pipe_fds[1] != STDOUT_FILENO && pipe_fds[1] != STDERR_FILENO) {
+        close(pipe_fds[1]);
+    }
+
+    // Flush each line so the face log tail and the file stay current
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IOLBF, 0);
+
+    // Blank line and start stamp, same as the old service log
+    time_t now = time(nullptr);
+    tm local_time{};
+    localtime_r(&now, &local_time);
+    int hour = local_time.tm_hour;
+    const char* suffix = hour >= 12 ? "pm" : "am";
+    int hour12 = hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    char stamp[64];
+    snprintf(stamp, sizeof(stamp), "%s %s %d %d, %d:%02d%s", DAY_NAMES[local_time.tm_wday], MONTH_NAMES[local_time.tm_mon], local_time.tm_mday, local_time.tm_year + 1900, hour12, local_time.tm_min, suffix);
+    cout << endl;
+    cout << "=== Robot on " << stamp << " ===" << endl;
 }
 
 // Newest complete line from robot/log.txt, talk and robot both write there

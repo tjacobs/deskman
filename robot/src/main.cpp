@@ -76,6 +76,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
 static void apply_call_handoff(FaceTracker& faceTracker);
 
 int main(int argc, char **argv) {
+    start_robot_log();
     setup_display_env();
 
     // Register signal handlers for clean shutdown

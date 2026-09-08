@@ -10,21 +10,10 @@ TALK_DIR="$(cd "${ROBOT_DIR}/../talk" && pwd)"
 ROBOT_BIN="${ROBOT_DIR}/build/robot"
 TALK_SCRIPT="${TALK_DIR}/talk.py"
 TALK_PYTHON="${TALK_DIR}/.venv/bin/python"
-LOG_FILE="${ROBOT_DIR}/log.txt"
 DISPLAY_DEFAULT=":0"
 
 # Main
 main() {
-    # Tell the user where output goes
-    mkdir -p "$(dirname "${LOG_FILE}")"
-    echo "Writing ${LOG_FILE}"
-    echo "Run: tail -f ${LOG_FILE}"
-
-    # Append all to log
-    exec >> "${LOG_FILE}" 2>&1
-    echo ""
-    echo "=== robot_service $(date -Is) ==="
-
     # Run the robot binary when it exists, it starts talk.py itself
     if [[ -x "${ROBOT_BIN}" ]]; then
         echo "Starting Deskman robot ${ROBOT_BIN}..."
