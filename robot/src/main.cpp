@@ -36,8 +36,6 @@ using namespace std::this_thread;
 
 static const char* DEFAULT_DISPLAY = ":0";
 static const int SCREEN_WAIT_MS = 500;
-static const int TALK_EARLY_WAIT_MS = 3000;
-static const int TALK_EARLY_POLL_MS = 100;
 static const int TALK_STOP_WAIT_MS = 200;
 static const int TALK_STOP_POLL_MS = 50;
 static const int MAX_FPS = 30;
@@ -73,7 +71,6 @@ static pid_t find_talk_pid();
 static bool start_talk_process(bool cold_talk);
 static void stop_talk_process();
 static void reap_talk_process();
-static void wait_for_talk_early_exit();
 static void signalHandler(int signal);
 static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
 static void apply_call_handoff(FaceTracker& faceTracker);
@@ -100,6 +97,9 @@ int main(int argc, char **argv) {
     // Make sure only one robot is running
     check_already_running();
 
+    // First log line
+    cout << "Starting robot..." << endl;
+
     // Relax servos on any later exit
     atexit([]() { relax_servos(); });
 
@@ -117,15 +117,9 @@ int main(int argc, char **argv) {
     // Rotate the screen and keep touch aligned
     rotate_screen();
 
-    // Put the face on screen before talk and the servo bus scan
+    // Put the face on screen before the servo bus scan
     bool quit = false;
     if (!sweep_only) show_face();
-
-    // Spawn talk before the camera so a fast talk.py crash is not mid libcamera
-    if (!sweep_only && !g_no_talk) {
-        start_talk_process(g_cold_talk);
-        wait_for_talk_early_exit();
-    }
 
     // Relax servos when travel limits are missing from config.json
     if (!config.has_servo_limits) {
@@ -152,6 +146,11 @@ int main(int argc, char **argv) {
 
     // Listen so other programs can move the head and pause the camera
     start_interface();
+
+    // Spawn talk after the bus and socket, and before the camera
+    if (!g_no_talk) {
+        start_talk_process(g_cold_talk);
+    }
 
     // Create face tracker after args so --camera / --no-camera apply
     FaceTracker faceTracker(show_camera, use_camera);
@@ -597,16 +596,6 @@ static void reap_talk_process() {
         cout << "talk.py exited" << endl;
     }
     g_talk_pid = -1;
-}
-
-static void wait_for_talk_early_exit() {
-    int waited_ms = 0;
-    while (g_talk_pid > 0 && waited_ms < TALK_EARLY_WAIT_MS) {
-        reap_talk_process();
-        if (g_talk_pid <= 0) return;
-        draw_face();
-        waited_ms += 1000 / MAX_FPS;
-    }
 }
 
 static void stop_talk_process() {

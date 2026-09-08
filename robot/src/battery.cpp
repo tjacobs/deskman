@@ -145,12 +145,12 @@ static void update_battery_reading() {
 
     // Face label
     char line[48];
-    snprintf(line, sizeof(line), "Battery %d%%, %.1f V, %.2f A", battery_percent_value, battery_voltage_value, battery_current_value);
+    snprintf(line, sizeof(line), "Battery: %d%%, %.2f V, %.2f A", battery_percent_value, battery_voltage_value, battery_current_value);
     battery_label = line;
 
     // Log once
     if (!battery_logged) {
-        printf("Battery INA219 %.2f V %d%% %.2f A\n", battery_voltage_value, battery_percent_value, battery_current_value);
+        printf("Battery: %d%%, %.2f V, %.2f A\n", battery_percent_value, battery_voltage_value, battery_current_value);
         fflush(stdout);
         battery_logged = true;
     }
@@ -176,8 +176,6 @@ static bool open_ina219() {
 
         // Keep this handle
         battery_file = fileDescriptor;
-        printf("Battery INA219 on %s address 0x%02x\n", path.c_str(), INA219_ADDRESS);
-        fflush(stdout);
         return true;
     }
 #endif
