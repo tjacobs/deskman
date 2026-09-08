@@ -14,6 +14,7 @@ const int FALLBACK_DEVICE_ID = 1;
 struct TeleportConfig {
     int autoAnswer = AUTO_ANSWER_SECONDS;
     int deviceId;
+    bool loaded = true;
 };
 
 // Read and write ./config.json

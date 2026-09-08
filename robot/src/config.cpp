@@ -1,12 +1,19 @@
 #include "config.h"
 #include "json.hpp"
+#include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 
 using namespace std;
 using json = nlohmann::ordered_json;
 
 static const char* CONFIG_PATH = "config.json";
+
+static mutex config_mutex;
+
+static AppConfig load_config();
+static void save_config(const AppConfig& config);
 
 // Read a travel limit, new name first then the old config.json key
 static bool read_travel_limit(const json& j, const char* name, const char* previous_name, int& value) {
@@ -23,12 +30,24 @@ static bool read_travel_limit(const json& j, const char* name, const char* previ
 
 // Load ./config.json, servo motion needs all six travel keys
 AppConfig loadConfig() {
+    lock_guard<mutex> lock(config_mutex);
+    return load_config();
+}
+
+// Write ./config.json, omit servo limits unless they were already configured
+void saveConfig(const AppConfig& config) {
+    lock_guard<mutex> lock(config_mutex);
+    save_config(config);
+}
+
+// Read the file without taking the lock
+static AppConfig load_config() {
     AppConfig config;
     ifstream in(CONFIG_PATH);
     if (!in.good()) {
 
         // Create config.json from AppConfig defaults, including servo travel
-        saveConfig(config);
+        save_config(config);
         cout << "Created " << CONFIG_PATH << " from defaults" << endl;
         return config;
     }
@@ -48,12 +67,14 @@ AppConfig loadConfig() {
         config.has_servo_limits = has_pan_min && has_pan_max && has_tilt_min && has_tilt_max && has_hat_min && has_hat_max;
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
+        config.loaded = false;
+        config.has_servo_limits = false;
     }
     return config;
 }
 
-// Write ./config.json, omit servo limits unless they were already configured
-void saveConfig(const AppConfig& config) {
+// Write through a temp file so a crash cannot leave config.json empty
+static void save_config(const AppConfig& config) {
     json j;
     j["useCamera"] = config.useCamera;
     j["faceTracking"] = config.faceTracking;
@@ -67,10 +88,18 @@ void saveConfig(const AppConfig& config) {
         j["hat_min"] = config.hat_min;
         j["hat_max"] = config.hat_max;
     }
-    try {
-        ofstream out(CONFIG_PATH);
-        out << j.dump(2);
-    } catch (const exception& error) {
-        cerr << "Failed to write config.json: " << error.what() << endl;
+    ofstream out("config.json.tmp");
+    if (!out.good()) {
+        cerr << "Failed to write config.json" << endl;
+        return;
+    }
+    out << j.dump(2) << '\n';
+    if (!out.good()) {
+        cerr << "Failed to write config.json" << endl;
+        return;
+    }
+    out.close();
+    if (rename("config.json.tmp", CONFIG_PATH) != 0) {
+        cerr << "Failed to replace config.json" << endl;
     }
 }

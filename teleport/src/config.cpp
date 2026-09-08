@@ -52,6 +52,7 @@ TeleportConfig loadConfig() {
         if (settings.contains("deviceId")) config.deviceId = settings["deviceId"].get<int>();
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
+        config.loaded = false;
     }
 
     // An old device.id still wins, so a machine keeps its name across the upgrade
@@ -111,8 +112,20 @@ static void migrateDeviceIdFile(TeleportConfig& config) {
 void saveConfig(const TeleportConfig& config) {
     try {
         json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}};
-        ofstream out(CONFIG_PATH);
-        out << settings.dump(2);
+        ofstream out("config.json.tmp");
+        if (!out.good()) {
+            cerr << "Failed to write config.json" << endl;
+            return;
+        }
+        out << settings.dump(2) << '\n';
+        if (!out.good()) {
+            cerr << "Failed to write config.json" << endl;
+            return;
+        }
+        out.close();
+        if (rename("config.json.tmp", CONFIG_PATH) != 0) {
+            cerr << "Failed to replace config.json" << endl;
+        }
     } catch (const exception& error) {
         cerr << "Failed to write config.json: " << error.what() << endl;
     }

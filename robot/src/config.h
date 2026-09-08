@@ -12,6 +12,7 @@ struct AppConfig {
     int hat_min = 1470;
     int hat_max = 2800;
     bool has_servo_limits = true;
+    bool loaded = true;
 };
 
 AppConfig loadConfig();
