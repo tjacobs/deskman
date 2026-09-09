@@ -40,6 +40,9 @@ RESTART_WORD = 'restart'
 RESTART_MESSAGE = 'Restarting!'
 RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
 
+# Config phrases whisper invents from silence, longest first so the short ones do not eat them
+WHISPER_ARTIFACTS = ('thanks for watching', 'thank you very much', 'thank you', 'thanks', 'you', 'bye')
+
 # Config wake tone
 WAKE_TONE_RATE = 24000
 WAKE_TONE_NOTES = ((880.0, 0.12), (1174.7, 0.18))
@@ -697,7 +700,24 @@ def text_after_wake(text):
 # Transcribe audio samples to text
 def transcribe(whisper_model, audio):
     segments, info = whisper_model.transcribe(audio, language='en', vad_filter=True)
-    return ' '.join(segment.text.strip() for segment in segments).strip()
+    text = ' '.join(segment.text.strip() for segment in segments).strip()
+
+    # Throw away silence that came back as words, so it never reaches the model
+    if is_whisper_artifact(text):
+        return ''
+    return text
+
+# Return true when the whole utterance is phrases whisper invents from silence
+def is_whisper_artifact(text):
+    words = ' '.join(re.sub(r'[^\w\s]', ' ', text.lower()).split())
+    if not words:
+        return True
+
+    # Strip each known phrase, whisper repeats them when it loops on a silent room
+    for phrase in WHISPER_ARTIFACTS:
+        words = re.sub(rf'\b{re.escape(phrase)}\b', ' ', words)
+        words = ' '.join(words.split())
+    return not words
 
 # Return true when the command asks to restart the services
 def wants_to_restart(command):
