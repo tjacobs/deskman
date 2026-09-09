@@ -1,7 +1,6 @@
 #pragma once
 
-#include <string>
-
+// Settings read from config.json, the defaults run the robot with no file
 struct AppConfig {
     bool useCamera = true;
     bool faceTracking = true;
@@ -15,5 +14,8 @@ struct AppConfig {
     bool loaded = true;
 };
 
+// Read config.json, writing it from these defaults when the file is missing
 AppConfig loadConfig();
+
+// Write config.json, keeping the servo travel limits already in the file
 void saveConfig(const AppConfig& config);

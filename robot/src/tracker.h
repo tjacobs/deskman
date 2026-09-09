@@ -6,7 +6,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
-#include "camera.hpp"
+#include "camera.h"
 #include <SDL2/SDL.h>
 #include <chrono>
 

@@ -1,40 +1,49 @@
-#include "camera.hpp"
-#include <iostream>
-#include <filesystem>
-#include <fstream>
-#include <thread>
-#include <chrono>
-#include <cstdlib>
-#include <cstdio>
+// Local
+#include "camera.h"
+
+// OpenCV
 #include <opencv2/core/utils/logger.hpp>
 
+// System
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <thread>
+
+// Namespace
 using namespace std;
 
+// Probe /dev/video0 up to /dev/video7, a stereo pair shows four nodes
 static const int MAX_VIDEO_INDEX = 8;
 static const int STEREO_VIDEO_COUNT = 4;
 static const int PREFERRED_STEREO_INDEX = 2;
+
+// Retry a failed open or read a few times
 static const int CAPTURE_RETRIES = 3;
 static const int CAPTURE_RETRY_WAIT_MS = 100;
 static const int PIPELINE_RETRY_WAIT_SECONDS = 1;
 
+// Later in this file
 static bool video_device_present();
 static int count_video_devices();
-static bool open_usb_camera(cv::VideoCapture& cap, int& camera_index, int width, int height, int framerate);
+static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int width, int height, int framerate);
 
 // Detect Raspberry Pi for the libcamera path
 Camera::Camera() {
-    // Check if we're running on a Raspberry Pi
+    // Read the device tree model name
     isRaspberryPi = false;
     if (filesystem::exists("/proc/device-tree/model")) {
         ifstream model("/proc/device-tree/model");
-        string model_str;
-        getline(model, model_str);
-        isRaspberryPi = model_str.find("Raspberry Pi") != string::npos;
+        string model_name;
+        getline(model, model_name);
+        isRaspberryPi = model_name.find("Raspberry Pi") != string::npos;
     }
 
     // Redirect GStreamer logs to /dev/null
-    if (isRaspberryPi) {
-        freopen("/dev/null", "w", stderr);
+    if (isRaspberryPi && freopen("/dev/null", "w", stderr) == nullptr) {
+        cerr << "Failed to silence GStreamer logs" << endl;
     }
 
     // Start with no selected camera index
@@ -44,11 +53,12 @@ Camera::Camera() {
 
 // Open the camera for the current platform
 bool Camera::initialize() {
+    // Stay stopped until a device opens
     capturing = false;
 
     // Close any previous capture handle
-    if (cap.isOpened()) {
-        cap.release();
+    if (capture.isOpened()) {
+        capture.release();
     }
 
     // Skip OpenCV open when no camera device is attached
@@ -68,20 +78,22 @@ bool Camera::initialize() {
 
         // Retry the GStreamer pipeline a few times
         for (int attempt = 0; attempt < CAPTURE_RETRIES; attempt++) {
-            cap.open(pipeline, cv::CAP_GSTREAMER);
-            if (cap.isOpened()) {
-                cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+            capture.open(pipeline, cv::CAP_GSTREAMER);
+            if (capture.isOpened()) {
+                capture.set(cv::CAP_PROP_BUFFERSIZE, 1);
                 capturing = true;
                 return true;
             }
             cerr << "Failed to open camera with GStreamer pipeline (attempt " << (attempt + 1) << "/" << CAPTURE_RETRIES << ")" << endl;
             this_thread::sleep_for(chrono::seconds(PIPELINE_RETRY_WAIT_SECONDS));
         }
+
+        // No libcamera source on this Pi
         return false;
     }
 
     // Open a USB camera through V4L2
-    capturing = open_usb_camera(cap, cameraIndex, width, height, framerate);
+    capturing = open_USB_camera(capture, cameraIndex, width, height, framerate);
     return capturing;
 }
 
@@ -91,7 +103,7 @@ bool Camera::captureFrame(cv::Mat& frame) {
     if (!capturing) return false;
 
     // Reinitialize when the capture handle was lost
-    if (!cap.isOpened()) {
+    if (!capture.isOpened()) {
         cerr << "Camera is not opened, attempting to reinitialize..." << endl;
         if (!initialize()) {
             return false;
@@ -101,7 +113,7 @@ bool Camera::captureFrame(cv::Mat& frame) {
     // Retry a few times before giving up
     for (int attempt = 0; attempt < CAPTURE_RETRIES; attempt++) {
         if (!capturing) return false;
-        bool success = cap.read(frame);
+        bool success = capture.read(frame);
         if (success && !frame.empty()) {
             return true;
         }
@@ -109,27 +121,30 @@ bool Camera::captureFrame(cv::Mat& frame) {
 
         // Reopen libcamera after a failed read on Raspberry Pi
         if (isRaspberryPi) {
-            cap.release();
+            capture.release();
             this_thread::sleep_for(chrono::milliseconds(CAPTURE_RETRY_WAIT_MS));
             if (!capturing || !initialize()) return false;
         } else {
             this_thread::sleep_for(chrono::milliseconds(CAPTURE_RETRY_WAIT_MS));
         }
     }
+
+    // Every retry came back empty
     return false;
 }
 
 // Release the capture device
 void Camera::release() {
     capturing = false;
-    if (cap.isOpened()) {
-        cap.release();
+    if (capture.isOpened()) {
+        capture.release();
     }
 }
 
+// Drop the device on the way out
 Camera::~Camera() {
-    if (cap.isOpened()) {
-        cap.release();
+    if (capture.isOpened()) {
+        capture.release();
     }
 }
 
@@ -140,6 +155,7 @@ static bool video_device_present() {
 
 // Count attached /dev/videoN nodes
 static int count_video_devices() {
+    // Walk the whole range so a gap does not stop the count
     int video_count = 0;
     for (int index = 0; index < MAX_VIDEO_INDEX; index++) {
         if (filesystem::exists("/dev/video" + to_string(index))) video_count++;
@@ -148,7 +164,7 @@ static int count_video_devices() {
 }
 
 // Try each video node until one returns a frame
-static bool open_usb_camera(cv::VideoCapture& cap, int& camera_index, int width, int height, int framerate) {
+static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int width, int height, int framerate) {
     cout << "Starting camera..." << endl;
 
     // Prefer camera 2 when a stereo pair exposes four nodes
@@ -177,18 +193,18 @@ static bool open_usb_camera(cv::VideoCapture& cap, int& camera_index, int width,
         if (!filesystem::exists("/dev/video" + to_string(index))) continue;
 
         // Close any prior handle, then try this video index
-        if (cap.isOpened()) cap.release();
-        if (!cap.open(index, cv::CAP_V4L2)) continue;
+        if (capture.isOpened()) capture.release();
+        if (!capture.open(index, cv::CAP_V4L2)) continue;
 
         // Apply the requested capture size and rate
-        cap.set(cv::CAP_PROP_FRAME_WIDTH, width);
-        cap.set(cv::CAP_PROP_FRAME_HEIGHT, height);
-        cap.set(cv::CAP_PROP_FPS, framerate);
-        cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+        capture.set(cv::CAP_PROP_FRAME_WIDTH, width);
+        capture.set(cv::CAP_PROP_FRAME_HEIGHT, height);
+        capture.set(cv::CAP_PROP_FPS, framerate);
+        capture.set(cv::CAP_PROP_BUFFERSIZE, 1);
 
         // Skip metadata-only nodes that open but never return frames
         cv::Mat test_frame;
-        if (cap.read(test_frame) && !test_frame.empty()) {
+        if (capture.read(test_frame) && !test_frame.empty()) {
             camera_index = index;
             cv::utils::logging::setLogLevel(log_level);
             cout << "Using camera " << index << endl;
@@ -196,7 +212,7 @@ static bool open_usb_camera(cv::VideoCapture& cap, int& camera_index, int width,
         }
 
         // Release and try the next index
-        cap.release();
+        capture.release();
     }
 
     // Restore logging after a failed probe

@@ -16,21 +16,25 @@ using json = nlohmann::ordered_json;
 
 // Settings sit next to the binary, in the working directory
 static const char* CONFIG_PATH = "config.json";
+static const char* CONFIG_TEMP_PATH = "config.json.tmp";
+static const int CONFIG_INDENT = 2;
 
 // One lock for load and save so they cannot interleave
 static recursive_mutex config_mutex;
 
-// Read a travel limit
+// Later in this file
 static bool read_travel_limit(const json& settings, const char* name, const char* previous_name, int& value);
 
 // Load ./config.json, servo motion needs all six travel keys
 AppConfig loadConfig() {
     lock_guard<recursive_mutex> lock(config_mutex);
+
+    // Start from the defaults, then open the file
     AppConfig config;
     ifstream input(CONFIG_PATH);
-    if (!input.good()) {
 
-        // Create config.json from AppConfig defaults, including servo travel
+    // Create config.json from the defaults, including servo travel
+    if (!input.good()) {
         saveConfig(config);
         cout << "Created " << CONFIG_PATH << " from defaults" << endl;
         return config;
@@ -51,17 +55,23 @@ AppConfig loadConfig() {
         bool has_hat_min = read_travel_limit(settings, "hat_min", "min_hat", config.hat_min);
         bool has_hat_max = read_travel_limit(settings, "hat_max", "max_hat", config.hat_max);
         config.has_servo_limits = has_pan_min && has_pan_max && has_tilt_min && has_tilt_max && has_hat_min && has_hat_max;
+
+    // Hold the servos still when the file cannot be parsed
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
         config.loaded = false;
         config.has_servo_limits = false;
     }
+
+    // Hand back the merged settings
     return config;
 }
 
 // Write through a temp file so a crash cannot leave config.json empty
 void saveConfig(const AppConfig& config) {
     lock_guard<recursive_mutex> lock(config_mutex);
+
+    // Collect the camera settings
     json settings;
     settings["useCamera"] = config.useCamera;
     settings["faceTracking"] = config.faceTracking;
@@ -76,32 +86,41 @@ void saveConfig(const AppConfig& config) {
         settings["hat_max"] = config.hat_max;
     }
 
-    // Write the temp file first, then replace config.json
-    ofstream output("config.json.tmp");
+    // Open the temp file
+    ofstream output(CONFIG_TEMP_PATH);
     if (!output.good()) {
         cerr << "Failed to write config.json" << endl;
         return;
     }
-    output << settings.dump(2) << '\n';
+
+    // Write the settings out
+    output << settings.dump(CONFIG_INDENT) << '\n';
     if (!output.good()) {
         cerr << "Failed to write config.json" << endl;
         return;
     }
+
+    // Close it, then swap the temp file over config.json
     output.close();
-    if (rename("config.json.tmp", CONFIG_PATH) != 0) {
+    if (rename(CONFIG_TEMP_PATH, CONFIG_PATH) != 0) {
         cerr << "Failed to replace config.json" << endl;
     }
 }
 
 // Read a travel limit, new name first then the previous config.json key
 static bool read_travel_limit(const json& settings, const char* name, const char* previous_name, int& value) {
+    // Prefer the current key
     if (settings.contains(name)) {
         value = settings[name].get<int>();
         return true;
     }
+
+    // Fall back to the older key so old config files still work
     if (settings.contains(previous_name)) {
         value = settings[previous_name].get<int>();
         return true;
     }
+
+    // Missing on both names
     return false;
 }

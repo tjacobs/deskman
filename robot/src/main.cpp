@@ -5,7 +5,7 @@
 #include "screen.h"
 #include "servos.h"
 #include "renderer.h"
-#include "tracker.hpp"
+#include "tracker.h"
 #include "config.h"
 #include "interface.h"
 #include "fan.h"
