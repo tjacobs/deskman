@@ -28,7 +28,7 @@ public:
     // Run face detection on a worker thread
     void startTracking();
     void stopTracking();
-    bool isTracking() const { return trackingThread.joinable(); }
+    bool isTracking() const { return tracking.load(); }
 
     // Open and close the camera on its own, so a call can borrow it
     bool initializeCamera();
@@ -52,6 +52,7 @@ private:
 
     // Worker thread, and the flags that start and stop it
     thread trackingThread;
+    atomic<bool> tracking{false};
     atomic<bool> shouldQuit{false};
     bool cameraAvailable{false};
     bool showWindow;

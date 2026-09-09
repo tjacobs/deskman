@@ -71,8 +71,12 @@ FaceTracker::FaceTracker(bool show_window, bool use_camera): showWindow(show_win
 
 // Start the detection thread, unless it is already running
 void FaceTracker::startTracking() {
-    if (isTracking())
+    if (tracking.load())
         return;
+
+    // Collect a thread that stopped on its own, so the assign below is safe
+    if (trackingThread.joinable())
+        trackingThread.join();
     cout << "Starting camera..." << endl;
 
     // Only start tracking if camera is available
@@ -83,6 +87,7 @@ void FaceTracker::startTracking() {
 
     // Start tracking thread
     shouldQuit = false;
+    tracking = true;
     trackingThread = thread(&FaceTracker::trackingThreadFunction, this);
 }
 
@@ -134,6 +139,9 @@ void FaceTracker::trackingThreadFunction() {
     } catch (const exception& error) {
         cerr << "Face tracking error: " << error.what() << endl;
     }
+
+    // Let startTracking run again after the thread stops on its own
+    tracking = false;
 }
 
 // Find every face in one frame
@@ -252,6 +260,7 @@ void FaceTracker::stopTracking() {
     cameraAvailable = false;
     if (trackingThread.joinable())
         trackingThread.join();
+    tracking = false;
 }
 
 // Stop tracking and free the preview texture
