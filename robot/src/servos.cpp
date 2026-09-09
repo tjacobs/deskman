@@ -246,6 +246,18 @@ static void load_servo_limits() {
     for (Servo &servo : servos) {
         swap_inverted_limits(servo);
     }
+
+    // Log the limits, so a lost config.json can be rebuilt from the log
+    string limits = "Servo limits:";
+    const char *separator = " ";
+    for (Servo &servo : servos) {
+        limits += separator;
+        limits += servo.name;
+        limits += " " + to_string(servo.min_limit) + "-" + to_string(servo.max_limit);
+        separator = ", ";
+    }
+    printf("%s\n", limits.c_str());
+    fflush(stdout);
 }
 
 // Put min below max when config.json has them reversed
