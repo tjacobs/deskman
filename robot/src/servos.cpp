@@ -45,7 +45,7 @@ static const int SERVO_BAUD_SETTLE_MS = 100;
 static const int SERVO_NAME_WIDTH = 4;
 static const int SERVO_POSITION_LOG_MS = 1000;
 
-// Travel an unconfigured servo gets, matching pan
+// Travel a servo found by the sweep scan gets, it is not in config.json
 static const int SERVO_DEFAULT_POSITION = 400;
 static const int SERVO_DEFAULT_MIN = 0;
 static const int SERVO_DEFAULT_MAX = 800;
@@ -85,23 +85,23 @@ static const int HEAD_KEY_TILT_DEGREES = 8;
 static const int HEAD_KEY_HAT_DEGREES = 8;
 static const int HEAD_KEY_FACE_LOOK = 5;
 
-// One servo, count limits, degree labels, and commanded position
+// One servo, its angle range, then the counts and state filled in at open
 struct Servo {
     int id;
     const char *name;
+    int degrees_min;
+    int degrees_high;
     int position;
     int min_limit;
     int max_limit;
-    int degrees_min;
-    int degrees_high;
     bool found;
 };
 
-// Pan, tilt, and hat, overwritten by config.json at open
+// Pan, tilt, and hat, open_servos fills the count limits in from config.json
 static Servo servos[] = {
-    {SERVO_ID_PAN,  "pan",  400, 0,   800, -90, 90, false},
-    {SERVO_ID_TILT, "tilt", 500, 200, 800, -10, 30, false},
-    {SERVO_ID_HAT,  "hat",  400, 0,   800, -35, 90, false},
+    {SERVO_ID_PAN,  "pan",  -90, 90},
+    {SERVO_ID_TILT, "tilt", -10, 30},
+    {SERVO_ID_HAT,  "hat",  -35, 90},
 };
 
 // Extra IDs found while the sweep scans the low bus IDs
@@ -125,7 +125,11 @@ static SMS_STS servo_bus;
 // Main quit flag, set by Ctrl-C
 extern volatile bool g_quit;
 
+// Set once the travel limits have been read out of config.json
+static bool servo_limits_loaded = false;
+
 // Later in this file
+static void load_servo_limits();
 static void swap_inverted_limits(Servo &servo);
 static int degrees_to_servo(const Servo &servo, float degrees);
 static void probe_known_servos();
@@ -145,18 +149,7 @@ static float counts_to_degrees(const Servo &servo, float counts);
 
 int open_servos() {
     // Load servo travel limits from config.json
-    AppConfig config = loadConfig();
-    servos[0].min_limit = config.pan_min;
-    servos[0].max_limit = config.pan_max;
-    servos[1].min_limit = config.tilt_min;
-    servos[1].max_limit = config.tilt_max;
-    servos[2].min_limit = config.hat_min;
-    servos[2].max_limit = config.hat_max;
-
-    // Put any reversed pair the right way round
-    for (Servo &servo : servos) {
-        swap_inverted_limits(servo);
-    }
+    load_servo_limits();
 
     // Park pan and tilt facing forward, and the hat all the way down
     servos[0].position = degrees_to_servo(servos[0], 0);
@@ -232,6 +225,27 @@ int open_servos() {
     fflush(stdout);
     move_servos();
     return 0;
+}
+
+// Read the travel limits from config.json into the servo table, once
+static void load_servo_limits() {
+    if (servo_limits_loaded)
+        return;
+    servo_limits_loaded = true;
+
+    // Copy each axis across
+    AppConfig config = loadConfig();
+    servos[0].min_limit = config.pan_min;
+    servos[0].max_limit = config.pan_max;
+    servos[1].min_limit = config.tilt_min;
+    servos[1].max_limit = config.tilt_max;
+    servos[2].min_limit = config.hat_min;
+    servos[2].max_limit = config.hat_max;
+
+    // Put any reversed pair the right way round
+    for (Servo &servo : servos) {
+        swap_inverted_limits(servo);
+    }
 }
 
 // Put min below max when config.json has them reversed
@@ -365,6 +379,9 @@ int relax_servos() {
     if (!servos_enabled)
         return 0;
     servos_enabled = false;
+
+    // The head pose can still be asked for while relaxed, so it needs the limits
+    load_servo_limits();
 
     // Open USB or the onboard UART
     if (!open_first_servo_port()) {
@@ -521,7 +538,7 @@ static void scan_sweep_ids() {
 
         // Extra IDs use the same default travel as pan
         snprintf(sweep_scan_names[id - 1], sizeof(sweep_scan_names[id - 1]), "id%d", id);
-        Servo extra = {id, sweep_scan_names[id - 1], SERVO_DEFAULT_POSITION, SERVO_DEFAULT_MIN, SERVO_DEFAULT_MAX, SERVO_DEFAULT_DEGREES_MIN, SERVO_DEFAULT_DEGREES_HIGH, false};
+        Servo extra = {id, sweep_scan_names[id - 1], SERVO_DEFAULT_DEGREES_MIN, SERVO_DEFAULT_DEGREES_HIGH, SERVO_DEFAULT_POSITION, SERVO_DEFAULT_MIN, SERVO_DEFAULT_MAX, false};
         extra.found = detect_or_promote_servo(extra);
         if (!extra.found)
             continue;
