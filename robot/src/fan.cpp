@@ -22,17 +22,17 @@ static const char* FAN_TACH_NAME = "pwm_tach";
 static const char* CPU_THERMAL_NAME = "cpu-thermal";
 static const char* JUNCTION_THERMAL_NAME = "tj-thermal";
 
-// Full PWM duty spins this board at 6000 RPM, warn under half the target
+// Expected RPM scales from the duty, warn when the tach falls well under it
 static const int FAN_DUTY_MAX = 255;
 static const int FAN_RPM_AT_FULL = 6000;
 static const int FAN_SLOW_DIVISOR = 2;
 static const int FAN_MIN_EXPECTED_RPM = 500;
 
-// Check once a second, and only warn after ten slow seconds
+// How often to check, and how long the fan must stay slow before warning
 static const int FAN_CHECK_MS = 1000;
 static const int FAN_SLOW_MS_NEEDED = 10000;
 
-// Warn above 90 C, after three hot samples in a row
+// Warn once the CPU has run hot for a few samples in a row
 static const int TEMPERATURE_WARN_C = 90;
 static const int TEMPERATURE_HITS_NEEDED = 3;
 static const int TEMPERATURE_MILLI_PER_C = 1000;
@@ -78,7 +78,7 @@ void check_fan() {
 #endif
 }
 
-// Read PWM and tach, warn when RPM is under half of the PWM target
+// Read PWM and tach, warn when the RPM falls well under the PWM target
 static void update_fan_warning() {
     // Find the sysfs files on the first pass
     if (!fan_paths_ready) {
@@ -229,7 +229,7 @@ string temperature_warning_text() {
     return temperature_warning;
 }
 
-// Read one integer from a sysfs file, or -1
+// Read one integer from a sysfs file, or report the failure
 static int read_hwmon_int(const string& path) {
     ifstream input(path);
     int value = 0;

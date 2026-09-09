@@ -11,7 +11,7 @@ using namespace std;
 // The one face the whole program animates
 Face face;
 
-// Blink every ten seconds, the sine closes and opens the lid
+// How often to blink, and how fast the sine closes and opens the lid
 static const float ANIMATION_SPEED = 0.02f;
 static const float BLINK_SPEED = 8.0f;
 static const float BLINK_INTERVAL = 10.0f;

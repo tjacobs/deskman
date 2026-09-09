@@ -6,7 +6,7 @@
 // Namespace
 using namespace std;
 
-// Recheck the INA219 about once a second
+// Recheck the INA219 battery voltage and current
 void check_battery();
 
 // Return the face label, empty when the meter is missing

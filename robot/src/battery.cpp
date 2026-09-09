@@ -21,7 +21,7 @@
 using namespace std;
 using namespace std::chrono;
 
-// 40-pin I2C1 is /dev/i2c-7 on Jetson, then /dev/i2c-1
+// The 40-pin I2C1 header bus on Jetson, then the older bus number
 static const int BATTERY_BUS_PRIMARY = 7;
 static const int BATTERY_BUS_FALLBACK = 1;
 
@@ -38,24 +38,24 @@ static const int INA219_SHUNT_UV_PER_BIT = 10;
 // Typical INA219 module shunt
 static const float BATTERY_SHUNT_OHMS = 0.1f;
 
-// Read once a second and smooth the voltage
+// How often to read the meter, and how hard to smooth each reading
 static const int BATTERY_CHECK_MS = 1000;
 static const float BATTERY_FILTER = 0.99f;
 static const float BATTERY_CURRENT_FILTER = 0.7f;
 
-// Hold the face label, "Battery: 100%, 12.60 V, -1.23 A"
+// Room for the face label text
 static const int BATTERY_LABEL_SIZE = 48;
 
-// 3S LiPo pack, 0% at 3.0V/cell and 100% at 4.2V/cell
+// Empty and full pack voltage for a 3S LiPo
 static const float BATTERY_VOLTAGE_EMPTY = 9.0f;
 static const float BATTERY_VOLTAGE_FULL = 12.6f;
 
-// 24V pack when the reading is above this, 0% at 19V and 100% at 25V
+// A 24V pack when the reading runs above the detect point, with its own ends
 static const float BATTERY_VOLTAGE_24V_DETECT = 15.0f;
 static const float BATTERY_VOLTAGE_24V_EMPTY = 19.0f;
 static const float BATTERY_VOLTAGE_24V_FULL = 25.0f;
 
-// S-curve, 50% near 3.84V/cell on that empty to full span
+// Shape of the LiPo S-curve, the midpoint sits above the middle of the span
 static const float BATTERY_CURVE_STEEPNESS = 8.0f;
 static const float BATTERY_CURVE_MID = 0.70f;
 
@@ -111,8 +111,10 @@ static void update_battery_reading() {
     }
 
     // Smooth after the first reading
-    if (battery_voltage_value <= 0) battery_voltage_value = voltage;
-    else battery_voltage_value = battery_voltage_value * BATTERY_FILTER + voltage * (1.0f - BATTERY_FILTER);
+    if (battery_voltage_value <= 0)
+        battery_voltage_value = voltage;
+    else
+        battery_voltage_value = battery_voltage_value * BATTERY_FILTER + voltage * (1.0f - BATTERY_FILTER);
 
     // Percent from the pack curve, clamped to empty and full
     battery_percent_value = percent_from_voltage(battery_voltage_value);
@@ -139,7 +141,7 @@ static void update_battery_reading() {
     }
 }
 
-// Prefer the 40-pin I2C1 bus, /dev/i2c-7 on Jetson, then /dev/i2c-1
+// Prefer the 40-pin I2C1 header bus, then fall back to the older bus number
 static bool open_INA219() {
 #ifdef __linux__
     // Try the header bus first
@@ -148,7 +150,8 @@ static bool open_INA219() {
         // Open this /dev/i2c-N
         string path = "/dev/i2c-" + to_string(bus);
         int fileDescriptor = open(path.c_str(), O_RDWR);
-        if (fileDescriptor < 0) continue;
+        if (fileDescriptor < 0)
+            continue;
 
         // Skip the onboard INA3221
         unsigned int config = read_INA219_register(fileDescriptor, INA219_REGISTER_CONFIG);
@@ -187,7 +190,8 @@ static unsigned int read_INA219_register(int fileDescriptor, int registerAddress
     struct i2c_rdwr_ioctl_data packet;
     packet.msgs = messages;
     packet.nmsgs = 2;
-    if (ioctl(fileDescriptor, I2C_RDWR, &packet) < 0) return 0;
+    if (ioctl(fileDescriptor, I2C_RDWR, &packet) < 0)
+        return 0;
 
     // Join the two bytes
     return ((unsigned int)data[0] << 8) | data[1];
@@ -203,41 +207,49 @@ static unsigned int read_INA219_register(int fileDescriptor, int registerAddress
 }
 #endif
 
-// INA219 reset config is 0x399F, onboard INA3221 on i2c-1 is 0x7xxx
+// Tell an INA219 from the onboard INA3221 by the top nibble of its config
 static bool is_INA219_config(unsigned int config) {
     return (config & INA219_CONFIG_TOP_MASK) == INA219_CONFIG_TOP_NIBBLE;
 }
 
-// Bus voltage register, 4 mV per bit, ignore ready and overflow flags
+// Bus voltage register, ignore the ready and overflow flags in the low bits
 static float read_bus_volts() {
     // Need an open chip
-    if (battery_file < 0) return 0;
+    if (battery_file < 0)
+        return 0;
 
-    // Convert the 4 mV bits
+    // Shift the flags off, then scale the bits to volts
     unsigned int raw = read_INA219_register(battery_file, INA219_REGISTER_BUS);
-    if (raw == 0) return 0;
+    if (raw == 0)
+        return 0;
     int milliVolts = (int)(raw >> 3) * INA219_BUS_MV_PER_BIT;
     return milliVolts / 1000.0f;
 }
 
 // Turn pack volts into percent, an S-curve for 3S LiPo and linear for 24V
 static int percent_from_voltage(float packVolts) {
-    // 24V pack is linear from 19V to 25V
+    // A 24V pack runs linear between its own two ends
     if (packVolts > BATTERY_VOLTAGE_24V_DETECT) {
-        if (packVolts <= BATTERY_VOLTAGE_24V_EMPTY) return 0;
-        if (packVolts >= BATTERY_VOLTAGE_24V_FULL) return 100;
+        if (packVolts <= BATTERY_VOLTAGE_24V_EMPTY)
+            return 0;
+        if (packVolts >= BATTERY_VOLTAGE_24V_FULL)
+            return 100;
         float span = BATTERY_VOLTAGE_24V_FULL - BATTERY_VOLTAGE_24V_EMPTY;
         int percent = (int)(100.0f * (packVolts - BATTERY_VOLTAGE_24V_EMPTY) / span + 0.5f);
-        if (percent < 0) percent = 0;
-        if (percent > 100) percent = 100;
+        if (percent < 0)
+            percent = 0;
+        if (percent > 100)
+            percent = 100;
         return percent;
     }
 
     // Hard stop at empty and full pack volts
-    if (packVolts <= BATTERY_VOLTAGE_EMPTY) return 0;
-    if (packVolts >= BATTERY_VOLTAGE_FULL) return 100;
+    if (packVolts <= BATTERY_VOLTAGE_EMPTY)
+        return 0;
+    if (packVolts >= BATTERY_VOLTAGE_FULL)
+        return 100;
 
-    // Map voltage to 0..1, then a logistic so the middle stays flatter than linear
+    // Map voltage onto the span, then a logistic so the middle stays flatter than linear
     float span = BATTERY_VOLTAGE_FULL - BATTERY_VOLTAGE_EMPTY;
     float fraction = (packVolts - BATTERY_VOLTAGE_EMPTY) / span;
     float sigmoid = 1.0f / (1.0f + expf(-BATTERY_CURVE_STEEPNESS * (fraction - BATTERY_CURVE_MID)));
@@ -246,17 +258,20 @@ static int percent_from_voltage(float packVolts) {
 
     // Rescale the curve so empty lands on 0 and full lands on 100
     int percent = (int)(100.0f * (sigmoid - sigmoidEmpty) / (sigmoidFull - sigmoidEmpty) + 0.5f);
-    if (percent < 0) percent = 0;
-    if (percent > 100) percent = 100;
+    if (percent < 0)
+        percent = 0;
+    if (percent > 100)
+        percent = 100;
     return percent;
 }
 
 // Shunt voltage over the sense resistor, signed
 static float read_shunt_amps() {
     // Need an open chip
-    if (battery_file < 0) return 0;
+    if (battery_file < 0)
+        return 0;
 
-    // 10 uV per bit, then divide by the shunt
+    // Scale the signed bits to volts, then divide by the shunt
     unsigned int raw = read_INA219_register(battery_file, INA219_REGISTER_SHUNT);
     int16_t signedRaw = (int16_t)raw;
     float shuntVolts = signedRaw * (INA219_SHUNT_UV_PER_BIT / 1000000.0f);

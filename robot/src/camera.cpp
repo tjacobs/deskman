@@ -15,7 +15,7 @@
 // Namespace
 using namespace std;
 
-// Probe /dev/video0 up to /dev/video7, a stereo pair shows four nodes
+// How many /dev/videoN nodes to probe, and which one a stereo pair captures on
 static const int MAX_VIDEO_INDEX = 8;
 static const int STEREO_VIDEO_COUNT = 4;
 static const int PREFERRED_STEREO_INDEX = 2;
@@ -100,7 +100,8 @@ bool Camera::initialize() {
 // Read one frame, reopening the camera if needed
 bool Camera::captureFrame(cv::Mat& frame) {
     // Skip after an intentional close so stop does not reopen the camera
-    if (!capturing) return false;
+    if (!capturing)
+        return false;
 
     // Reinitialize when the capture handle was lost
     if (!capture.isOpened()) {
@@ -112,7 +113,8 @@ bool Camera::captureFrame(cv::Mat& frame) {
 
     // Retry a few times before giving up
     for (int attempt = 0; attempt < CAPTURE_RETRIES; attempt++) {
-        if (!capturing) return false;
+        if (!capturing)
+            return false;
         bool success = capture.read(frame);
         if (success && !frame.empty()) {
             return true;
@@ -123,7 +125,8 @@ bool Camera::captureFrame(cv::Mat& frame) {
         if (isRaspberryPi) {
             capture.release();
             this_thread::sleep_for(chrono::milliseconds(CAPTURE_RETRY_WAIT_MS));
-            if (!capturing || !initialize()) return false;
+            if (!capturing || !initialize())
+                return false;
         } else {
             this_thread::sleep_for(chrono::milliseconds(CAPTURE_RETRY_WAIT_MS));
         }
@@ -158,7 +161,8 @@ static int count_video_devices() {
     // Walk the whole range so a gap does not stop the count
     int video_count = 0;
     for (int index = 0; index < MAX_VIDEO_INDEX; index++) {
-        if (filesystem::exists("/dev/video" + to_string(index))) video_count++;
+        if (filesystem::exists("/dev/video" + to_string(index)))
+            video_count++;
     }
     return video_count;
 }
@@ -167,14 +171,15 @@ static int count_video_devices() {
 static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int width, int height, int framerate) {
     cout << "Starting camera..." << endl;
 
-    // Prefer camera 2 when a stereo pair exposes four nodes
+    // Try the stereo capture node first when a stereo pair is attached
     int probe_order[MAX_VIDEO_INDEX];
     int probe_count = 0;
     int video_count = count_video_devices();
     if (video_count == STEREO_VIDEO_COUNT) {
         probe_order[probe_count++] = PREFERRED_STEREO_INDEX;
         for (int index = 0; index < MAX_VIDEO_INDEX; index++) {
-            if (index == PREFERRED_STEREO_INDEX) continue;
+            if (index == PREFERRED_STEREO_INDEX)
+                continue;
             probe_order[probe_count++] = index;
         }
     } else {
@@ -190,11 +195,14 @@ static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int wi
         int index = probe_order[order_index];
 
         // Skip indexes with no device node
-        if (!filesystem::exists("/dev/video" + to_string(index))) continue;
+        if (!filesystem::exists("/dev/video" + to_string(index)))
+            continue;
 
         // Close any prior handle, then try this video index
-        if (capture.isOpened()) capture.release();
-        if (!capture.open(index, cv::CAP_V4L2)) continue;
+        if (capture.isOpened())
+            capture.release();
+        if (!capture.open(index, cv::CAP_V4L2))
+            continue;
 
         // Apply the requested capture size and rate
         capture.set(cv::CAP_PROP_FRAME_WIDTH, width);

@@ -44,8 +44,10 @@ AppConfig loadConfig() {
     try {
         json settings;
         input >> settings;
-        if (settings.contains("useCamera")) config.useCamera = settings["useCamera"].get<bool>();
-        if (settings.contains("faceTracking")) config.faceTracking = settings["faceTracking"].get<bool>();
+        if (settings.contains("useCamera"))
+            config.useCamera = settings["useCamera"].get<bool>();
+        if (settings.contains("faceTracking"))
+            config.faceTracking = settings["faceTracking"].get<bool>();
 
         // Use servo limits only when every axis min and max is present
         bool has_pan_min = read_travel_limit(settings, "pan_min", "min_x", config.pan_min);

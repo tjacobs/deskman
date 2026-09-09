@@ -19,6 +19,7 @@ Comments:
 - No doc strings, just put a single line comment above each function
 - No parens in comments, use commas instead
 - No comments at end of lines
+- No const values in comments, say what the const is for, not what it is set to
 
 Code:
 
@@ -26,6 +27,7 @@ Code:
 - Fix or supress any warnings that occur in output, working run should be clean
 - Try to not have value defaults in function define lines
 - Function calls should be on one line, not broken over many lines
+- No one line ifs, put the body on the next line, indented
 - Remove any imports not used
 
 Naming:

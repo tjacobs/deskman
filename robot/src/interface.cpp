@@ -91,7 +91,8 @@ static double seconds_since_start();
 
 // Bind the socket and start accepting clients
 bool start_interface() {
-    if (g_interface_running.load()) return true;
+    if (g_interface_running.load())
+        return true;
 
     // Stamp the start so tap logs can say how far into the boot they landed
     g_interface_start = steady_clock::now();
@@ -151,12 +152,15 @@ static string robot_interface_path() {
     // Prefer the session runtime directory
     string directory;
     const char* runtime = getenv("XDG_RUNTIME_DIR");
-    if (runtime && runtime[0]) directory = runtime;
-    else directory = string("/run/user/") + to_string(getuid());
+    if (runtime && runtime[0])
+        directory = runtime;
+    else
+        directory = string("/run/user/") + to_string(getuid());
 
     // Fall back to /tmp when that directory is missing
     struct stat info;
-    if (stat(directory.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) directory = "/tmp";
+    if (stat(directory.c_str(), &info) != 0 || !S_ISDIR(info.st_mode))
+        directory = "/tmp";
     return directory + "/" + ROBOT_INTERFACE_NAME;
 }
 
@@ -166,7 +170,8 @@ static void interface_loop() {
         // Wait for the next connection
         int client_fd = ::accept(g_listen_fd, nullptr, nullptr);
         if (client_fd < 0) {
-            if (!g_interface_running.load()) break;
+            if (!g_interface_running.load())
+                break;
             continue;
         }
 
@@ -197,7 +202,8 @@ static void serve_client(int client_fd) {
     while (g_interface_running.load()) {
         // Take whatever arrived, an empty read means the client left
         ssize_t count = read(client_fd, chunk, sizeof(chunk));
-        if (count <= 0) break;
+        if (count <= 0)
+            break;
         buffer.append(chunk, static_cast<size_t>(count));
 
         // Answer every whole line the buffer now holds
@@ -205,10 +211,12 @@ static void serve_client(int client_fd) {
         while ((position = buffer.find('\n')) != string::npos) {
             string line = buffer.substr(0, position);
             buffer.erase(0, position + 1);
-            if (line.empty()) continue;
+            if (line.empty())
+                continue;
             string reply = handle_request(line);
             reply.push_back('\n');
-            if (write(client_fd, reply.data(), reply.size()) < 0) break;
+            if (write(client_fd, reply.data(), reply.size()) < 0)
+                break;
         }
     }
     close(client_fd);
@@ -231,9 +239,12 @@ static string handle_request(const string& line) {
             int tilt = 0;
             int hat = 0;
             get_degrees(pan, tilt, hat);
-            if (request.contains("pan")) pan = request_int(request, "pan", pan);
-            if (request.contains("tilt")) tilt = request_int(request, "tilt", tilt);
-            if (request.contains("hat")) hat = request_int(request, "hat", hat);
+            if (request.contains("pan"))
+                pan = request_int(request, "pan", pan);
+            if (request.contains("tilt"))
+                tilt = request_int(request, "tilt", tilt);
+            if (request.contains("hat"))
+                hat = request_int(request, "hat", hat);
             pan += request_int(request, "pan_delta", 0);
             tilt += request_int(request, "tilt_delta", 0);
             hat += request_int(request, "hat_delta", 0);
@@ -242,11 +253,15 @@ static string handle_request(const string& line) {
 
         // Hand the camera over to a call, then take it back
         } else if (command == "pause") {
-            if (!wait_call_handoff(CALL_HANDOFF_PAUSE)) reply = {{"ok", false}, {"error", "pause timeout"}};
-            else reply = {{"ok", true}};
+            if (!wait_call_handoff(CALL_HANDOFF_PAUSE))
+                reply = {{"ok", false}, {"error", "pause timeout"}};
+            else
+                reply = {{"ok", true}};
         } else if (command == "resume") {
-            if (!wait_call_handoff(CALL_HANDOFF_RESUME)) reply = {{"ok", false}, {"error", "resume timeout"}};
-            else reply = {{"ok", true}};
+            if (!wait_call_handoff(CALL_HANDOFF_RESUME))
+                reply = {{"ok", false}, {"error", "resume timeout"}};
+            else
+                reply = {{"ok", true}};
 
         // Toggle the peer list
         } else if (command == "menu") {
@@ -292,9 +307,12 @@ static json position_reply() {
 
 // Read a JSON number as int, or the fallback when the key is missing
 static int request_int(const json& request, const char* key, int fallback) {
-    if (!request.contains(key)) return fallback;
-    if (request[key].is_number_integer()) return request[key].get<int>();
-    if (request[key].is_number()) return static_cast<int>(request[key].get<double>());
+    if (!request.contains(key))
+        return fallback;
+    if (request[key].is_number_integer())
+        return request[key].get<int>();
+    if (request[key].is_number())
+        return static_cast<int>(request[key].get<double>());
     return fallback;
 }
 
@@ -316,7 +334,8 @@ static bool wait_call_handoff(int command) {
 // Flip the peer list, ignoring a second tap that lands too soon
 static void send_menu() {
     auto now = steady_clock::now();
-    if (g_last_menu_tap.time_since_epoch().count() != 0 && duration_cast<milliseconds>(now - g_last_menu_tap).count() < CALL_MENU_TAP_DEBOUNCE_MS) return;
+    if (g_last_menu_tap.time_since_epoch().count() != 0 && duration_cast<milliseconds>(now - g_last_menu_tap).count() < CALL_MENU_TAP_DEBOUNCE_MS)
+        return;
     g_last_menu_tap = now;
     g_overlay_open = !g_overlay_open.load();
     send_to_clients(json{{"command", "menu"}}.dump());
@@ -326,12 +345,14 @@ static void send_menu() {
 static void send_to_clients(const string& line) {
     // Clients read by line, so make sure there is one
     string payload = line;
-    if (payload.empty() || payload.back() != '\n') payload.push_back('\n');
+    if (payload.empty() || payload.back() != '\n')
+        payload.push_back('\n');
 
     // Write to each client in turn, a dead one is cleaned up by its own thread
     lock_guard<mutex> lock(g_clients_mutex);
     for (int client_fd : g_client_fds) {
-        if (client_fd < 0) continue;
+        if (client_fd < 0)
+            continue;
         ssize_t written = write(client_fd, payload.data(), payload.size());
         (void)written;
     }
@@ -346,7 +367,8 @@ static void remove_client(int client_fd) {
 // Return a pending pause or resume for the main loop to act on
 int take_call_handoff() {
     lock_guard<mutex> lock(g_handoff_mutex);
-    if (g_handoff_complete || g_handoff_command == CALL_HANDOFF_NONE) return CALL_HANDOFF_NONE;
+    if (g_handoff_complete || g_handoff_command == CALL_HANDOFF_NONE)
+        return CALL_HANDOFF_NONE;
     return g_handoff_command;
 }
 
@@ -367,7 +389,8 @@ void handle_call_event(const SDL_Event& event) {
     bool tap = false;
     const char* tap_source = "";
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-        if (event.button.which == SDL_TOUCH_MOUSEID) return;
+        if (event.button.which == SDL_TOUCH_MOUSEID)
+            return;
         tap = true;
         tap_source = "mouse";
         x = event.button.x;
@@ -378,7 +401,8 @@ void handle_call_event(const SDL_Event& event) {
         x = (int)(event.tfinger.x * screen_width);
         y = (int)(event.tfinger.y * screen_height);
     }
-    if (!tap) return;
+    if (!tap)
+        return;
 
     // Overlay keeps the bar up so Exit and Call stay reachable
     bool bar_showing = status_bar_visible() || g_overlay_open.load();
@@ -387,8 +411,10 @@ void handle_call_event(const SDL_Event& event) {
 
     // Name what the tap landed on
     const char* hit_name = "face";
-    if (hit_exit) hit_name = "Exit";
-    if (hit_call) hit_name = "Call";
+    if (hit_exit)
+        hit_name = "Exit";
+    if (hit_call)
+        hit_name = "Call";
 
     // Log every tap so a stray one at boot stands apart from a real press
     if (LOG_TAPS) {
@@ -408,13 +434,15 @@ void handle_call_event(const SDL_Event& event) {
     }
 
     // A tap on the face shows or hides the status bar, unless the overlay owns it
-    if (g_overlay_open.load()) return;
+    if (g_overlay_open.load())
+        return;
     set_status_bar_visible(!bar_showing);
 }
 
 // Seconds since the interface started, so taps during boot are easy to spot
 static double seconds_since_start() {
-    if (g_interface_start.time_since_epoch().count() == 0) return 0.0;
+    if (g_interface_start.time_since_epoch().count() == 0)
+        return 0.0;
     return duration_cast<milliseconds>(steady_clock::now() - g_interface_start).count() / 1000.0;
 }
 
@@ -430,7 +458,8 @@ bool listen_open() {
 
 // Close the socket, join every client thread, and remove the socket file
 void stop_interface() {
-    if (!g_interface_running.load() && g_listen_fd < 0) return;
+    if (!g_interface_running.load() && g_listen_fd < 0)
+        return;
 
     // Stop accepting, which wakes the interface thread
     g_interface_running = false;
@@ -439,21 +468,24 @@ void stop_interface() {
         close(g_listen_fd);
         g_listen_fd = -1;
     }
-    if (g_interface_thread.joinable()) g_interface_thread.join();
+    if (g_interface_thread.joinable())
+        g_interface_thread.join();
 
     // Shut every client down, taking the thread list out from under the lock
     vector<thread> client_threads;
     {
         lock_guard<mutex> lock(g_clients_mutex);
         for (int client_fd : g_client_fds) {
-            if (client_fd >= 0) shutdown(client_fd, SHUT_RDWR);
+            if (client_fd >= 0)
+                shutdown(client_fd, SHUT_RDWR);
         }
         client_threads.swap(g_client_threads);
     }
 
     // Wait for the client threads to finish, then forget them
     for (thread& client_thread : client_threads) {
-        if (client_thread.joinable()) client_thread.join();
+        if (client_thread.joinable())
+            client_thread.join();
     }
     g_client_fds.clear();
 
