@@ -1,75 +1,54 @@
-#ifndef FACE_H
-#define FACE_H
+#pragma once
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
+// SDL
 #include <SDL2/SDL_ttf.h>
-#include "renderer.h"
-#include <thread>
-#include <chrono>
 
+// Local
+#include "renderer.h"
+
+// Namespace
 using namespace std;
 
+// Shapes, font, and animation state the renderer draws the face from
 typedef struct {
-    // Eye parameters
-    int eye_left_x;   // X position of the left eye
-    int eye_left_y;   // Y position of the left eye
-    int eye_right_x;  // X position of the right eye
-    int eye_right_y;  // Y position of the right eye
-    int eye_width;    // Width of the eyes
-    int eye_height;   // Height of the eyes (changes to simulate squinting)
-
-    // Mouth parameters
-    int mouth_x;      // X position of the mouth
-    int mouth_y;      // Y position of the mouth
-    int mouth_width;  // Width of the mouth
-    int mouth_height; // Height of the mouth
-    int mouth_smile;  // Curve for the smile (positive for smile, negative for frown)
-    char mouth_shape; // Shape of mouth for different phonemes (M=closed, F=slight, T=wide, L=narrow)
-
-    // Font for text rendering
+    // Font for on-screen text
     TTF_Font* font;
 
+    // Vector shapes owned by the renderer
     Ellipse* leftEye;
     Ellipse* rightEye;
     Ellipse* mouth;
 
-    // Animation state
+    // Blink animation state
     float time;
     float blinkTimer;
     bool isBlinking;
-    float lookTimer;
-    bool isLooking;
-    float targetX;
-    float targetY;
+
+    // Where the head and eyes are pointed
     float lookTiltX;
     float lookTiltY;
     float currentHeadX;
     float currentHeadY;
-    float lookStartTime;
-    int lookDirection;
-    int lookState;
-
 } Face;
 
+// The one face the whole program animates
 extern Face face;
 
-// Constants
-extern const float ANIMATION_SPEED;
-extern const float MAX_TILT;
-extern const float BLINK_SPEED;
-extern const float BLINK_INTERVAL;
-extern const float LOOK_INTERVAL;
-extern const float EYE_MOVE_DURATION;
+// Degrees the head turns for a full look
 extern const float HEAD_LOOK_DEGREES;
-extern const float WAIT_DURATION;
 
-Face create_face(int center_x, int center_y);
-void update_face(Face* face, int eye_squint, int smile_curve);
-void cleanup_face(Face* face);
-void update_face_animation(Face* face, float deltaTime);
-void update_face_looking(Face* face, float deltaTime, bool hasFaceTracking);
+// Build the eyes and mouth, then clear the animation state
+Face create_face();
 void reset_face_animation(Face* face);
+
+// Step the blink and tilt animation, once per frame
+void update_face_animation(Face* face);
+
+// Hook for the servo keys, the renderer drives the face itself
+void update_face(Face* face, int eye_squint, int smile_curve);
+
+// Show or hide the mouth
 void show_mouth(bool show);
 
-#endif
+// Free the font on the way out
+void cleanup_face(Face* face);

@@ -287,7 +287,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             move_degrees(pan_degrees_from_counts(pan_nudge), tilt_degrees_from_counts(tilt_nudge), 0);
         }
 
-        update_face_animation(&face, 1000.0f / MAX_FPS);
+        update_face_animation(&face);
 
         // Draw face when a window is available
         if (show_window && renderer) {
@@ -413,7 +413,7 @@ static void show_face() {
     if (show_window && !create_window()) show_window = false;
 
     // Build the face at the current screen size
-    face = create_face(screen_width, screen_height);
+    face = create_face();
     reset_face_animation(&face);
 
     // Pump a few frames so the compositor actually shows the eyes
@@ -436,7 +436,7 @@ static void draw_face() {
 
     // Animate the face and keep the battery strip on the first frames
     check_battery();
-    update_face_animation(&face, 1000.0f / MAX_FPS);
+    update_face_animation(&face);
     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
     SDL_RenderClear(renderer);
     vectorRenderer.render(renderer);
