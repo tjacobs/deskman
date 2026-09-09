@@ -32,7 +32,7 @@ static const float MOUTH_OFFSET_Y = 200.0f;
 static const float MOUTH_CUTOUT_Y = -40.0f;
 static const float MOUTH_CUTOUT_HEIGHT = 180.0f;
 
-// Dark grey eyes with a white outline, black mouth
+// Dark grey eyes and a black mouth, strokes are off so the outline never shows
 static const SDL_Color EYE_FILL = {25, 25, 25, 255};
 static const SDL_Color EYE_STROKE = {255, 255, 255, 255};
 static const SDL_Color MOUTH_COLOR = {0, 0, 0, 255};
