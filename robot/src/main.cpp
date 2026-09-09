@@ -349,7 +349,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
 
         // Last log line, pack voltage, Call, and Exit while the overlay is up
-        draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
+        draw_status_bar(battery_text().c_str(), face.font, call_overlay_open());
 
         // Show the tracking preview over the face
         if (use_camera && faceTracker.isCameraAvailable())
@@ -535,7 +535,7 @@ static void draw_face() {
     SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
     SDL_RenderClear(renderer);
     vectorRenderer.render(renderer);
-    draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
+    draw_status_bar(battery_text().c_str(), face.font, call_overlay_open());
     SDL_RenderPresent(renderer);
     SDL_Delay(FRAME_MS);
 }
@@ -550,7 +550,8 @@ static int start_servos() {
     });
 
     // Keep drawing until the bus scan finishes
-    while (!done && !g_quit) draw_face();
+    while (!done && !g_quit)
+        draw_face();
     worker.join();
     return result;
 }
