@@ -129,7 +129,8 @@ COLD_MODE = False
 PROMPT_MODE = False
 CLOUD_MODE = False
 LAST_ASK_AT = 0.0
-LAST_LOW_BATTERY_AT = 0.0
+LAST_BATTERY_CHECK_AT = 0.0
+LAST_BATTERY_VOLTAGE = 0.0
 LOW_BATTERY_FALLBACK_INDEX = 0
 kokoro_model = None
 kokoro_pipelines = {}
@@ -820,18 +821,40 @@ def reminder_loop(listener, kokoro_pipeline):
             print(f'Reminder check failed: {error}', flush=True)
         time.sleep(REMINDER_CHECK_SECONDS)
 
-# Speak a fresh low-battery line about once a minute
+# Sample the pack once a minute, and ask to be plugged in only while the voltage keeps falling
 def speak_low_battery(listener, kokoro_pipeline):
-    global LAST_LOW_BATTERY_AT
-    percent = robot_move.battery_percent()
-    if percent is None or percent >= LOW_BATTERY_PERCENT:
-        return
+    global LAST_BATTERY_CHECK_AT, LAST_BATTERY_VOLTAGE
+
+    # Sample on the minute so two readings sit a minute apart
     now = time.time()
-    if LAST_LOW_BATTERY_AT > 0.0 and (now - LAST_LOW_BATTERY_AT) < LOW_BATTERY_SECONDS:
+    if LAST_BATTERY_CHECK_AT > 0.0 and (now - LAST_BATTERY_CHECK_AT) < LOW_BATTERY_SECONDS:
         return
-    LAST_LOW_BATTERY_AT = now
+    LAST_BATTERY_CHECK_AT = now
+
+    # Read the pack and keep this voltage to compare against next minute
+    percent, voltage = robot_move.battery_reading()
+    if percent is None or voltage is None:
+        return
+    previous = LAST_BATTERY_VOLTAGE
+    LAST_BATTERY_VOLTAGE = voltage
+
+    # Still plenty of charge
+    if percent >= LOW_BATTERY_PERCENT:
+        return
+
+    # Charging shows up as a rise, so wait for a second reading to compare
+    if previous <= 0.0:
+        print(f'Low battery {percent}%, {voltage:.2f} V', flush=True)
+        return
+
+    # Voltage held or rose, so it is plugged in
+    if voltage >= previous:
+        print(f'Low battery {percent}%, {voltage:.2f} V up from {previous:.2f} V, charging', flush=True)
+        return
+
+    # Still draining, so ask
     line = low_battery_line()
-    print(f'Low battery {percent}%: {line}', flush=True)
+    print(f'Low battery {percent}%, {voltage:.2f} V down from {previous:.2f} V: {line}', flush=True)
     speak_muted(listener, kokoro_pipeline, line)
 
 # Ask the LLM for a short variation, or use a fallback phrase

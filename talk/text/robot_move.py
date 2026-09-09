@@ -110,18 +110,18 @@ def normalize_direction(direction):
         return DIRECTION_ALIASES[text]
     return text.replace(" ", "_")
 
-# Read pack percent from the robot, or None when the socket is down
-def battery_percent():
+# Read pack percent and voltage from the robot, or None when the socket is down
+def battery_reading():
     try:
         reply = send_command({"command": "battery"})
     except Exception:
-        return None
+        return None, None
     if not reply.get("ok"):
-        return None
+        return None, None
     try:
-        return int(round(float(reply.get("percent"))))
+        return int(round(float(reply.get("percent")))), float(reply.get("voltage"))
     except (TypeError, ValueError):
-        return None
+        return None, None
 
 # Tell the robot whether talk is listening, so it can track a face
 def set_listen(open):
