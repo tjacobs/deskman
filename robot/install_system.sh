@@ -252,13 +252,73 @@ configure_session() {
     remove_extra_home_folders
 }
 
-# Keep the Waveshare panel in portrait so GNOME does not flip it after the face
+# Start X already in portrait and keep GNOME from flipping it back
 persist_display_rotation() {
-    echo "Keeping DP-1 rotated left"
+    echo "Keeping DP-1 rotated left from X start"
 
-    # Same EDID as the 1024x600 Waveshare on DP-1
-    monitors_xml="${RUN_HOME}/.config/monitors.xml"
-    mkdir -p "${RUN_HOME}/.config"
+    # Ask the NVIDIA driver for left rotation on the first X modeset
+    write_xorg_portrait
+
+    # Same EDID as the 1024x600 Waveshare on DP-1, vendor ADA product 0x0004
+    write_monitors_xml "${RUN_HOME}/.config/monitors.xml"
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/monitors.xml"
+
+    # Login screen uses the same layout
+    mkdir -p /var/lib/gdm3/.config
+    write_monitors_xml /var/lib/gdm3/.config/monitors.xml
+    chown gdm:gdm /var/lib/gdm3/.config/monitors.xml 2>/dev/null || true
+}
+
+# Add the rotated MetaModes to the Tegra device section
+write_xorg_portrait() {
+    local xorg_conf=/etc/X11/xorg.conf
+    local backup_conf=/etc/X11/xorg.conf.deskman-bak
+    if [[ ! -f "${xorg_conf}" ]]; then
+        echo "No ${xorg_conf}, skip X portrait options" >&2
+        return
+    fi
+    if [[ ! -f "${backup_conf}" ]]; then
+        cp "${xorg_conf}" "${backup_conf}"
+    fi
+
+    # Drop the old Monitor Rotate snippet, it fought GNOME and blanked the panel
+    rm -f /etc/X11/xorg.conf.d/10-deskman-rotate.conf
+
+    # Leave the file alone when the options are already present
+    if grep -q 'Option.*"MetaModes".*Rotation=left' "${xorg_conf}"; then
+        return
+    fi
+
+    # Insert the rotation option into the Tegra0 device section
+    python3 - "${xorg_conf}" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path).read()
+if 'Rotation=left' in text:
+    raise SystemExit(0)
+old = '''Section "Device"
+    Identifier  "Tegra0"
+    Driver      "nvidia"
+# Allow X server to be started even if no display devices are connected.
+    Option      "AllowEmptyInitialConfiguration" "true"
+EndSection'''
+new = '''Section "Device"
+    Identifier  "Tegra0"
+    Driver      "nvidia"
+# Allow X server to be started even if no display devices are connected.
+    Option      "AllowEmptyInitialConfiguration" "true"
+    Option      "MetaModes" "DP-1: 1024x600 +0+0 {Rotation=left}"
+EndSection'''
+if old not in text:
+    raise SystemExit('xorg.conf Device section is not the stock Tegra block')
+open(path, 'w').write(text.replace(old, new, 1))
+PY
+}
+
+# Write GNOME's monitor layout, the rate must match the mode to about 0.001Hz or mutter drops the whole config and falls back to landscape
+write_monitors_xml() {
+    local monitors_xml="$1"
+    mkdir -p "$(dirname "${monitors_xml}")"
     cat > "${monitors_xml}" <<'EOF'
 <monitors version="2">
   <configuration>
@@ -281,26 +341,12 @@ persist_display_rotation() {
         <mode>
           <width>1024</width>
           <height>600</height>
-          <rate>59.85</rate>
+          <rate>59.851860046386719</rate>
         </mode>
       </monitor>
     </logicalmonitor>
   </configuration>
 </monitors>
-EOF
-    chown "${RUN_USER}:${RUN_USER}" "${monitors_xml}"
-
-    # Login screen uses the same layout
-    mkdir -p /var/lib/gdm3/.config
-    cp "${monitors_xml}" /var/lib/gdm3/.config/monitors.xml
-    chown gdm:gdm /var/lib/gdm3/.config/monitors.xml 2>/dev/null || true
-
-    # Rotate at X start so the first frame is already portrait
-    cat > /etc/X11/xorg.conf.d/10-deskman-rotate.conf <<'EOF'
-Section "Monitor"
-    Identifier "DP-1"
-    Option "Rotate" "left"
-EndSection
 EOF
 }
 

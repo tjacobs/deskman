@@ -11,8 +11,6 @@ ROBOT_BIN="${ROBOT_DIR}/build/robot"
 TALK_SCRIPT="${TALK_DIR}/talk.py"
 TALK_PYTHON="${TALK_DIR}/.venv/bin/python"
 DISPLAY_DEFAULT=":0"
-DESKTOP_WAIT_TRIES=40
-DESKTOP_WAIT_SECONDS=0.25
 OPENAI_ENV_FILE="${TALK_DIR}/openai.env"
 
 # Main
@@ -24,7 +22,6 @@ main() {
     if [[ -x "${ROBOT_BIN}" ]]; then
         echo "Starting Deskman robot ${ROBOT_BIN}..."
         export DISPLAY="${DISPLAY:-${DISPLAY_DEFAULT}}"
-        wait_for_desktop
         cd "$(dirname "${ROBOT_BIN}")"
         exec "${ROBOT_BIN}"
     fi
@@ -46,18 +43,6 @@ load_openai_key() {
     set -a
     . "${OPENAI_ENV_FILE}"
     set +a
-}
-
-# Wait until gnome-shell owns the display, else it resets rotation after the face
-wait_for_desktop() {
-    export DISPLAY="${DISPLAY:-${DISPLAY_DEFAULT}}"
-    local try_index
-    for ((try_index = 0; try_index < DESKTOP_WAIT_TRIES; try_index++)); do
-        if pgrep -x gnome-shell >/dev/null 2>&1 && xrandr --query >/dev/null 2>&1; then
-            return
-        fi
-        sleep "${DESKTOP_WAIT_SECONDS}"
-    done
 }
 
 # Run service

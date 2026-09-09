@@ -374,6 +374,7 @@ static bool display_is_rotated_left() {
     return system("xrandr --query 2>/dev/null | grep -q '^DP-1 connected.* left ('") == 0;
 }
 
+// Rotate to portrait, skip xrandr when already left so the NVIDIA splash does not flash
 static void rotate_screen() {
 #ifdef __linux__
     const int tries = 2;
@@ -391,7 +392,7 @@ static void rotate_screen() {
     // Skip quietly when this machine has no Waveshare panel
     if (!connected) return;
 
-    // Leave the panel alone when it is already left, a second xrandr flashes the NVIDIA splash
+    // A rotate modeset blanks the panel and shows the NVIDIA logo in native landscape
     if (!display_is_rotated_left()) {
         system("xrandr --output DP-1 --rotate left 2>/dev/null");
         for (int try_index = 0; try_index < tries; try_index++) {
