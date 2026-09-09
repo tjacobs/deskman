@@ -39,7 +39,6 @@ TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
-PROMPT_EXTRAS_HEADER = "Do not mention this context unless the user asks."
 
 # Tools the local model can call, Sonos and Google Calendar are added when an account is saved
 BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS
@@ -529,28 +528,26 @@ def ask_one_liner(prompt):
 
 # Build the chat messages for one ask
 def build_messages(prompt):
-    # Start with text_prompt.json alone so that prefix stays identical across asks for KV cache reuse
+    # Start with text_prompt.json, that prefix stays identical across asks for KV cache reuse
     system_prompt = load_system_prompt()
 
     # Teach 1b to emit tool JSON in content, its chat template has no tool path
     if uses_content_tools():
         system_prompt = system_prompt + "\n\n" + client.content_tools_instruction(active_tool_names())
 
+    # Append memories and reminders last, a small model answers an instruction it finds in the user turn
+    extras = prompt_extras()
+    if extras:
+        system_prompt = system_prompt + "\n\n" + extras
+
     messages = [{"role": "system", "content": system_prompt}]
 
     # Load previous turns in conversation history
     messages.extend(conversation_history)
 
-    # Add this question last, memories and reminders only on the first question
-    messages.append({"role": "user", "content": with_prompt_extras(prompt)})
+    # Add this question last
+    messages.append({"role": "user", "content": prompt})
     return messages
-
-# Prefix memories and reminders onto the first question only, later asks keep them via history
-def with_prompt_extras(prompt):
-    extras = prompt_extras()
-    if not extras or conversation_history:
-        return prompt
-    return extras + "\n\n" + prompt
 
 # Handle a forced tool result, True means retry the model, text means return that reply
 def apply_forced(forced, messages, domain, retried):
@@ -601,31 +598,21 @@ def remember_turn(messages, reply):
 # Drop oldest full turns when history grows too long
 def trim_conversation_history():
     while len(conversation_history) > MAX_HISTORY_MESSAGES:
-        drop_at = first_droppable_user_index()
+        drop_at = first_user_index()
         if drop_at is None:
             break
 
-        # Remove that turn, keep the first memories prefix if present
+        # Remove that turn, the question and everything answering it
         conversation_history.pop(drop_at)
         while drop_at < len(conversation_history) and conversation_history[drop_at].get("role") != "user":
             conversation_history.pop(drop_at)
 
-# Oldest user turn that is safe to drop, skip the first memories prefix
-def first_droppable_user_index():
-    kept_extras = False
+# Oldest user turn in the history
+def first_user_index():
     for index, message in enumerate(conversation_history):
-        if message.get("role") != "user":
-            continue
-        if not kept_extras and message_has_prompt_extras(message):
-            kept_extras = True
-            continue
-        return index
+        if message.get("role") == "user":
+            return index
     return None
-
-# Return true when this user message already carries memories or reminders
-def message_has_prompt_extras(message):
-    content = message.get("content") or ""
-    return content.startswith(PROMPT_EXTRAS_HEADER)
 
 # Tools sent to the model this ask, Sonos and Google Calendar only when an account is saved
 def active_tools():
@@ -666,11 +653,7 @@ def prompt_extras():
     reminder_text = reminders.format_reminders_for_prompt()
     if reminder_text:
         extras.append(reminder_text)
-    if not extras:
-        return ""
-
-    # Keep facts available without treating them as something to announce
-    return PROMPT_EXTRAS_HEADER + "\n\n" + "\n\n".join(extras)
+    return "\n\n".join(extras)
 
 # Print everything that will go into the model for this ask
 def print_context(prompt):
@@ -1126,11 +1109,6 @@ def format_inference_input(messages):
         role = message.get("role", "")
         if role not in ("user", "tool"):
             continue
-
-        # Drop the memories prefix so timing lines show just the question
-        extras = prompt_extras()
-        if role == "user" and extras and content.startswith(extras):
-            content = content[len(extras):].lstrip()
 
         text = " ".join(content.split())
         if len(text) > INFERENCE_INPUT_CHARS:
