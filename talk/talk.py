@@ -149,7 +149,8 @@ text_ask.set_talk_module(sys.modules[__name__])
 def main():
     # Parse args
     global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE = parse_args()
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name = parse_args()
+    CLOUD_MODE = choose_text_backend(cloud_flag, local_flag, model_name)
 
     # Make sure only one running
     check_already_running()
@@ -200,6 +201,7 @@ def parse_args():
     cold_mode = False
     prompt_mode = False
     cloud_mode = False
+    local_mode = False
     model_name = ""
     arguments = sys.argv[1:]
     index = 0
@@ -219,6 +221,8 @@ def parse_args():
             prompt_mode = True
         elif argument == '--cloud':
             cloud_mode = True
+        elif argument == '--local':
+            local_mode = True
         elif argument == '--model':
             if index + 1 >= len(arguments):
                 print('Error: --model needs a model name.')
@@ -238,13 +242,44 @@ def parse_args():
             print_usage()
             sys.exit(1)
         index += 1
-    text_client.apply_cloud_settings(cloud_mode, model_name)
-    cloud_mode = text_client.use_cloud()
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode, cloud_mode
+    if cloud_mode and local_mode:
+        print('Error: use --cloud or --local, not both.')
+        print_usage()
+        sys.exit(1)
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name
+
+# Use OpenAI when online and a key is present, unless --cloud or --local
+def choose_text_backend(cloud_flag, local_flag, model_name):
+    # Force Gemma when asked, and keep Hugging Face off the network if ping fails
+    if local_flag:
+        text_client.disable_cloud()
+        if not utils.network_available():
+            utils.use_hub_offline()
+        return False
+
+    # Honor an explicit cloud flag or TALK_LLM=cloud
+    if cloud_flag or text_client.env_wants_cloud():
+        text_client.apply_cloud_settings(True, model_name)
+        return True
+
+    # Load a key file if present, then pick OpenAI only when the net and key exist
+    text_client.load_openai_env_file()
+    if not utils.network_available():
+        print('No internet, using local model.', flush=True)
+        text_client.disable_cloud()
+        utils.use_hub_offline()
+        return False
+    if not text_client.cloud_api_key():
+        print('No OpenAI key, using local model.', flush=True)
+        text_client.disable_cloud()
+        return False
+    text_client.apply_cloud_settings(True, model_name)
+    print('Internet up, using OpenAI.', flush=True)
+    return True
 
 # Print usage help
 def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--model name] [{NO_REPLAY_WAKE_FLAG}]')
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--model name] [{NO_REPLAY_WAKE_FLAG}]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
     print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
@@ -252,9 +287,10 @@ def print_usage():
     print('  --cold             skip text model warm-up ask')
     print('  --prompt           print the full model context, messages, tools, and rendered prompt')
     print('  --cloud            ask OpenAI instead of the local llama-server')
+    print('  --local            force the local Gemma server even when the internet is up')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
     print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
-    print(f'  (no arg)           say "{WAKE_WORD}" then a command, asks the local LLM, and speaks the reply')
+    print(f'  (no arg)           say "{WAKE_WORD}" then a command, uses OpenAI when online, else local Gemma')
     print(f'                     by default plays back what was said to "{WAKE_WORD}"')
 
 # Run the talk loop with models already loaded

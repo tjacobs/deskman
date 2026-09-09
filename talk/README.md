@@ -2,7 +2,7 @@
 
 Speech to text, LLM inference, and text to speech generation.
 
-Runs locally, offline, no cloud/internet/wifi needed once downloaded. Pass `--cloud` to ask OpenAI instead of the local Gemma server.
+Runs locally, offline, no cloud/internet/wifi needed once downloaded. With no flags, `talk.py` uses OpenAI when the internet and `OPENAI_API_KEY` are present, otherwise the local Gemma server. `--cloud` and `--local` override.
 
 Conversational AI bot with tools like time, date, volume, and google calendar integration.
 
@@ -92,7 +92,7 @@ Say the wake word `robot`, then a command, and it speaks a reply from the local 
 ./talk.py --cloud
 ```
 
-`--cloud` skips llama-server and sends chat completions to OpenAI. Set `OPENAI_API_KEY`. Optional: `TALK_LLM=cloud` instead of the flag, `TALK_CLOUD_MODEL` or `--model` (default `gpt-4o-mini`), `TALK_CLOUD_BASE` (default `https://api.openai.com`). Whisper and Kokoro stay local.
+With no flags, talk pings `1.1.1.1` and uses OpenAI when that works and a key is in `OPENAI_API_KEY` or `openai.env`. Otherwise it starts the local Gemma server. `--cloud` forces OpenAI, `--local` forces Gemma. Optional: `TALK_LLM=cloud`, `TALK_CLOUD_MODEL` or `--model` (default `gpt-4o-mini`), `TALK_CLOUD_BASE` (default `https://api.openai.com`). Whisper and Kokoro stay local.
 
 Say `robot what is the time`, and it answers straight away. Say just `robot` and it replies `Question for me?`, then waits for the command. You can keep talking for 20 seconds after a reply without saying `robot` again.
 

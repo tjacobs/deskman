@@ -95,6 +95,11 @@ def env_wants_cloud():
 def use_cloud():
     return cloud_enabled
 
+# Stay on the local server even if TALK_LLM asked for cloud
+def disable_cloud():
+    global cloud_enabled
+    cloud_enabled = False
+
 # Quit when cloud is on and OPENAI_API_KEY is missing
 def require_cloud_key():
     if cloud_api_key():

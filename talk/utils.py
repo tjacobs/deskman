@@ -284,6 +284,10 @@ def voice_cache_path(voice):
             return voice_path
     return None
 
+# Stop Hugging Face from waiting on the network
+def use_hub_offline():
+    os.environ['HF_HUB_OFFLINE'] = '1'
+
 # Use local cache only when model and voice are already downloaded
 def enable_offline_if_cached(voice):
     if voice_cache_path(voice) is not None:
