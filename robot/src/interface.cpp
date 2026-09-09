@@ -14,6 +14,7 @@ extern volatile bool g_quit;
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -33,6 +34,9 @@ using namespace std::chrono;
 
 const int CALL_HANDOFF_WAIT_SECONDS = 8;
 const int CALL_MENU_TAP_DEBOUNCE_MS = 300;
+
+// Turn on to print where each screen tap lands, off so the face status bar stays quiet
+static const bool LOG_TAPS = false;
 static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 
 static atomic<bool> g_interface_running{false};
@@ -45,6 +49,7 @@ static mutex g_clients_mutex;
 static vector<int> g_client_fds;
 static vector<thread> g_client_threads;
 static steady_clock::time_point g_last_menu_tap{};
+static steady_clock::time_point g_interface_start{};
 
 static mutex g_handoff_mutex;
 static condition_variable g_handoff_cv;
@@ -63,6 +68,7 @@ static void add_client(int client_fd);
 static void remove_client(int client_fd);
 static void send_to_clients(const string& line);
 static void send_menu();
+static double seconds_since_start();
 
 int take_call_handoff() {
     lock_guard<mutex> lock(g_handoff_mutex);
@@ -199,13 +205,16 @@ void handle_call_event(const SDL_Event& event) {
     int x = 0;
     int y = 0;
     bool tap = false;
+    const char* tap_source = "";
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
         if (event.button.which == SDL_TOUCH_MOUSEID) return;
         tap = true;
+        tap_source = "mouse";
         x = event.button.x;
         y = event.button.y;
     } else if (event.type == SDL_FINGERDOWN) {
         tap = true;
+        tap_source = "finger";
         x = (int)(event.tfinger.x * screen_width);
         y = (int)(event.tfinger.y * screen_height);
     }
@@ -213,17 +222,37 @@ void handle_call_event(const SDL_Event& event) {
 
     // Overlay keeps the bar up so Exit and Call stay reachable
     bool bar_showing = status_bar_visible() || g_overlay_open.load();
-    if (bar_showing && g_overlay_open.load() && tap_is_exit(x, y)) {
+    bool hit_exit = bar_showing && g_overlay_open.load() && tap_is_exit(x, y);
+    bool hit_call = !hit_exit && bar_showing && tap_is_call(x, y);
+
+    // Name what the tap landed on
+    const char* hit_name = "face";
+    if (hit_exit) hit_name = "Exit";
+    if (hit_call) hit_name = "Call";
+
+    // Log every tap so a stray one at boot stands apart from a real press
+    if (LOG_TAPS) {
+        printf("Tap %s at %d,%d of %dx%d hit %s, %.1f sec after start\n", tap_source, x, y, screen_width, screen_height, hit_name, seconds_since_start());
+        fflush(stdout);
+    }
+
+    if (hit_exit) {
         send_to_clients(json{{"command", "quit"}}.dump());
         g_quit = true;
         return;
     }
-    if (bar_showing && tap_is_call(x, y)) {
+    if (hit_call) {
         send_menu();
         return;
     }
     if (g_overlay_open.load()) return;
     set_status_bar_visible(!bar_showing);
+}
+
+// Seconds since the interface started, so taps during boot are easy to spot
+static double seconds_since_start() {
+    if (g_interface_start.time_since_epoch().count() == 0) return 0.0;
+    return duration_cast<milliseconds>(steady_clock::now() - g_interface_start).count() / 1000.0;
 }
 
 static void serve_client(int client_fd) {
@@ -280,6 +309,9 @@ static string robot_interface_path() {
 
 bool start_interface() {
     if (g_interface_running.load()) return true;
+
+    // Stamp the start so tap logs can say how far into the boot they landed
+    g_interface_start = steady_clock::now();
 
     string socket_path = robot_interface_path();
 
