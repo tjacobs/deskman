@@ -293,7 +293,7 @@ bool close_window() {
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color) {
     if (!text || !font) return;
     
-    SDL_Surface* textSurface = TTF_RenderText_Solid(font, text, color);
+    SDL_Surface* textSurface = TTF_RenderUTF8_Solid(font, text, color);
     if (textSurface != NULL) {
         SDL_Texture* textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
         SDL_Rect textRect = {x, y, textSurface->w, textSurface->h};
@@ -315,7 +315,7 @@ static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TT
     if (!font || !label) return;
     int text_width = 0;
     int text_height = 0;
-    if (TTF_SizeText(font, label, &text_width, &text_height) != 0) return;
+    if (TTF_SizeUTF8(font, label, &text_width, &text_height) != 0) return;
     draw_text(label, rect.x + (rect.w - text_width) / 2, rect.y + (rect.h - text_height) / 2, font, {255, 255, 255, 255});
 }
 
@@ -349,8 +349,8 @@ void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit) {
     int log_height = 0;
     int battery_width = 0;
     int battery_height = 0;
-    if (have_log) TTF_SizeText(font, log_line.c_str(), &log_width, &log_height);
-    if (have_battery) TTF_SizeText(font, battery, &battery_width, &battery_height);
+    if (have_log) TTF_SizeUTF8(font, log_line.c_str(), &log_width, &log_height);
+    if (have_battery) TTF_SizeUTF8(font, battery, &battery_width, &battery_height);
     int block_height = log_height + battery_height;
     if (have_log && have_battery) block_height += BOTTOM_BAR_LINE_GAP;
     int text_y = bar_y + (BOTTOM_BAR_HEIGHT - block_height) / 2;

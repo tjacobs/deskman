@@ -600,7 +600,7 @@ static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill
     SDL_SetRenderDrawColor(drawTarget, fill.r, fill.g, fill.b, fill.a);
     SDL_RenderFillRect(drawTarget, &rect);
     if (!callFont || label.empty()) return;
-    SDL_Surface* surface = TTF_RenderText_Solid(callFont, label.c_str(), text);
+    SDL_Surface* surface = TTF_RenderUTF8_Solid(callFont, label.c_str(), text);
     if (!surface) return;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(drawTarget, surface);
     int x = rect.x + (rect.w - surface->w) / 2;
@@ -678,7 +678,7 @@ static void drawCameraIcon(int x, int y, bool recording) {
 
 static void drawLabel(const char* text, int x, int y, SDL_Color color) {
     if (!callFont || !text || !text[0]) return;
-    SDL_Surface* surface = TTF_RenderText_Solid(callFont, text, color);
+    SDL_Surface* surface = TTF_RenderUTF8_Solid(callFont, text, color);
     if (!surface) return;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(drawTarget, surface);
     SDL_Rect dest = {x, y, surface->w, surface->h};
