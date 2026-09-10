@@ -30,6 +30,12 @@ REALTIME_ACCENT = 'You are a British man from London. Speak with a natural Briti
 REALTIME_URL = 'wss://api.openai.com/v1/realtime'
 TURN_DETECTION = 'semantic_vad'
 
+# Config the reply instructions added to the robot system prompt
+SPOKEN_STYLE = 'You are speaking out loud, so keep replies to one or two short sentences.'
+
+# Config tools to hold back, these pick a kokoro voice that OpenAI is not speaking with
+SKIP_TOOLS = ('set_voice', 'list_voices')
+
 # Config the transcriber, the model hears the audio itself, this only writes the heard lines to the log
 TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
 
@@ -37,15 +43,10 @@ TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
 CONNECT_TIMEOUT = 30
 RECEIVE_TIMEOUT = 0.2
 IDLE_SECONDS = 20.0
+SPEAK_LINE_SECONDS = 15.0
 APPEND_BYTES = 32000
 BLOCKS_PER_SECOND = 10
 REALTIME_RATE = 24000
-
-# Config the reply instructions added to the robot system prompt
-SPOKEN_STYLE = 'You are speaking out loud, so keep replies to one or two short sentences.'
-
-# Config tools to hold back, these pick a kokoro voice that OpenAI is not speaking with
-SKIP_TOOLS = ('set_voice', 'list_voices')
 
 # Hold one realtime conversation from the microphone
 def main():
@@ -104,6 +105,7 @@ def open_session(config):
     socket = websocket.create_connection(f'{REALTIME_URL}?model={model}', header=[f'Authorization: Bearer {key}'], timeout=CONNECT_TIMEOUT)
     socket.settimeout(RECEIVE_TIMEOUT)
     session = Session(socket)
+    print('Connected.', flush=True)
 
     # Describe the voice, the turn taking, and the tools before any audio moves
     session.send({'type': 'session.update', 'session': {
@@ -122,16 +124,19 @@ def open_session(config):
 
 # Build the system prompt, the robot personality plus a reminder that this reply is spoken
 def session_instructions(accent):
-    # Load the system prompt
-    instructions = ask.load_system_prompt()
+    # Lead with the accent, the server makes most turns itself so this is the only place it can be said
+    instructions = accent + ' ' + SPOKEN_STYLE
+
+    # Add the robot system prompt
+    instructions = instructions + '\n\n' + ask.load_system_prompt()
 
     # Append memories and reminders, the same facts the text path sees
     extras = ask.prompt_extras()
     if extras:
         instructions = instructions + '\n\n' + extras
 
-    # Append the accent and spoken style
-    instructions = instructions + '\n\n' + accent + ' ' + SPOKEN_STYLE
+    # Say the accent again last, everything in between pulls the voice back to American
+    instructions = instructions + '\n\n' + accent
 
     # Log the instructions
     if False:
@@ -309,6 +314,65 @@ def run_function_call(session, event):
 # Drop a finished turn, running standalone there is nowhere to log it
 def ignore_turn(heard, reply):
     return
+
+# Speak one line in the realtime voice, the greeting lands before any conversation opens
+def speak_line(text):
+    return speak_instruction(f'Say exactly this, and nothing else: {text}')
+
+# Let the model write its own line and speak it, and return the words it said
+def speak_answer(question):
+    return speak_instruction(f'{question} Say the line out loud, and say nothing else.')
+
+# Open a session for one spoken turn with no microphone, say it, and hang up
+def speak_instruction(instruction):
+    # Open a session, the same one a conversation uses
+    config = load_config()
+    session = open_session(config)
+
+    # Response instructions replace the session ones, so carry the accent along
+    session.send({'type': 'response.create', 'response': {'instructions': f'{config["realtime_accent"]} {instruction}'}})
+
+    # Play it and hang up, there is no conversation to keep open yet
+    speaker = Speaker()
+    try:
+        return play_reply(session, speaker)
+    finally:
+        speaker.stop()
+        close_session(session)
+
+# Play one spoken reply as the audio arrives, and return the words it said
+def play_reply(session, speaker):
+    said = ''
+
+    # Give up rather than hang, this runs during startup
+    deadline = time.time() + SPEAK_LINE_SECONDS
+    while time.time() < deadline:
+        event = session.receive()
+        if event is None:
+            continue
+        kind = event.get('type', '')
+
+        # Play each chunk the moment it lands
+        if kind == 'response.output_audio.delta':
+            speaker.play(base64.b64decode(event['delta']))
+
+        # Keep the words, a caller that did not write the line needs to know what was said
+        elif kind == 'response.output_audio_transcript.done':
+            said = event.get('transcript', '').strip()
+
+        # Let the speaker empty, the audio is complete
+        elif kind == 'response.output_audio.done':
+            speaker.drain()
+
+        # Wait for the whole turn, the transcript can land after the audio
+        elif kind == 'response.done':
+            return said
+
+        # Show why the server gave up
+        elif kind == 'error':
+            print(f'Realtime error: {event.get("error", {}).get("message", "")}', flush=True)
+            return said
+    return said
 
 # Close the socket, the session is finished
 def close_session(session):

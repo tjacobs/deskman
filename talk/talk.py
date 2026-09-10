@@ -92,8 +92,9 @@ MAX_QUEUED_BLOCKS = round(MAX_QUEUED_SECONDS / BLOCK_SECONDS)
 VOICE = utils.DEFAULT_VOICE
 
 # Config test question and text warm-up
-TEST_QUESTION = 'What is the time?'
 WARMUP_PROMPT = 'Say hello.'
+TEST_QUESTION = 'What is the time?'
+ACCENT_PHRASE = 'I would rather park the car than pass the time scheduling a due date.'
 
 # Config dirs and env
 TALKS_DIR = os.path.join(utils.SCRIPT_DIR, 'talks')
@@ -127,6 +128,7 @@ COLD_MODE = False
 PROMPT_MODE = False
 CLOUD_MODE = False
 REALTIME_MODE = False
+ACCENT_MODE = False
 LAST_ASK_AT = 0.0
 LAST_BATTERY_CHECK_AT = 0.0
 LAST_BATTERY_VOLTAGE = 0.0
@@ -154,11 +156,25 @@ except ImportError:
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE = parse_args()
 
     # Take realtime from the flag or config.json, so the robot service can turn it on without arguments
     REALTIME_MODE = realtime_flag or utils.load_config({'realtime': REALTIME_MODE})['realtime']
+
+    # Two flags that contradict each other, say so rather than quietly pick one
+    if realtime_flag and local_flag:
+        print('Error: --realtime needs OpenAI, so it cannot be used with --local.')
+        print_usage()
+        sys.exit(1)
+
+    # Realtime needs OpenAI, so --local turns off what config.json asked for
+    if local_flag:
+        REALTIME_MODE = False
+
+    # Print realtime mode
+    if REALTIME_MODE:
+        print('Realtime: True', flush=True)
 
     # Realtime streams to OpenAI, so it forces the cloud backend and never starts llama-server
     CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
@@ -173,6 +189,11 @@ def main():
     # Exit if audio playback is unavailable
     check_ready()
 
+    # Speak the accent phrase and stop, this is for judging the voice, no models needed beyond the voice
+    if ACCENT_MODE:
+        say_accent_phrase()
+        return
+
     # Warn when free RAM is below what still needs to load
     warn_if_low_memory()
 
@@ -184,8 +205,10 @@ def main():
         # Load speech models
         whisper_model, vad_model, kokoro_pipeline = load_speech_models()
 
-        # Cloud uses OpenAI, local starts llama-server
-        if CLOUD_MODE:
+        # Realtime answers with its own model, cloud uses OpenAI, local starts llama-server
+        if REALTIME_MODE:
+            print_realtime_model()
+        elif CLOUD_MODE:
             print_cloud_text_model()
         else:
             text_server_process = start_text_server()
@@ -217,6 +240,7 @@ def parse_args():
     cloud_mode = False
     local_mode = False
     realtime_mode = False
+    accent_mode = False
     model_name = ""
     arguments = sys.argv[1:]
     index = 0
@@ -240,6 +264,8 @@ def parse_args():
             local_mode = True
         elif argument == '--realtime':
             realtime_mode = True
+        elif argument == '--accent':
+            accent_mode = True
         elif argument == '--model':
             if index + 1 >= len(arguments):
                 print('Error: --model needs a model name.')
@@ -260,12 +286,8 @@ def parse_args():
         print_usage()
         sys.exit(1)
 
-    # Realtime streams audio to OpenAI, so it cannot run against the local model
-    if realtime_mode and local_mode:
-        print('Error: --realtime needs OpenAI, so it cannot be used with --local.')
-        print_usage()
-        sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name, realtime_mode
+    # Return the arguments
+    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode
 
 # Use OpenAI when online and a key is present, unless --cloud or --local
 def choose_text_backend(cloud_flag, local_flag, model_name):
@@ -307,10 +329,25 @@ def check_realtime_ready():
         print('Error: --realtime needs the internet, and the connectivity check failed.')
         sys.exit(1)
 
+# Say the accent phrase once, it packs the sounds that split British from American
+def say_accent_phrase():
+    # Print the accent phrase
+    print("Phrase: " +ACCENT_PHRASE, flush=True)
+
+    # Realtime speaks over its own session
+    if REALTIME_MODE:
+        # Speak the accent phrase with realtime ChatGPT
+        realtime.speak_line(ACCENT_PHRASE)
+        return
+
+    # Say the accent phrase with kokoro
+    speak(None, ACCENT_PHRASE)
+
 # Print usage help
 def print_usage():
-    print('Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--realtime] [--model name]')
+    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--realtime] [--model name]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
+    print('  --accent           say the accent test phrase in the current voice, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
     print('  --replay           play the recording back after every utterance')
     print('  --memory           print available memory while loading models')
@@ -402,10 +439,12 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
         print_error('talk loop failed', error)
         raise
 
-# Say hello, realtime only prints it so kokoro stays unloaded until something needs a voice
+# Say hello, realtime speaks it over its own session so kokoro stays unloaded
 def greet(listener, kokoro_pipeline):
     if REALTIME_MODE:
-        print(GREETING, flush=True)
+        listener.mute()
+        realtime.speak_line(GREETING)
+        listener.unmute()
         return
     speak_muted(listener, kokoro_pipeline, GREETING)
 
@@ -426,7 +465,10 @@ def print_talk_status():
 
 # Hold one spoken conversation with OpenAI, audio up and audio down
 def run_realtime_turn(listener, command):
+    # Load the config
     config = realtime.load_config()
+
+    # Open the session
     session = realtime.open_session(config)
 
     # Share the microphone this loop already owns, so nothing fights for the device
@@ -928,9 +970,25 @@ def speak_low_battery(listener, kokoro_pipeline):
         return
 
     # Still draining, so ask
-    line = low_battery_line()
+    line = ask_to_be_plugged_in(listener, kokoro_pipeline)
     print(f'Low battery {percent}%, {voltage:.2f} V down from {previous:.2f} V: {line}', flush=True)
+
+# Ask to be plugged in out loud, and return the words that were said
+def ask_to_be_plugged_in(listener, kokoro_pipeline):
+    # Realtime writes the line as it says it, in the voice that answers questions, so kokoro stays unloaded
+    if REALTIME_MODE:
+        listener.mute()
+        try:
+            line = realtime.speak_answer(LOW_BATTERY_ASK)
+        finally:
+            listener.unmute()
+        if line:
+            return line
+
+    # Otherwise the text model writes the line and kokoro says it
+    line = low_battery_line()
     speak_muted(listener, kokoro_pipeline, line)
+    return line
 
 # Ask the LLM for a short variation, or use a fallback phrase
 def low_battery_line():
@@ -1292,6 +1350,11 @@ def print_log_tail_if_quiet(log_state):
 # Print the cloud model instead of a local load line
 def print_cloud_text_model():
     print(f'Text model: {text_ask.resolve_model_name()} on {text_client.cloud_provider_name()}.', flush=True)
+
+# Name the model that answers, realtime never sends a question to the text one
+def print_realtime_model():
+    config = realtime.load_config()
+    print(f'Realtime model: {config["realtime_model"]} on {text_client.cloud_provider_name()}, voice {config["realtime_voice"]}.', flush=True)
 
 # Restart the text server when it died, return true when healthy again
 def ensure_text_server_alive():
