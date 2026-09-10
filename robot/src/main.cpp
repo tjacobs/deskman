@@ -98,7 +98,6 @@ volatile bool g_quit = false;
 // Talk child process and the call handoff state
 static pid_t g_talk_pid = -1;
 static bool g_no_talk = false;
-static bool g_cold_talk = false;
 static bool g_call_paused = false;
 static bool g_call_had_talk = false;
 
@@ -119,7 +118,7 @@ static void show_face();
 static void draw_face();
 static int start_servos();
 static int sweep_servo_test(bool no_servos);
-static bool start_talk_process(bool cold_talk);
+static bool start_talk_process();
 static pid_t find_talk_pid();
 static string repo_path(const char* relative);
 static void apply_call_handoff(FaceTracker& faceTracker);
@@ -198,7 +197,7 @@ int main(int argc, char **argv) {
 
     // Spawn talk after the bus and socket, and before the camera
     if (!g_no_talk)
-        start_talk_process(g_cold_talk);
+        start_talk_process();
 
     // Create face tracker after args so --camera and --no-camera apply
     FaceTracker faceTracker(show_camera, use_camera);
@@ -219,13 +218,10 @@ int main(int argc, char **argv) {
 // Parse flags, return the exit code, or KEEP_RUNNING to carry on
 static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos) {
     g_no_talk = false;
-    g_cold_talk = false;
     for (int i = 1; i < argc; i++) {
         string argument = argv[i];
         if (argument == "--no-talk") {
             g_no_talk = true;
-        } else if (argument == "--cold") {
-            g_cold_talk = true;
         } else if (argument == "--servos") {
             sweep_only = true;
         } else if (argument == "--no-servos") {
@@ -251,7 +247,6 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             cout << "Usage: " << argv[0] << " [options]" << endl;
             cout << "Options:" << endl;
             cout << "  --no-talk            Do not spawn talk.py" << endl;
-            cout << "  --cold               Skip talk.py text model warm-up" << endl;
             cout << "  --servos             Sweep servos around center, scan IDs 1 to 20, then exit" << endl;
             cout << "  --servos-print       Relax servos and print positions every second, then exit" << endl;
             cout << "  --no-servos          Relax servos, print positions every second, no talk.py, no camera, no face tracking" << endl;
@@ -567,7 +562,7 @@ static int sweep_servo_test(bool no_servos) {
 }
 
 // Fork and exec talk.py, unless one is already running
-static bool start_talk_process(bool cold_talk) {
+static bool start_talk_process() {
     // Leave an existing talk.py alone
     pid_t existing_pid = find_talk_pid();
     if (existing_pid > 0) {
@@ -593,11 +588,7 @@ static bool start_talk_process(bool cold_talk) {
         for (int descriptor = 3; descriptor < max_descriptor; descriptor++) close(descriptor);
 
         // Exec talk.py, and report it when the exec itself fails
-        if (cold_talk) {
-            execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), "--no-replay-robot", "--cold", static_cast<char*>(nullptr));
-        } else {
-            execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), "--no-replay-robot", static_cast<char*>(nullptr));
-        }
+        execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), static_cast<char*>(nullptr));
         cerr << "Error: talk.py: " << strerror(errno) << endl;
         _exit(TALK_EXEC_FAILED);
     }
@@ -723,7 +714,7 @@ static void apply_call_handoff(FaceTracker& faceTracker) {
         if (use_camera && faceTracker.initializeCamera())
             faceTracker.startTracking();
         if (g_call_had_talk)
-            start_talk_process(g_cold_talk);
+            start_talk_process();
         g_call_paused = false;
         g_call_had_talk = false;
         setStatus("");
