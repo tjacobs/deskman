@@ -1,19 +1,19 @@
 #!.venv/bin/python
 
-# Realtime.py streams microphone audio up to OpenAI and plays the spoken reply back down, so the model hears and answers directly instead of going through local speech to text and text to speech.
+# Realtime.py streams microphone audio up to OpenAI and plays the spoken audio reply.
 
 # Imports
-import argparse
-import base64
-import json
 import os
-import queue
-import subprocess
 import sys
-import threading
+import json
 import time
 import numpy
+import queue
+import base64
+import argparse
+import threading
 import websocket
+import subprocess
 
 # Imports from the text helper
 SCRIPT_DIR = __file__.rsplit('/', 1)[0]
@@ -23,28 +23,31 @@ import client
 import utils
 
 # Config the session, config.json overrides these
-CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.json')
 REALTIME_MODEL = 'gpt-realtime-2.1-mini'
-REALTIME_URL = 'wss://api.openai.com/v1/realtime'
 REALTIME_VOICE = 'echo'
-REALTIME_RATE = 24000
-TURN_DETECTION = 'semantic_vad'
-TRANSCRIPTION_MODEL = 'gpt-live-transcribe'
-
-# Config tools to hold back, these pick a kokoro voice that OpenAI is not speaking with
-SKIP_TOOLS = ('set_voice', 'list_voices')
+REALTIME_ACCENT = 'You are a British man from London. Speak with a natural British accent.'
+CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.json')
 
 # Config the connection
+REALTIME_URL = 'wss://api.openai.com/v1/realtime'
+TURN_DETECTION = 'semantic_vad'
+
+# Config the transcriber, the model hears the audio itself, this only writes the heard lines to the log
+TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
+
+# Config the timing
 CONNECT_TIMEOUT = 30
 RECEIVE_TIMEOUT = 0.2
 IDLE_SECONDS = 20.0
 APPEND_BYTES = 32000
 BLOCKS_PER_SECOND = 10
+REALTIME_RATE = 24000
 
 # Config the reply instructions added to the robot system prompt
 SPOKEN_STYLE = 'You are speaking out loud, so keep replies to one or two short sentences.'
-REALTIME_ACCENT = 'You are a British man from London. Speak with a natural British accent.'
 
+# Config tools to hold back, these pick a kokoro voice that OpenAI is not speaking with
+SKIP_TOOLS = ('set_voice', 'list_voices')
 
 # Hold one realtime conversation from the microphone
 def main():
@@ -54,22 +57,27 @@ def main():
     # Load config
     config = load_config()
 
-    # Let the command line win over config.json
+    # Load from the command line, overriding config.json
     if arguments.model:
         config['realtime_model'] = arguments.model
     if arguments.voice:
         config['realtime_voice'] = arguments.voice
 
-    # Open the microphone before the socket, so the first words are not missed
+    # Open the microphone before the socket
     microphone = Microphone()
+
+    # Open the session
     session = open_session(config)
 
     # Talk until the room goes quiet
     try:
+        # Run the conversation
         run_conversation(session, microphone, arguments.ask, ignore_turn)
     except KeyboardInterrupt:
+        # Stop the conversation
         print('Stopped.', flush=True)
     finally:
+        # Close the session
         close_session(session)
         microphone.stop()
 
@@ -83,8 +91,12 @@ def parse_args():
 
 # Read config.json, falling back to the defaults above for anything missing
 def load_config():
+    # Default values
     config = {'realtime_model': REALTIME_MODEL, 'realtime_voice': REALTIME_VOICE, 'realtime_accent': REALTIME_ACCENT}
+
+    # Load from config.json
     try:
+        # Load
         with open(CONFIG_PATH) as handle:
             config.update(json.load(handle))
     except (OSError, ValueError):
