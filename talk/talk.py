@@ -172,16 +172,17 @@ def main():
     if local_flag:
         REALTIME_MODE = False
 
-    # Print realtime mode
+    # Drop realtime when the socket, the net, or the key is missing
     if REALTIME_MODE:
-        print('Realtime: True', flush=True)
+        reason = realtime_unavailable_reason()
+        if reason:
+            print(f'Warning: {reason} Using local.', flush=True)
+            REALTIME_MODE = False
+        else:
+            print('Realtime: True', flush=True)
 
     # Realtime streams to OpenAI, so it forces the cloud backend and never starts llama-server
     CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
-
-    # Stop early when realtime cannot work, rather than failing after the wake word
-    if REALTIME_MODE:
-        check_realtime_ready()
 
     # Make sure only one running
     check_already_running()
@@ -293,46 +294,71 @@ def parse_args():
 def choose_text_backend(cloud_flag, local_flag, model_name):
     # Force Gemma when asked, and keep Hugging Face off the network if ping fails
     if local_flag:
-        text_client.disable_cloud()
-        if not utils.network_available():
-            utils.use_hub_offline()
-        return False
+        return use_local_text()
 
-    # Honor an explicit cloud flag or TALK_LLM=cloud
+    # Honor an explicit cloud flag or TALK_LLM=cloud, and fall back if cloud cannot start
     if cloud_flag or text_client.env_wants_cloud():
-        text_client.apply_cloud_settings(True, model_name)
-        return True
+        return try_cloud_text(model_name, True)
 
     # Load a key file if present, then pick OpenAI only when the net and key exist
+    return try_cloud_text(model_name, False)
+
+# Turn on cloud when the net and key work, otherwise warn and stay local
+def try_cloud_text(model_name, forced):
     text_client.load_openai_env_file()
     if not utils.network_available():
-        print('No internet, using local model.', flush=True)
-        text_client.disable_cloud()
-        utils.use_hub_offline()
-        return False
+        print('Warning: no internet, using local model.', flush=True)
+        return use_local_text()
     if not text_client.cloud_api_key():
-        print('No OpenAI key, using local model.', flush=True)
-        text_client.disable_cloud()
-        return False
-    text_client.apply_cloud_settings(True, model_name)
-    print('Internet up, using OpenAI.', flush=True)
+        print('Warning: no OpenAI key, using local model.', flush=True)
+        return use_local_text()
+
+    # Cloud setup can still fail after the key check
+    try:
+        text_client.apply_cloud_settings(True, model_name)
+    except Exception as error:
+        print(f'Warning: cloud failed, using local model. {error}', flush=True)
+        return use_local_text()
+
+    # Auto pick prints how it chose, a forced flag already said so
+    if not forced:
+        print('Internet up, using OpenAI.', flush=True)
     return True
 
-# Stop before loading models when realtime has no way to reach OpenAI
-def check_realtime_ready():
-    if realtime is None:
-        print('Error: --realtime needs websocket-client. Run ./install.sh to install it.')
-        sys.exit(1)
-
-    # The session is a live socket, so there is no offline fallback to drop back to
+# Leave the cloud path and keep Hugging Face offline when the net is down
+def use_local_text():
+    text_client.disable_cloud()
     if not utils.network_available():
-        print('Error: --realtime needs the internet, and the connectivity check failed.')
-        sys.exit(1)
+        utils.use_hub_offline()
+    return False
+
+# Why realtime cannot start, empty when it can
+def realtime_unavailable_reason():
+    if realtime is None:
+        return 'realtime needs websocket-client. Run ./install.sh to install it.'
+    if not utils.network_available():
+        return 'realtime needs the internet.'
+
+    # The spoken session needs the same key the text cloud path uses
+    text_client.load_openai_env_file()
+    if not text_client.cloud_api_key():
+        return 'no OpenAI key.'
+    return ''
+
+# Leave cloud and realtime after a live failure, and start the local text server
+def switch_to_local_text():
+    global CLOUD_MODE, REALTIME_MODE, text_server_process
+    REALTIME_MODE = False
+    CLOUD_MODE = False
+    use_local_text()
+    if text_server_process is None:
+        text_server_process = start_text_server(False)
+    return ensure_text_server_alive()
 
 # Say the accent phrase once, it packs the sounds that split British from American
 def say_accent_phrase():
     # Print the accent phrase
-    print("Phrase: " +ACCENT_PHRASE, flush=True)
+    print("Phrase: " + ACCENT_PHRASE, flush=True)
 
     # Realtime speaks over its own session
     if REALTIME_MODE:
@@ -443,9 +469,15 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 def greet(listener, kokoro_pipeline):
     if REALTIME_MODE:
         listener.mute()
-        realtime.speak_line(GREETING)
-        listener.unmute()
-        return
+        try:
+            realtime.speak_line(GREETING)
+            return
+        except Exception as error:
+            print_error('realtime greeting failed', error)
+            print('Warning: cloud failed, using local.', flush=True)
+            switch_to_local_text()
+        finally:
+            listener.unmute()
     speak_muted(listener, kokoro_pipeline, GREETING)
 
 # Print how to talk, test mode skips the wake word
@@ -469,16 +501,34 @@ def run_realtime_turn(listener, command):
     config = realtime.load_config()
 
     # Open the session
-    session = realtime.open_session(config)
+    try:
+        session = realtime.open_session(config)
+    except Exception as error:
+        print_error('realtime session failed', error)
+        reply_after_cloud_failure(listener, command)
+        return
 
     # Share the microphone this loop already owns, so nothing fights for the device
     try:
         realtime.run_conversation(session, listener, command, log_talk)
     except Exception as error:
         print_error('realtime conversation failed', error)
+        reply_after_cloud_failure(listener, command)
     finally:
         realtime.close_session(session)
         listener.unmute()
+
+# Answer with the local model after a live cloud or realtime failure
+def reply_after_cloud_failure(listener, command):
+    print('Warning: cloud failed, using local.', flush=True)
+    if not switch_to_local_text():
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+        return
+    reply = make_reply(command)
+    if reply != TEXT_UNAVAILABLE:
+        print(f'Reply: {reply}', flush=True)
+    log_talk(command, reply)
+    speak_muted(listener, None, reply)
 
 # Ask the local text model for a spoken reply
 def make_reply(command):
@@ -502,28 +552,34 @@ def make_reply(command):
     except urllib.error.URLError as error:
         text_ask.last_tool_log.clear()
         print(f'Error: {format_llm_error(error)}', flush=True)
+        return retry_ask_locally(command)
+    except Exception as error:
+        text_ask.last_tool_log.clear()
+        print_error('ask failed', error)
         if text_client.use_cloud():
-            print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-            return TEXT_UNAVAILABLE
-
-        # Start the local server again
-        if ensure_text_server_alive():
-            try:
-                # Ask
-                return text_ask.ask_model(command)
-            except Exception as retry_error:
-                # Fail
-                print_error('ask retry failed', retry_error)
-
-        # Fail
+            return retry_ask_locally(command)
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print_memory('ask failed')
         return TEXT_UNAVAILABLE
-    except Exception as error:
-        # Fail
-        text_ask.last_tool_log.clear()
+
+# After a cloud ask fails, start Gemma and ask again
+def retry_ask_locally(command):
+    if text_client.use_cloud():
+        print('Warning: cloud failed, using local model.', flush=True)
+        if not switch_to_local_text():
+            print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
+            return TEXT_UNAVAILABLE
+    elif not ensure_text_server_alive():
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-        print_error('ask failed', error)
+        print_memory('ask failed')
+        return TEXT_UNAVAILABLE
+
+    # Ask the local model
+    try:
+        return text_ask.ask_model(command)
+    except Exception as retry_error:
+        print_error('ask retry failed', retry_error)
+        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print_memory('ask failed')
         return TEXT_UNAVAILABLE
 
