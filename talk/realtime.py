@@ -191,9 +191,9 @@ def run_conversation(session, microphone, first_question, on_turn):
     # Set the idle deadline
     idle_deadline = time.time() + IDLE_SECONDS
 
-    # Handle events until the idle deadline is reached
+    # Handle events
     try:
-        # Handle events until the idle deadline is reached
+        # While the idle deadline is not reached
         while time.time() < idle_deadline:
             # Receive an event
             event = session.receive()
