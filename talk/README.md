@@ -2,16 +2,17 @@
 
 Speech to text, LLM inference, and text to speech generation.
 
-Runs locally, offline, no cloud/internet/wifi needed once downloaded. With no flags, `talk.py` uses OpenAI when the internet and `OPENAI_API_KEY` are present, otherwise the local Gemma server. `--cloud` and `--local` override.
+Runs locally, offline, no cloud/internet/wifi needed once downloaded. With no flags, `talk.py` uses OpenAI when the internet and `OPENAI_API_KEY` are present, otherwise the local Gemma server. `--cloud` and `--local` override. `--realtime` skips the local speech models entirely and streams audio both ways to OpenAI.
 
 Conversational AI bot with tools like time, date, volume, and google calendar integration.
 
-Four scripts:
+Scripts:
 
 - `speak.py` — speak a phrase once, with timing stats
 - `say.py` — speak phrases by pressing keys, with voice and speed control
 - `listen.py` — live speech to text transcription from the microphone
 - `talk.py` — listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
+- `realtime.py` — streams microphone audio to OpenAI and plays the spoken reply, no local models in the loop
 - `utils.py` — shared audio, cache, device, and microphone helpers for those scripts
 
 The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
@@ -21,6 +22,7 @@ The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference.
 ./say.py
 ./listen.py
 ./talk.py
+./realtime.py
 ./test.py
 ```
 
@@ -122,6 +124,48 @@ Flags that help debug audio and memory, and combine with each other and with `--
 
 By default it also plays back what was said to it, so you can hear what it heard. Pass `--no-replay-robot` to turn that off.
 
+Pass `--realtime` to answer with OpenAI speech to speech instead of the local text and speech models. See below.
+
+## realtime.py
+
+Streams microphone audio up to the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime) over a WebSocket and plays the spoken reply back as it arrives, so the model hears you directly. Nothing is transcribed, sent as text, and read back out, which is what makes it answer faster and keep tone, pauses, and accent.
+
+```bash
+./realtime.py
+./realtime.py "what is the time"
+./talk.py --realtime
+```
+
+On its own, `realtime.py` opens the microphone and talks until the room goes quiet for 20 seconds. Pass a question to send that first instead of waiting for speech. `--model` and `--voice` override `config.json` for one run.
+
+Under `talk.py --realtime`, the wake word still runs locally on whisper, and only what follows is streamed, so the microphone is not on a paid connection all day. Each conversation opens a session and closes it after the room has been quiet, and turns are written to `talks/` the same as any other.
+
+The local tools all still work, bridged into Realtime function calls, so the head, clock, memory, reminders, and volume behave as usual. The kokoro voice tools are held back, they pick a voice OpenAI is not speaking with.
+
+Realtime needs OpenAI, so it forces the cloud backend and never starts the local Gemma server, and it cannot be combined with `--local`. It needs `websocket-client`, which `install.sh` installs. Kokoro is not loaded at startup since replies arrive as OpenAI audio, so the greeting prints instead of being spoken and kokoro waits until a reminder or a goodbye actually needs a local voice. That takes talk from usable in about fifteen seconds to under two.
+
+Audio only travels at 24 kHz mono, the only rate the API takes, so microphone blocks are resampled up from 16 kHz on the way out. The microphone is muted while it speaks, so it does not hear itself, which also means you cannot interrupt it mid-reply.
+
+Input audio is transcribed by a second, cheap model purely so the heard lines reach the console and `talks/`. The model itself never reads that text. Dropping the `transcription` key from the session would still answer normally, it would just have no record of what you said.
+
+## config.json
+
+Realtime settings live in `config.json`, next to `talk.py`. Anything missing falls back to the constants at the top of `realtime.py`.
+
+```json
+{
+  "realtime": false,
+  "realtime_model": "gpt-realtime-2.1-mini",
+  "realtime_voice": "echo",
+  "realtime_accent": "You are a British man from London. Speak with a natural British accent."
+}
+```
+
+- `realtime` — answer with speech to speech, the same as passing `--realtime`. This is how the robot service turns it on, since it takes no arguments
+- `realtime_model` — the realtime model, the mini one is cheaper and quick enough to hold a conversation
+- `realtime_voice` — the OpenAI voice, separate from the kokoro `VOICES` the local path uses
+- `realtime_accent` — appended to the system prompt, the voices are American by default and this is what makes one sound British
+
 ## robot service
 
 Install a systemd service that runs `../robot/robot_service.sh` on boot.
@@ -139,6 +183,8 @@ sudo service robot status
 journalctl -u robot -f
 tail -f log.txt
 ```
+
+The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Set `"realtime": true` in `config.json` and restart to run the service on speech to speech.
 
 ## Testing
 
