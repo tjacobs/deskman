@@ -128,7 +128,7 @@ def open_session(config):
             'output': {'format': {'type': 'audio/pcm', 'rate': REALTIME_RATE},
                        'voice': config['realtime_voice']}},
         'instructions': session_instructions(config['realtime_accent']),
-        'tools': realtime_tools(),
+        'tools': session_realtime_tools(),
         'tool_choice': 'auto'}})
     return session
 
@@ -141,10 +141,19 @@ def session_instructions(accent):
     extras = ask.prompt_extras()
     if extras:
         instructions = instructions + '\n\n' + extras
-    return instructions + '\n\n' + accent + ' ' + SPOKEN_STYLE
+
+    # Append the accent and spoken style
+    instructions = instructions + '\n\n' + accent + ' ' + SPOKEN_STYLE
+
+    # Log the instructions
+    if False:
+        print(instructions, flush=True)
+
+    # Return the instructions
+    return instructions
 
 # Flatten the chat style tool list into the shape a realtime session expects
-def realtime_tools():
+def session_realtime_tools():
     # Build the tool list
     tools = []
     for tool in ask.active_tools():
@@ -158,21 +167,35 @@ def realtime_tools():
 
 # Stream microphone audio up and play replies back until the room goes quiet
 def run_conversation(session, microphone, first_question, on_turn):
+    # Set the callback for when a turn is finished
     session.on_turn = on_turn
 
     # Send an opening question when one was passed, the wake word already heard it
     if first_question:
+        # Set the heard text to the first question
         session.heard = first_question
+
+        # Print the question
         print(f'Asking: {first_question}', flush=True)
+
+        # Send the question as a user turn and ask for a spoken answer
         ask_question(session, first_question)
 
     # Push microphone audio up in the background while this loop handles replies
     sender = threading.Thread(target=send_microphone, args=(session, microphone), daemon=True)
     sender.start()
+
+    # Open the speaker
     speaker = Speaker()
+
+    # Set the idle deadline
     idle_deadline = time.time() + IDLE_SECONDS
+
+    # Handle events until the idle deadline is reached
     try:
+        # Handle events until the idle deadline is reached
         while time.time() < idle_deadline:
+            # Receive an event
             event = session.receive()
             if event is None:
                 continue
@@ -181,9 +204,12 @@ def run_conversation(session, microphone, first_question, on_turn):
             if handle_event(session, microphone, speaker, event):
                 idle_deadline = time.time() + IDLE_SECONDS
     finally:
+        # Stop the session
         session.stop()
         speaker.stop()
         microphone.unmute()
+
+    # Print the conversation closed
     print('Conversation closed.', flush=True)
 
 # Send one written question as a user turn and ask for a spoken answer
@@ -194,21 +220,26 @@ def ask_question(session, question):
 
 # Read microphone blocks, resample them, and append them to the input buffer
 def send_microphone(session, microphone):
-    # Read microphone blocks, resample them, and append them to the input buffer
+    # While running
     while session.running:
+        # Get the next block
         block = microphone.next_block()
         if block is None:
             continue
 
-        # Resample to the only rate the realtime api takes, then send as signed 16 bit
+        # Resample to the only rate the realtime API takes, then send as signed 16 bit integer bytes
         samples = resample(block, utils.SAMPLE_RATE, REALTIME_RATE)
         audio = (numpy.clip(samples, -1.0, 1.0) * 32767).astype(numpy.int16).tobytes()
         for start in range(0, len(audio), APPEND_BYTES):
+            # Encode the chunk as base64
             chunk = base64.b64encode(audio[start:start + APPEND_BYTES]).decode()
+
+            # Send the chunk
             session.send({'type': 'input_audio_buffer.append', 'audio': chunk})
 
 # Stretch samples from the microphone rate onto the realtime rate
 def resample(samples, source_rate, target_rate):
+    # If the rates are the same, return the samples
     if source_rate == target_rate:
         return samples
 
@@ -242,10 +273,19 @@ def handle_event(session, microphone, speaker, event):
             return False
         print(f'Heard: {session.heard}', flush=True)
         return True
+
+    # If the reply is done, print it and call the callback
     if kind == 'response.output_audio_transcript.done':
+        # Get the reply
         reply = event.get('transcript', '').strip()
+
+        # Print the reply
         print(f'Reply: {reply}', flush=True)
+
+        # Call the callback
         session.on_turn(session.heard, reply)
+
+        # Clear the heard text
         session.heard = ''
         return True
 
@@ -269,6 +309,7 @@ def handle_event(session, microphone, speaker, event):
 
 # Run one tool locally and return its result to the model
 def run_function_call(session, event):
+    # Build the call
     call = {'function': {'name': event.get('name'), 'arguments': event.get('arguments')}}
     result = ask.run_tool(call)
 
@@ -283,7 +324,10 @@ def ignore_turn(heard, reply):
 
 # Close the socket, the session is finished
 def close_session(session):
+    # Stop the session
     session.stop()
+
+    # Close the socket
     try:
         session.socket.close()
     except OSError:
