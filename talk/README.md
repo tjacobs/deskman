@@ -118,11 +118,11 @@ Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What
 
 Flags that help debug audio and memory, and combine with each other and with `--test`:
 
-- `--replay` plays the recording back after each utterance, saved as `audio/heard.wav`
+- `--replay` plays the recording back after every utterance, including room speech never aimed at it
 - `--repeat` says the transcribed words back after each utterance
 - `--memory` prints available RAM while models load, also printed automatically when free RAM is critically low
 
-By default it also plays back what was said to it, so you can hear what it heard. Pass `--no-replay-robot` to turn that off.
+A near miss is always played back, whether or not `--replay` is set, since hearing it is the whole point of reporting one.
 
 Pass `--realtime` to answer with OpenAI speech to speech instead of the local text and speech models. See below.
 

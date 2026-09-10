@@ -29,7 +29,7 @@ main() {
     # Start talk.py without the face
     echo "Starting talk.py..."
     cd "${TALK_DIR}"
-    exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}" --no-replay-robot
+    exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}"
 }
 
 # Load OPENAI_API_KEY from the user env file when unset

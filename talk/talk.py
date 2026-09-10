@@ -65,10 +65,6 @@ LOW_BATTERY_SECONDS = 60
 LOW_BATTERY_ASK = "Invent one new short spoken line, eight words or fewer, that I have low battery. Soft and polite, a gentle request, not a command. In the spirit of I'm tired, could you plug me in, low battery, I'm sleepy, so hungry."
 LOW_BATTERY_FALLBACKS = ("Low battery", "Could you plug me in?", "I'm sleepy.", "So hungry.")
 
-# Config replay flags
-REPLAY_WAKE_FLAG = f'--replay-{WAKE_WORD}'
-NO_REPLAY_WAKE_FLAG = f'--no-replay-{WAKE_WORD}'
-
 # Config whisper model size
 WHISPER_MODEL_SIZE = 'base'
 
@@ -126,7 +122,6 @@ MEMORY_LOW_GB = 0.5
 TEST_MODE = False
 REPEAT_MODE = False
 REPLAY_MODE = False
-REPLAY_WAKE_MODE = True
 MEMORY_MODE = False
 COLD_MODE = False
 PROMPT_MODE = False
@@ -159,8 +154,8 @@ except ImportError:
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag = parse_args()
 
     # Take realtime from the flag or config.json, so the robot service can turn it on without arguments
     REALTIME_MODE = realtime_flag or utils.load_config({'realtime': REALTIME_MODE})['realtime']
@@ -216,7 +211,6 @@ def parse_args():
     test_mode = False
     repeat_mode = False
     replay_mode = False
-    replay_wake_mode = True
     memory_mode = False
     cold_mode = False
     prompt_mode = False
@@ -253,10 +247,6 @@ def parse_args():
                 sys.exit(1)
             index += 1
             model_name = arguments[index]
-        elif argument == REPLAY_WAKE_FLAG:
-            replay_wake_mode = True
-        elif argument == NO_REPLAY_WAKE_FLAG:
-            replay_wake_mode = False
         elif argument in ('-h', '--help'):
             print_usage()
             sys.exit(0)
@@ -275,7 +265,7 @@ def parse_args():
         print('Error: --realtime needs OpenAI, so it cannot be used with --local.')
         print_usage()
         sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name, realtime_mode
+    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name, realtime_mode
 
 # Use OpenAI when online and a key is present, unless --cloud or --local
 def choose_text_backend(cloud_flag, local_flag, model_name):
@@ -319,20 +309,18 @@ def check_realtime_ready():
 
 # Print usage help
 def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--realtime] [--model name] [{NO_REPLAY_WAKE_FLAG}]')
+    print('Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--realtime] [--model name]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
-    print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
+    print('  --replay           play the recording back after every utterance')
     print('  --memory           print available memory while loading models')
-    print('  --cold             skip text model warm-up ask')
+    print('  --cold             skip local Gemma text model warm-up ask')
     print('  --prompt           print the full model context, messages, tools, and rendered prompt')
     print('  --cloud            ask OpenAI instead of the local llama-server')
     print('  --local            force the local Gemma server even when the internet is up')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
-    print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, uses OpenAI when online, else local Gemma')
-    print(f'                     by default plays back what was said to "{WAKE_WORD}"')
 
 # Run the talk loop with models already loaded
 def run_talk(record, whisper_model, vad_model, kokoro_pipeline):
@@ -642,7 +630,7 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
         if LAST_ASK_AT > 0.0 and remaining <= 0.0:
             close_conversation()
         follow_up = remaining > 0.0
-        text = hear_utterance(whisper_model, kokoro_pipeline, listener, follow_up, remaining)
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener, remaining)
         if text is None:
             return None
         if follow_up and not text:
@@ -707,7 +695,7 @@ def set_robot_listening(open):
 def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
     # In --test, stop waiting for the mic after a few seconds
     timeout_seconds = TEST_HEAR_SECONDS if TEST_MODE else 0.0
-    command = hear_utterance(whisper_model, kokoro_pipeline, listener, True, timeout_seconds)
+    command = hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds)
     if command is None:
         return None
     if not command and fallback:
@@ -716,7 +704,7 @@ def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
     return command
 
 # Wait for one utterance and return what was said
-def hear_utterance(whisper_model, kokoro_pipeline, listener, after_wake, timeout_seconds):
+def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
     # Transcribe one whole utterance, empty when the hear timeout expired
     audio = listener.next_utterance(timeout_seconds)
     if audio is None:
@@ -733,7 +721,7 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, after_wake, timeout
         print(f'Nearly "{WAKE_WORD}"', flush=True)
 
     # Play back the recording, then say the words back
-    if near_miss or replay_wanted(text, after_wake):
+    if near_miss or REPLAY_MODE:
         replay(listener, audio)
     if near_miss or (REPEAT_MODE and text):
         speak_muted(listener, kokoro_pipeline, text)
@@ -745,12 +733,6 @@ def near_wake_word(text):
     if has_wake_word(lowered):
         return False
     return any(re.search(rf'\b{re.escape(word)}\b', lowered) for word in NEAR_WAKE_WORDS)
-
-# Return true when the recording should be played back
-def replay_wanted(text, after_wake):
-    if REPLAY_MODE:
-        return True
-    return REPLAY_WAKE_MODE and (after_wake or has_wake_word(text))
 
 # Compile the wake word pattern once
 WAKE_WORD_PATTERN = re.compile(rf'\b{re.escape(WAKE_WORD)}\b', re.IGNORECASE)
