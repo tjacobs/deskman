@@ -1,5 +1,5 @@
 {
-  "realtime": false,
+  "realtime": true,
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo",
   "realtime_accent": "You are a British man from London and you always speak with a strong, natural British accent. Never use an American accent. Use non-rhotic British pronunciation, so words like water, better, and here end without a hard R. Use the broad British A in words like bath and can't, and British vowels throughout."
