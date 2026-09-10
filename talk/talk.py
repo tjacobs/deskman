@@ -970,6 +970,9 @@ def fire_due_reminders(listener, kokoro_pipeline):
 
 # Play back the recording, mic muted so it does not hear it
 def replay(listener, audio):
+    # Import here, kokoro owns the global one and realtime never loads it
+    import soundfile
+
     listener.mute()
     os.makedirs(utils.AUDIO_DIR, exist_ok=True)
     wav_path = os.path.join(utils.AUDIO_DIR, HEARD_WAV)
