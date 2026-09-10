@@ -131,6 +131,7 @@ MEMORY_MODE = False
 COLD_MODE = False
 PROMPT_MODE = False
 CLOUD_MODE = False
+REALTIME_MODE = False
 LAST_ASK_AT = 0.0
 LAST_BATTERY_CHECK_AT = 0.0
 LAST_BATTERY_VOLTAGE = 0.0
@@ -149,12 +150,24 @@ import reminders
 import robot_move
 text_ask.set_talk_module(sys.modules[__name__])
 
+# Import the realtime helper on its own, only --realtime needs websocket-client
+try:
+    import realtime
+except ImportError:
+    realtime = None
+
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name = parse_args()
-    CLOUD_MODE = choose_text_backend(cloud_flag, local_flag, model_name)
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, REALTIME_MODE = parse_args()
+
+    # Realtime streams to OpenAI, so it forces the cloud backend and never starts llama-server
+    CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
+
+    # Stop early when realtime cannot work, rather than failing after the wake word
+    if REALTIME_MODE:
+        check_realtime_ready()
 
     # Make sure only one running
     check_already_running()
@@ -206,6 +219,7 @@ def parse_args():
     prompt_mode = False
     cloud_mode = False
     local_mode = False
+    realtime_mode = False
     model_name = ""
     arguments = sys.argv[1:]
     index = 0
@@ -227,6 +241,8 @@ def parse_args():
             cloud_mode = True
         elif argument == '--local':
             local_mode = True
+        elif argument == '--realtime':
+            realtime_mode = True
         elif argument == '--model':
             if index + 1 >= len(arguments):
                 print('Error: --model needs a model name.')
@@ -250,7 +266,13 @@ def parse_args():
         print('Error: use --cloud or --local, not both.')
         print_usage()
         sys.exit(1)
-    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name
+
+    # Realtime streams audio to OpenAI, so it cannot run against the local model
+    if realtime_mode and local_mode:
+        print('Error: --realtime needs OpenAI, so it cannot be used with --local.')
+        print_usage()
+        sys.exit(1)
+    return test_mode, repeat_mode, replay_mode, replay_wake_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name, realtime_mode
 
 # Use OpenAI when online and a key is present, unless --cloud or --local
 def choose_text_backend(cloud_flag, local_flag, model_name):
@@ -281,9 +303,20 @@ def choose_text_backend(cloud_flag, local_flag, model_name):
     print('Internet up, using OpenAI.', flush=True)
     return True
 
+# Stop before loading models when realtime has no way to reach OpenAI
+def check_realtime_ready():
+    if realtime is None:
+        print('Error: --realtime needs websocket-client. Run ./install.sh to install it.')
+        sys.exit(1)
+
+    # The session is a live socket, so there is no offline fallback to drop back to
+    if not utils.network_available():
+        print('Error: --realtime needs the internet, and the connectivity check failed.')
+        sys.exit(1)
+
 # Print usage help
 def print_usage():
-    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--model name] [{NO_REPLAY_WAKE_FLAG}]')
+    print(f'Usage: ./talk.py [--test] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--realtime] [--model name] [{NO_REPLAY_WAKE_FLAG}]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
     print(f'  --replay           play the recording back after each utterance, saved as audio/{HEARD_WAV}')
@@ -293,6 +326,7 @@ def print_usage():
     print('  --cloud            ask OpenAI instead of the local llama-server')
     print('  --local            force the local Gemma server even when the internet is up')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
+    print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print(f'  {NO_REPLAY_WAKE_FLAG}  do not play back what was said to "{WAKE_WORD}"')
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, uses OpenAI when online, else local Gemma')
     print(f'                     by default plays back what was said to "{WAKE_WORD}"')
@@ -316,7 +350,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
     # Greet, then keep the conversation open so the first line needs no wake word
     if SAY_HI:
-        speak_muted(listener, kokoro_pipeline, GREETING)
+        greet(listener, kokoro_pipeline)
         LAST_ASK_AT = time.time()
     print_talk_help()
     try:
@@ -351,6 +385,13 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 quit_robot()
                 break
 
+            # Hand the whole conversation to OpenAI when streaming audio both ways
+            if REALTIME_MODE:
+                run_realtime_turn(listener, command)
+                LAST_ASK_AT = time.time()
+                print_talk_status()
+                continue
+
             # Reply, mic muted so it does not hear itself
             reply = make_reply(command)
             if reply != TEXT_UNAVAILABLE:
@@ -370,6 +411,13 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
         print_error('talk loop failed', error)
         raise
 
+# Say hello, realtime only prints it so kokoro stays unloaded until something needs a voice
+def greet(listener, kokoro_pipeline):
+    if REALTIME_MODE:
+        print(GREETING, flush=True)
+        return
+    speak_muted(listener, kokoro_pipeline, GREETING)
+
 # Print how to talk, test mode skips the wake word
 def print_talk_help():
     if TEST_MODE:
@@ -384,6 +432,20 @@ def print_talk_status():
         print(TALK_LISTENING, flush=True)
         return
     print(TALK_READY, flush=True)
+
+# Hold one spoken conversation with OpenAI, audio up and audio down
+def run_realtime_turn(listener, command):
+    config = realtime.load_config()
+    session = realtime.open_session(config)
+
+    # Share the microphone this loop already owns, so nothing fights for the device
+    try:
+        realtime.run_conversation(session, listener, command, log_talk)
+    except Exception as error:
+        print_error('realtime conversation failed', error)
+    finally:
+        realtime.close_session(session)
+        listener.unmute()
 
 # Ask the local text model for a spoken reply
 def make_reply(command):
@@ -440,6 +502,10 @@ def load_speech_models():
     # Load speech models
     whisper_model = load_whisper_model()
     vad_model = load_vad_model()
+
+    # Realtime answers in OpenAI audio, so kokoro waits until something local needs saying
+    if REALTIME_MODE:
+        return whisper_model, vad_model, None
     kokoro_pipeline = load_kokoro_pipeline()
     return whisper_model, vad_model, kokoro_pipeline
 
@@ -818,6 +884,10 @@ def speak_muted(listener, kokoro_pipeline, text):
 
 # Generate speech and play it on the usb speaker
 def speak(kokoro_pipeline, text):
+    # Load kokoro the first time something local needs a voice, realtime skips it at startup
+    if kokoro_model is None:
+        load_kokoro_pipeline()
+
     os.makedirs(utils.AUDIO_DIR, exist_ok=True)
     pipeline = get_kokoro_pipeline(VOICE[0])
     generator = pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
@@ -981,6 +1051,13 @@ class Listener:
             self.blocks.put(block, block=False)
         except queue.Full:
             pass
+
+    # Return the next block, or None when nothing arrived before the timeout
+    def next_block(self):
+        try:
+            return self.blocks.get(timeout=BLOCK_SECONDS)
+        except queue.Empty:
+            return None
 
     # Collect audio from when speech starts until it stops, empty array on timeout
     def next_utterance(self, timeout_seconds):
