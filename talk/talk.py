@@ -160,7 +160,10 @@ except ImportError:
 def main():
     # Parse args
     global TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, REALTIME_MODE = parse_args()
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, REPLAY_WAKE_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag = parse_args()
+
+    # Take realtime from the flag or config.json, so the robot service can turn it on without arguments
+    REALTIME_MODE = realtime_flag or utils.load_config({'realtime': REALTIME_MODE})['realtime']
 
     # Realtime streams to OpenAI, so it forces the cloud backend and never starts llama-server
     CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)

@@ -3,7 +3,6 @@
 # Realtime.py streams microphone audio up to OpenAI and plays the spoken audio reply.
 
 # Imports
-import os
 import sys
 import json
 import time
@@ -26,7 +25,6 @@ import utils
 REALTIME_MODEL = 'gpt-realtime-2.1-mini'
 REALTIME_VOICE = 'echo'
 REALTIME_ACCENT = 'You are a British man from London. Speak with a natural British accent.'
-CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.json')
 
 # Config the connection
 REALTIME_URL = 'wss://api.openai.com/v1/realtime'
@@ -91,17 +89,7 @@ def parse_args():
 
 # Read config.json, falling back to the defaults above for anything missing
 def load_config():
-    # Default values
-    config = {'realtime_model': REALTIME_MODEL, 'realtime_voice': REALTIME_VOICE, 'realtime_accent': REALTIME_ACCENT}
-
-    # Load from config.json
-    try:
-        # Load
-        with open(CONFIG_PATH) as handle:
-            config.update(json.load(handle))
-    except (OSError, ValueError):
-        print(f'No readable {os.path.basename(CONFIG_PATH)}, using defaults.', flush=True)
-    return config
+    return utils.load_config({'realtime_model': REALTIME_MODEL, 'realtime_voice': REALTIME_VOICE, 'realtime_accent': REALTIME_ACCENT})
 
 # Connect to the realtime endpoint and configure the session
 def open_session(config):

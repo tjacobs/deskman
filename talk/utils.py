@@ -3,6 +3,7 @@
 # Imports
 import os
 import sys
+import json
 import time
 import glob
 import shutil
@@ -12,6 +13,7 @@ import warnings
 
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.json')
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 MODEL_CACHE_DIR = os.path.join(CACHE_DIR, 'models--hexgrad--Kokoro-82M', 'snapshots')
@@ -44,6 +46,21 @@ os.environ['HF_HUB_VERBOSITY'] = 'error'
 
 # State
 PLAYBACK_AVAILABLE = True
+
+# Read config.json, keeping the given defaults for anything it does not set
+def load_config(defaults):
+    # Start from the defaults the caller asked for
+    config = dict(defaults)
+
+    # Load the file, a missing or broken one just leaves the defaults
+    try:
+        with open(CONFIG_PATH) as handle:
+            config.update(json.load(handle))
+    except (OSError, ValueError):
+        print(f'No readable {os.path.basename(CONFIG_PATH)}, using defaults.', flush=True)
+
+    # Return the settings
+    return config
 
 # Return audio player command for this platform
 def audio_player():
