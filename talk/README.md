@@ -154,6 +154,7 @@ Realtime settings live in `config.json`, next to `talk.py`. Anything missing fal
 
 ```json
 {
+  "local": true,
   "realtime": false,
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo",
@@ -161,6 +162,7 @@ Realtime settings live in `config.json`, next to `talk.py`. Anything missing fal
 }
 ```
 
+- `local` — force the local Gemma server, the same as passing `--local`. This is how the robot service stays offline, since it takes no arguments
 - `realtime` — answer with speech to speech, the same as passing `--realtime`. This is how the robot service turns it on, since it takes no arguments
 - `realtime_model` — the realtime model, the mini one is cheaper and quick enough to hold a conversation
 - `realtime_voice` — the OpenAI voice, separate from the kokoro `VOICES` the local path uses
@@ -184,7 +186,7 @@ journalctl -u robot -f
 tail -f log.txt
 ```
 
-The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Set `"realtime": true` in `config.json` and restart to run the service on speech to speech.
+The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Set `"realtime": true` in `config.json` and restart to run the service on speech to speech. Set `"local": true` to force Gemma even when realtime is also on, `--cloud` and `--realtime` on the command line still win.
 
 ## Testing
 
