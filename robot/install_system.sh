@@ -23,6 +23,9 @@ main() {
     RUN_UID="$(id -u "${RUN_USER}")"
     RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
 
+    # Create the folders hide_autostart and the desktop write into
+    prepare_user_dirs
+
     # Pick Jetson GNOME or Pi LXDE, then apply boot, login, and desktop settings
     detect_machine
     echo "Configuring ${MACHINE} for ${RUN_USER}"
@@ -86,6 +89,19 @@ FAVORITE_APPS="['org.gnome.Nautilus.desktop']"
 
 # Pi LXDE desktop color, no wallpaper image
 PI_DESKTOP_BG="#000000"
+
+# Stock Pi OS wallpaper files, copied when this user has none yet
+PI_PCMANFM_DEFAULT="/etc/xdg/pcmanfm/default"
+
+# Create the user config folders a first graphical login would
+prepare_user_dirs() {
+    # Make the folders hide_autostart and the desktop icons write into
+    mkdir -p "${RUN_HOME}/.config/autostart" "${RUN_HOME}/.config/pcmanfm/default" "${RUN_HOME}/.config/pcmanfm/LXDE-pi" "${RUN_HOME}/Desktop" "${RUN_HOME}/.local/share/icons"
+
+    # Own them as the login user, root created them
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config" "${RUN_HOME}/Desktop" "${RUN_HOME}/.local" "${RUN_HOME}/.local/share" 2>/dev/null || true
+    chown -R "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart" "${RUN_HOME}/.config/pcmanfm" "${RUN_HOME}/Desktop" "${RUN_HOME}/.local/share/icons"
+}
 
 # Choose Jetson when Tegra or GDM is present, otherwise Raspberry Pi LightDM
 detect_machine() {
@@ -154,10 +170,12 @@ EOF
 
 # Set LightDM and console autologin the same way raspi-config does
 enable_lightdm_autologin() {
-    if grep -qE '^#?autologin-user=' "${LIGHTDM_CONF}"; then
-        sed -i "s/^#*autologin-user=.*/autologin-user=${RUN_USER}/" "${LIGHTDM_CONF}"
-    else
-        sed -i "/^\[Seat:\*\]/a autologin-user=${RUN_USER}" "${LIGHTDM_CONF}"
+    set_lightdm_key autologin-user "${RUN_USER}"
+
+    # Use the same session the greeter would, so labwc starts on a fresh Pi
+    if grep -qE '^user-session=' "${LIGHTDM_CONF}"; then
+        user_session="$(sed -n 's/^user-session=//p' "${LIGHTDM_CONF}" | head -n 1)"
+        set_lightdm_key autologin-session "${user_session}"
     fi
 
     # Console login on tty1, so a dropped X session still comes back as this user
@@ -169,7 +187,32 @@ ExecStart=-/sbin/agetty --autologin ${RUN_USER} --noclear %I \$TERM
 EOF
 }
 
-# Wait for Enter, then delete the given paths
+# Set or uncomment one LightDM seat key
+set_lightdm_key() {
+    option_name="$1"
+    option_value="$2"
+
+    # Replace an already-active key
+    if grep -qE "^${option_name}=" "${LIGHTDM_CONF}"; then
+        sed -i "s/^${option_name}=.*/${option_name}=${option_value}/" "${LIGHTDM_CONF}"
+        return
+    fi
+
+    # Uncomment the stock key
+    if grep -qE "^#${option_name}=" "${LIGHTDM_CONF}"; then
+        sed -i "s/^#${option_name}=.*/${option_name}=${option_value}/" "${LIGHTDM_CONF}"
+        return
+    fi
+
+    # Add it under the seat section, or create that section on a stripped config
+    if grep -qE '^\[Seat:\*\]' "${LIGHTDM_CONF}"; then
+        sed -i "/^\[Seat:\*\]/a ${option_name}=${option_value}" "${LIGHTDM_CONF}"
+        return
+    fi
+    printf '\n%s\n%s\n' '[Seat:*]' "${option_name}=${option_value}" >> "${LIGHTDM_CONF}"
+}
+
+# Delete the given paths when they exist, no prompt so a fresh Pi can install unattended
 confirm_rm() {
     # Keep only paths that exist
     delete_paths=()
@@ -182,10 +225,9 @@ confirm_rm() {
         return
     fi
 
-    # Enter confirms, Ctrl-C aborts the script
-    echo "Press Enter to delete:"
+    # Show what is going away, then remove it
+    echo "Deleting:"
     printf '  %s\n' "${delete_paths[@]}"
-    read -r confirm_enter </dev/tty
     rm -rf -- "${delete_paths[@]}"
 }
 
@@ -314,15 +356,18 @@ configure_session() {
     remove_extra_home_folders
 }
 
-# Black LXDE desktop on Raspberry Pi OS, keep existing icon positions
+# Black desktop on Raspberry Pi OS, keep existing icon positions
 configure_pi_session() {
     hide_autostart pprompt.desktop
     hide_autostart print-applet.desktop
     hide_autostart user-dirs-update-gtk.desktop
 
+    # Copy stock wallpaper files, Trixie keeps them under default not LXDE-pi
+    seed_pi_desktop_conf
+
     # Paint each pcmanfm desktop profile black
     shopt -s nullglob
-    for desktop_conf in "${RUN_HOME}/.config/pcmanfm/LXDE-pi/"desktop-items-*.conf; do
+    for desktop_conf in "${RUN_HOME}/.config/pcmanfm/"*/desktop-items-*.conf; do
         set_desktop_conf_key "${desktop_conf}" wallpaper_mode color
         set_desktop_conf_key "${desktop_conf}" desktop_bg "${PI_DESKTOP_BG}"
         set_desktop_conf_key "${desktop_conf}" desktop_shadow "${PI_DESKTOP_BG}"
@@ -335,6 +380,42 @@ configure_pi_session() {
 
     remove_extra_desktop_launchers
     remove_extra_home_folders
+}
+
+# Copy stock pcmanfm desktop files when this user has none
+seed_pi_desktop_conf() {
+    # Leave existing wallpaper files alone
+    shopt -s nullglob
+    existing_conf=("${RUN_HOME}/.config/pcmanfm/"*/desktop-items-*.conf)
+    shopt -u nullglob
+    if [[ "${#existing_conf[@]}" -gt 0 ]]; then
+        return
+    fi
+
+    # Prefer the system default profile from Raspberry Pi OS
+    mkdir -p "${RUN_HOME}/.config/pcmanfm/default"
+    if [[ -d "${PI_PCMANFM_DEFAULT}" ]]; then
+        shopt -s nullglob
+        stock_conf=("${PI_PCMANFM_DEFAULT}"/desktop-items-*.conf)
+        shopt -u nullglob
+        if [[ "${#stock_conf[@]}" -gt 0 ]]; then
+            cp "${stock_conf[@]}" "${RUN_HOME}/.config/pcmanfm/default/"
+            chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/pcmanfm/default/"desktop-items-*.conf
+            return
+        fi
+    fi
+
+    # Write a color-only desktop when the stock files are missing
+    cat > "${RUN_HOME}/.config/pcmanfm/default/desktop-items-0.conf" <<EOF
+[*]
+wallpaper_mode=color
+desktop_bg=${PI_DESKTOP_BG}
+desktop_shadow=${PI_DESKTOP_BG}
+show_documents=0
+show_trash=0
+show_mounts=0
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/pcmanfm/default/desktop-items-0.conf"
 }
 
 # Set or add one key in a pcmanfm desktop-items file
@@ -731,6 +812,10 @@ hide_autostart() {
     entry_name="$1"
     system_entry="/etc/xdg/autostart/${entry_name}"
     user_entry="${RUN_HOME}/.config/autostart/${entry_name}"
+
+    # Make the folder even when prepare_user_dirs did not run
+    mkdir -p "${RUN_HOME}/.config/autostart"
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart"
 
     # Copy the system entry so every key the session needs is there
     if [[ -f "${system_entry}" ]]; then
