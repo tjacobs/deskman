@@ -52,7 +52,7 @@ main() {
     RUN_UID="$(id -u "${RUN_USER}")"
     RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
 
-    # Verify launcher, talk, and venv exist
+    # Verify launcher, talk, and a robot binary or talk venv exist
     if [[ ! -f "${LAUNCHER_SCRIPT}" ]]; then
         echo "Error: ${LAUNCHER_SCRIPT} not found" >&2
         exit 1
@@ -61,8 +61,8 @@ main() {
         echo "Error: ${TALK_SCRIPT} not found" >&2
         exit 1
     fi
-    if [[ ! -x "${PYTHON_BIN}" ]]; then
-        echo "Error: ${PYTHON_BIN} not found. Run ../talk/install.sh --listen --talk first." >&2
+    if [[ ! -x "${PROJECT_DIR}/build/robot" && ! -x "${PYTHON_BIN}" ]]; then
+        echo "Error: robot binary and ${PYTHON_BIN} not found. Build robot or run ../talk/install.sh --listen --talk first." >&2
         exit 1
     fi
 

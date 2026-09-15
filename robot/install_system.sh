@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure the Jetson desktop so X starts, deskman auto-logs in, and the UI stays out of the way.
+# Configure Jetson Ubuntu or Raspberry Pi OS so X starts, deskman auto-logs in, and the UI stays out of the way.
 
 # Main
 main() {
@@ -9,7 +9,7 @@ main() {
     # Quit on anything but Linux
     os_name="$(uname -s)"
     if [[ "${os_name}" != "Linux" ]]; then
-        echo "install_system.sh is for the Jetson Ubuntu image." >&2
+        echo "install_system.sh is for Jetson Ubuntu or Raspberry Pi OS." >&2
         exit 1
     fi
 
@@ -23,8 +23,9 @@ main() {
     RUN_UID="$(id -u "${RUN_USER}")"
     RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
 
-    # Apply boot, login, and desktop settings
-    echo "Configuring system for ${RUN_USER}"
+    # Pick Jetson GNOME or Pi LXDE, then apply boot, login, and desktop settings
+    detect_machine
+    echo "Configuring ${MACHINE} for ${RUN_USER}"
     enable_graphical_boot
     enable_autologin
     disable_hot_surface_alert
@@ -47,7 +48,7 @@ parse_args() {
         # Print help and quit
         if [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
             echo "Usage: ./install_system.sh"
-            echo "  Boot to X, auto-login, black empty desktop, no crash or hot-surface dialogs."
+            echo "  Boot to X, auto-login, black empty desktop. Jetson Ubuntu or Raspberry Pi OS."
             exit 0
         fi
 
@@ -61,9 +62,15 @@ parse_args() {
 # Stop on errors
 set -euo pipefail
 
-# GDM and apport paths
+# Display manager and apport paths
 GDM_CONF="/etc/gdm3/custom.conf"
+LIGHTDM_CONF="/etc/lightdm/lightdm.conf"
 APPORT_CONF="/etc/default/apport"
+GETTY_AUTOLOGIN_DIR="/etc/systemd/system/getty@tty1.service.d"
+GETTY_AUTOLOGIN_CONF="${GETTY_AUTOLOGIN_DIR}/autologin.conf"
+
+# Set in detect_machine to jetson or pi
+MACHINE=""
 
 # Avahi paths, the drop-in holds Avahi back until the network is up
 AVAHI_CONF="/etc/avahi/avahi-daemon.conf"
@@ -77,7 +84,19 @@ AVAHI_DENY_INTERFACES="docker0,l4tbr0,usb0,usb1"
 # Keep Files on the dash, leave Help, Software, and Firefox off
 FAVORITE_APPS="['org.gnome.Nautilus.desktop']"
 
-# Boot graphical.target so GDM and X start
+# Pi LXDE desktop color, no wallpaper image
+PI_DESKTOP_BG="#000000"
+
+# Choose Jetson when Tegra or GDM is present, otherwise Raspberry Pi LightDM
+detect_machine() {
+    if [[ -f /etc/nv_tegra_release || -d /etc/gdm3 ]]; then
+        MACHINE="jetson"
+        return
+    fi
+    MACHINE="pi"
+}
+
+# Boot graphical.target so the display manager and X start
 enable_graphical_boot() {
     # Set graphical boot and start it now
     echo "Setting boot target to graphical"
@@ -87,8 +106,20 @@ enable_graphical_boot() {
 
 # Log into the robot user on Xorg
 enable_autologin() {
-    # Write GDM Xorg autologin for the robot user
     echo "Enabling autologin for ${RUN_USER}"
+    if [[ -d /etc/gdm3 ]]; then
+        enable_gdm_autologin
+        return
+    fi
+    if [[ -f "${LIGHTDM_CONF}" ]]; then
+        enable_lightdm_autologin
+        return
+    fi
+    echo "No GDM or LightDM config, skip autologin"
+}
+
+# Write GDM Xorg autologin for the Jetson robot user
+enable_gdm_autologin() {
     cat > "${GDM_CONF}" <<EOF
 # GDM configuration storage
 #
@@ -121,6 +152,23 @@ AutomaticLogin=${RUN_USER}
 EOF
 }
 
+# Set LightDM and console autologin the same way raspi-config does
+enable_lightdm_autologin() {
+    if grep -qE '^#?autologin-user=' "${LIGHTDM_CONF}"; then
+        sed -i "s/^#*autologin-user=.*/autologin-user=${RUN_USER}/" "${LIGHTDM_CONF}"
+    else
+        sed -i "/^\[Seat:\*\]/a autologin-user=${RUN_USER}" "${LIGHTDM_CONF}"
+    fi
+
+    # Console login on tty1, so a dropped X session still comes back as this user
+    mkdir -p "${GETTY_AUTOLOGIN_DIR}"
+    cat > "${GETTY_AUTOLOGIN_CONF}" <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin ${RUN_USER} --noclear %I \$TERM
+EOF
+}
+
 # Wait for Enter, then delete the given paths
 confirm_rm() {
     # Keep only paths that exist
@@ -143,6 +191,9 @@ confirm_rm() {
 
 # Stop nvpmodel from popping Caution, Hot surface, Do Not Touch
 disable_hot_surface_alert() {
+    if [[ "${MACHINE}" != "jetson" ]]; then
+        return
+    fi
     echo "Disabling hot surface warning"
 
     # Hide the tray indicator that shows that dialog
@@ -152,6 +203,9 @@ disable_hot_surface_alert() {
 
 # Turn off Apport System program problem detected
 disable_crash_dialog() {
+    if [[ ! -f "${APPORT_CONF}" ]]; then
+        return
+    fi
     echo "Disabling apport crash dialogs"
 
     # Stop generating crash reports
@@ -171,6 +225,9 @@ EOF
 
 # Turn off Software Updater and unattended apt
 disable_software_updater() {
+    if [[ "${MACHINE}" != "jetson" ]]; then
+        return
+    fi
     echo "Disabling software updater dialogs"
 
     # Stop apt from checking for upgrades on a timer
@@ -212,8 +269,13 @@ EOF
 
 # Session settings for the robot user
 configure_session() {
-    # Skip first-login setup before changing the desktop
     echo "Configuring desktop session for ${RUN_USER}"
+    if [[ "${MACHINE}" == "pi" ]]; then
+        configure_pi_session
+        return
+    fi
+
+    # Skip first-login setup before changing the GNOME desktop
     skip_gnome_setup
 
     # Paint the desktop and lock screen black
@@ -252,8 +314,46 @@ configure_session() {
     remove_extra_home_folders
 }
 
+# Black LXDE desktop on Raspberry Pi OS, keep existing icon positions
+configure_pi_session() {
+    hide_autostart pprompt.desktop
+    hide_autostart print-applet.desktop
+    hide_autostart user-dirs-update-gtk.desktop
+
+    # Paint each pcmanfm desktop profile black
+    shopt -s nullglob
+    for desktop_conf in "${RUN_HOME}/.config/pcmanfm/LXDE-pi/"desktop-items-*.conf; do
+        set_desktop_conf_key "${desktop_conf}" wallpaper_mode color
+        set_desktop_conf_key "${desktop_conf}" desktop_bg "${PI_DESKTOP_BG}"
+        set_desktop_conf_key "${desktop_conf}" desktop_shadow "${PI_DESKTOP_BG}"
+        set_desktop_conf_key "${desktop_conf}" show_trash 0
+        set_desktop_conf_key "${desktop_conf}" show_mounts 0
+        set_desktop_conf_key "${desktop_conf}" show_documents 0
+        chown "${RUN_USER}:${RUN_USER}" "${desktop_conf}"
+    done
+    shopt -u nullglob
+
+    remove_extra_desktop_launchers
+    remove_extra_home_folders
+}
+
+# Set or add one key in a pcmanfm desktop-items file
+set_desktop_conf_key() {
+    desktop_conf="$1"
+    option_name="$2"
+    option_value="$3"
+    if grep -q "^${option_name}=" "${desktop_conf}"; then
+        sed -i "s/^${option_name}=.*/${option_name}=${option_value}/" "${desktop_conf}"
+        return
+    fi
+    printf '%s\n' "${option_name}=${option_value}" >> "${desktop_conf}"
+}
+
 # Start X already in portrait and keep GNOME from flipping it back
 persist_display_rotation() {
+    if [[ "${MACHINE}" != "jetson" ]]; then
+        return
+    fi
     echo "Keeping DP-1 rotated left from X start"
 
     # Ask the NVIDIA driver for left rotation on the first X modeset
@@ -466,6 +566,9 @@ EOF
 
 # Let the GNOME and onboard keyboards show again
 enable_screen_keyboard() {
+    if [[ "${MACHINE}" != "jetson" ]]; then
+        return
+    fi
     echo "Enabling the on-screen keyboard"
 
     # Turn on the GNOME accessibility keyboard
@@ -485,7 +588,32 @@ enable_screen_keyboard() {
 disable_screen_idle() {
     echo "Disabling screen blanking and screensaver"
 
-    # Never idle into screensaver or lock
+    # GNOME idle and lock, Jetson only
+    if [[ "${MACHINE}" == "jetson" ]]; then
+        disable_gnome_screen_idle
+    fi
+
+    # Ignore logind idle so the session stays logged in
+    mkdir -p /etc/systemd/logind.conf.d
+    cat > /etc/systemd/logind.conf.d/disable-idle.conf <<'EOF'
+[Login]
+IdleAction=ignore
+EOF
+
+    # Turn off X screensaver and DPMS at login
+    mkdir -p "${RUN_HOME}/.config/autostart"
+    cat > "${RUN_HOME}/.config/autostart/disable-screen-blank.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Disable screen blank
+Exec=sh -c "xset s off; xset s noblank; xset -dpms"
+X-GNOME-Autostart-enabled=true
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/disable-screen-blank.desktop"
+}
+
+# Never idle into the GNOME screensaver or lock
+disable_gnome_screen_idle() {
     run_as_user gsettings set org.gnome.desktop.session idle-delay 0
     run_as_user gsettings set org.gnome.desktop.screensaver lock-enabled false
     run_as_user gsettings set org.gnome.desktop.screensaver idle-activation-enabled false
@@ -499,27 +627,14 @@ disable_screen_idle() {
     run_as_user gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing' || true
     run_as_user gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 || true
     run_as_user gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 0 || true
-
-    # Ignore logind idle so the session stays logged in
-    mkdir -p /etc/systemd/logind.conf.d
-    cat > /etc/systemd/logind.conf.d/disable-idle.conf <<'EOF'
-[Login]
-IdleAction=ignore
-EOF
-
-    # Turn off X screensaver and DPMS at login
-    cat > "${RUN_HOME}/.config/autostart/disable-screen-blank.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Disable screen blank
-Exec=sh -c "xset s off; xset s noblank; xset -dpms"
-X-GNOME-Autostart-enabled=true
-EOF
-    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/disable-screen-blank.desktop"
 }
 
 # Publish this machine as hostname.local, Avahi renames itself when IPv6 addresses come and go
 fix_mdns_name() {
+    if [[ ! -f "${AVAHI_CONF}" ]]; then
+        echo "No Avahi config, skip mDNS"
+        return
+    fi
     host_name="$(cat /etc/hostname)"
     echo "Publishing mDNS name ${host_name}.local"
 
@@ -537,7 +652,13 @@ fix_mdns_name() {
     set_avahi_option publish-aaaa-on-ipv4 no
 
     # Watch only the real network ports, docker and the USB gadget bridge churn addresses and trip the same race
-    set_avahi_option allow-interfaces "${AVAHI_ALLOW_INTERFACES}"
+    allow_interfaces="${AVAHI_ALLOW_INTERFACES}"
+    if [[ "${MACHINE}" == "pi" ]]; then
+        allow_interfaces="$(list_mdns_interfaces)"
+    fi
+    if [[ -n "${allow_interfaces}" ]]; then
+        set_avahi_option allow-interfaces "${allow_interfaces}"
+    fi
     set_avahi_option deny-interfaces "${AVAHI_DENY_INTERFACES}"
 
     # Start Avahi once the link has an address, else it collides with its own first claim
@@ -612,6 +733,11 @@ run_as_user() {
 
     # Fall back to one private bus and hide dbus-daemon chatter
     sudo -u "${RUN_USER}" env "${user_environment[@]}" dbus-run-session -- "$@" >/dev/null 2>&1
+}
+
+# Wi-Fi and ethernet names on this board, skip lo, docker, and USB gadget
+list_mdns_interfaces() {
+    ip -o link show | awk -F': ' '{print $2}' | awk -F'@' '{print $1}' | { grep -E '^(wlan|wl|eth|enP|enx|eno)' || true; } | paste -sd, -
 }
 
 # Set one option in the Avahi config, the stock file ships these keys commented out
