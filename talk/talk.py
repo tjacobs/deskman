@@ -129,6 +129,7 @@ PROMPT_MODE = False
 CLOUD_MODE = False
 REALTIME_MODE = False
 ACCENT_MODE = False
+LOCAL_REASON_SHOWN = False
 LAST_ASK_AT = 0.0
 LAST_BATTERY_CHECK_AT = 0.0
 LAST_BATTERY_VOLTAGE = 0.0
@@ -315,10 +316,10 @@ def choose_text_backend(cloud_flag, local_flag, model_name):
 def try_cloud_text(model_name, forced):
     text_client.load_openai_env_file()
     if not utils.network_available():
-        print('Warning: no internet, using local model.', flush=True)
+        warn_using_local('no internet')
         return use_local_text()
     if not text_client.cloud_api_key():
-        print('Warning: no OpenAI key, using local model.', flush=True)
+        warn_using_local('no OpenAI key')
         return use_local_text()
 
     # Cloud setup can still fail after the key check
@@ -333,6 +334,20 @@ def try_cloud_text(model_name, forced):
         print('Internet up, using OpenAI.', flush=True)
     return True
 
+# Say why the local model is standing in, the realtime check may have said it already
+def warn_using_local(reason):
+    global LOCAL_REASON_SHOWN
+    if LOCAL_REASON_SHOWN:
+        return
+
+    # Only the first reason is worth printing, they all share one cause
+    LOCAL_REASON_SHOWN = True
+    print(f'Warning: {reason}, using local model.', flush=True)
+
+    # A missing key is the one cause the user can fix right now
+    if reason == 'no OpenAI key':
+        print('Run ./setkey.py to add one.', flush=True)
+
 # Leave the cloud path and keep Hugging Face offline when the net is down
 def use_local_text():
     text_client.disable_cloud()
@@ -342,14 +357,19 @@ def use_local_text():
 
 # Why realtime cannot start, empty when it can
 def realtime_unavailable_reason():
+    global LOCAL_REASON_SHOWN
     if realtime is None:
         return 'realtime needs websocket-client. Run ./install.sh to install it.'
+
+    # No net and no key also stop the text cloud path, so the caller speaks for both
     if not utils.network_available():
+        LOCAL_REASON_SHOWN = True
         return 'realtime needs the internet.'
 
     # The spoken session needs the same key the text cloud path uses
     text_client.load_openai_env_file()
     if not text_client.cloud_api_key():
+        LOCAL_REASON_SHOWN = True
         return 'no OpenAI key.'
     return ''
 

@@ -30,7 +30,7 @@ RASPBERRY_PI_MATCH="Raspberry Pi"
 JETSON_RELEASE_FILE="/etc/nv_tegra_release"
 
 # Config system packages and players
-LINUX_PACKAGES=(espeak-ng alsa-utils htop)
+LINUX_PACKAGES=(espeak-ng alsa-utils htop zenity wl-clipboard)
 MAC_PACKAGES=(espeak-ng)
 MAC_LISTEN_PACKAGES=(sox)
 LINUX_PLAYER="aplay"

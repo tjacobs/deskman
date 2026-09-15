@@ -84,6 +84,21 @@ On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](h
 
 Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the USB microphone on linux, preferring a mic-only card over a speaker card's fallback mic, skipping camera cards that advertise capture with no mic, and with sox from the default input device on mac.
 
+## setkey.py
+
+Saves an OpenAI API key so `talk.py` can use the cloud. Opens the key page in a browser on the Pi screen, then shows a paste box on top of it.
+
+```bash
+./setkey.py
+./setkey.py --run
+```
+
+Log in, create a key, and copy it. The paste box is prefilled from the clipboard, so a copied key only needs OK. Clicking the browser raises it over the box, tap `OpenAI key` in the taskbar to get back. The on-screen keyboard appears by itself when the box takes focus.
+
+The key is checked against `https://api.openai.com/v1/models` before saving, so a mistyped or revoked key is refused rather than failing later. A good key is written to `openai.env` as `OPENAI_API_KEY=`, readable only by the current user. `--run` starts `talk.py` afterwards.
+
+Use `--terminal` over SSH, it skips the browser and paste box and prompts on the terminal. That also happens on its own when there is no display or no browser.
+
 ## talk.py
 
 Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop`.
