@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdint>
 //
 // Adapted from https://github.com/dhbaird/easywsclient
 //

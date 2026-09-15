@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdint>
 #ifdef IXWEBSOCKET_USE_ZLIB
 #include "zlib.h"
 #endif
