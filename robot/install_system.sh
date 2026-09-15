@@ -35,6 +35,8 @@ main() {
     disable_crash_dialog
     disable_software_updater
     configure_session
+    configure_dsi_panel
+    install_panel_backlight_service
     persist_display_rotation
     disable_screen_idle
     enable_service_shortcuts
@@ -92,6 +94,22 @@ PI_DESKTOP_BG="#000000"
 
 # Stock Pi OS wallpaper files, copied when this user has none yet
 PI_PCMANFM_DEFAULT="/etc/xdg/pcmanfm/default"
+
+# Raspberry Pi boot config, and the Waveshare DSI overlay, one driver board covers the 7, 8, and 10.1 inch panels and all of them run 1280x800
+BOOT_CONFIG="/boot/firmware/config.txt"
+PANEL_OVERLAY="vc4-kms-dsi-waveshare-panel,8_0_inch"
+PANEL_COMMENT="Waveshare Rev2.1 driver board, 7 inch 1280x800 panel, I2C0, CAM/DISP 1"
+
+# Panel MCU on the DSI connector I2C bus, one register enables the LCD rails and another sets the backlight PWM
+PANEL_I2C_BUS="11"
+PANEL_MCU_ADDRESS="0x45"
+PANEL_LCD_REGISTER="0x95"
+PANEL_PWM_REGISTER="0x96"
+PANEL_LCD_ENABLE="0x17"
+PANEL_PWM_FULL="0xff"
+PANEL_BACKLIGHT_SERVICE="panel-backlight.service"
+PANEL_BACKLIGHT_UNIT="/etc/systemd/system/panel-backlight.service"
+I2C_SET="/usr/sbin/i2cset"
 
 # Create the user config folders a first graphical login would
 prepare_user_dirs() {
@@ -428,6 +446,64 @@ set_desktop_conf_key() {
         return
     fi
     printf '%s\n' "${option_name}=${option_value}" >> "${desktop_conf}"
+}
+
+# Load the Waveshare DSI panel overlay so the screen comes up at its native mode
+configure_dsi_panel() {
+    # Only the Pi boots from a firmware config and has a DSI connector
+    if [[ "${MACHINE}" != "pi" || ! -f "${BOOT_CONFIG}" ]]; then
+        return
+    fi
+
+    # Leave an overlay that is already there alone
+    if grep -q "^dtoverlay=${PANEL_OVERLAY}$" "${BOOT_CONFIG}"; then
+        echo "DSI panel overlay already set"
+        return
+    fi
+
+    # Drop any other Waveshare panel overlay and our comment, the wrong variant leaves the screen dark
+    echo "Adding DSI panel overlay to ${BOOT_CONFIG}"
+    sed -i "\|^# ${PANEL_COMMENT}\$|d" "${BOOT_CONFIG}"
+    sed -i '/^dtoverlay=vc4-kms-dsi-waveshare-panel/d' "${BOOT_CONFIG}"
+
+    # Reuse a trailing all section so repeat runs do not stack empty ones
+    if [[ "$(grep -vE '^[[:space:]]*$' "${BOOT_CONFIG}" | tail -1)" == "[all]" ]]; then
+        printf '%s\n%s\n' "# ${PANEL_COMMENT}" "dtoverlay=${PANEL_OVERLAY}" >> "${BOOT_CONFIG}"
+        return
+    fi
+
+    # Otherwise start a new all section, it applies the overlay on every Pi model
+    printf '\n%s\n%s\n%s\n' '[all]' "# ${PANEL_COMMENT}" "dtoverlay=${PANEL_OVERLAY}" >> "${BOOT_CONFIG}"
+}
+
+# Light the panel every boot, the kernel backlight device never reaches the hardware
+install_panel_backlight_service() {
+    # Only the Pi carries the panel MCU on I2C
+    if [[ "${MACHINE}" != "pi" ]]; then
+        return
+    fi
+
+    # Write a unit that enables the LCD rails then drives the backlight to full
+    echo "Installing ${PANEL_BACKLIGHT_SERVICE}"
+    cat > "${PANEL_BACKLIGHT_UNIT}" <<EOF
+[Unit]
+Description=Force Waveshare DSI panel backlight on
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_LCD_REGISTER} ${PANEL_LCD_ENABLE}
+ExecStart=${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_PWM_REGISTER} ${PANEL_PWM_FULL}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Enable it for later boots and light the panel now
+    systemctl daemon-reload
+    systemctl enable "${PANEL_BACKLIGHT_SERVICE}"
+    systemctl start "${PANEL_BACKLIGHT_SERVICE}" || true
 }
 
 # Start X already in portrait and keep GNOME from flipping it back
