@@ -220,6 +220,7 @@ Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `tal
 - `tools/memory.sh` — sample free RAM and size to `memory.log`. Pass `--cron` for an every-5-minutes crontab.
 - `tools/auth_google.py` — Google Calendar browser OAuth into `accounts.json`
 - `tools/auth_sonos.py` — Sonos LAN or cloud setup into `accounts.json`
+- `tools/test_audio.py` — confirm the speaker and mic work, plays a chime, records you talking on a live level meter, plays it back
 
 ```bash
 ./tools/power.sh        # status
@@ -230,5 +231,26 @@ Runs `speak.py` and `say.py --test` online, with `--cpu`, and offline, then `tal
 ./tools/memory.sh --cron
 ./tools/auth_google.py
 ./tools/auth_sonos.py
+./tools/test_audio.py
+./tools/test_audio.py --meter
 ```
+
+`test_audio.py` counts down, then records one clip behind a live level meter. The chime plays into the opening two seconds of that clip, and you talk for the remaining four. It reports the cards in use and checks six things: the chime played, the recording is a valid wav, the mic heard the chime, the mic heard your voice, the recording looks like speech, and the recording played back. It exits non-zero when any of those fail, and keeps the recording at `audio/test_capture.wav`.
+
+A passing check prints only its green `PASS` line. Measurements are printed just for the checks that fail, along with what to look at, so a good run stays short and a bad one says why.
+
+Recording the chime rather than just playing it makes the speaker and mic prove themselves together, with no one in the room. The notes are looked for in the opening window, so a speaker that is muted or a mic that hears nothing both fail on their own line. The chime window and the talking window are analysed separately, otherwise the chime would supply the level swing and speech band energy that the speech check is there to find, and a silent room would pass.
+
+Unlike the other scripts here it runs from any directory, including `tools/` itself. Its shebang is `#!/usr/bin/env python3` and it hands over to `.venv/bin/python` on startup, rather than relying on the relative `#!.venv/bin/python` that only resolves from `talk/`.
+
+The meter is an ASCII bar per channel in dBFS, redrawn in place, with `|` marking the loudest level so far. `--meter` shows it on its own until CTRL-C, which is the quickest way to see whether the mic responds at all.
+
+```
+mic  -30.0 dBFS [####################------------|-------]
+L  -30.0 dBFS [####################------------|-------]  R  -18.0 dBFS [############################--------|---]
+```
+
+Channel count comes from the capture section of `/proc/asound/card<n>/stream0`, so a mono mic gets one bar and a stereo card gets separate left and right bars. Asking `plughw` for two channels on a mono mic succeeds but only duplicates the one channel, so the meter follows the hardware rather than the request. One recorder streams raw frames that feed both the meter and the saved wav, so what you watch is exactly what gets checked.
+
+The speech check exists because a mic jack with nothing in it still hisses loud enough to pass a plain volume check. Real speech swings in level between words and puts most of its energy under 4 kHz, so a flat recording full of high frequency hiss is reported as a dead input rather than a working mic.
 
