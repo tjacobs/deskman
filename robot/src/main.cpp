@@ -74,6 +74,10 @@ static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
 static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
+static const char* JETSON_OUTPUT = "DP-1";
+static const char* JETSON_TOUCH = "WaveShare WS170120";
+static const char* PI_OUTPUT = "DSI-2";
+static const char* PI_TOUCH_MATCH = "ft5x06";
 
 // Close inherited descriptors in the talk child, ignoring a silly rlimit
 static const int DEFAULT_MAX_DESCRIPTORS = 1024;
@@ -113,6 +117,10 @@ static void check_already_running();
 static pid_t find_other_running();
 static int print_servo_positions();
 static void rotate_screen();
+static const char* wait_for_portrait_output();
+static bool output_is_connected(const char* output);
+static void rotate_jetson_panel();
+static void map_touch();
 static bool display_is_rotated_left();
 static void show_face();
 static void draw_face();
@@ -455,39 +463,63 @@ static int print_servo_positions() {
     return 0;
 }
 
-// Rotate to portrait, skip xrandr when already left so the NVIDIA splash does not flash
+// Rotate Jetson to portrait, then map touch on Jetson or Pi
 static void rotate_screen() {
 #ifdef __linux__
-    // Wait until DP-1 is connected after login or service start
-    bool connected = false;
+    const char* output = wait_for_portrait_output();
+    if (output == nullptr)
+        return;
+    if (strcmp(output, JETSON_OUTPUT) == 0)
+        rotate_jetson_panel();
+    map_touch();
+#endif
+}
+
+// Wait for DP-1 or DSI-2 after login or service start
+static const char* wait_for_portrait_output() {
     for (int try_index = 0; try_index < SCREEN_ROTATE_TRIES; try_index++) {
-        if (system("xrandr --query 2>/dev/null | grep -q '^DP-1 connected'") == 0) {
-            connected = true;
-            break;
-        }
+        if (output_is_connected(JETSON_OUTPUT))
+            return JETSON_OUTPUT;
+        if (output_is_connected(PI_OUTPUT))
+            return PI_OUTPUT;
         sleep_for(milliseconds(SCREEN_WAIT_MS));
     }
+    return nullptr;
+}
 
-    // Skip quietly when this machine has no Waveshare panel
-    if (!connected)
+// True when xrandr reports this output as connected
+static bool output_is_connected(const char* output) {
+    string command = string("xrandr --query 2>/dev/null | grep -q '^") + output + " connected'";
+    return system(command.c_str()) == 0;
+}
+
+// Rotate DP-1 left, skip xrandr when already left so the NVIDIA splash does not flash
+static void rotate_jetson_panel() {
+    if (display_is_rotated_left())
         return;
 
     // A rotate modeset blanks the panel and shows the NVIDIA logo in native landscape
-    if (!display_is_rotated_left()) {
-        int rotated = system("xrandr --output DP-1 --rotate left 2>/dev/null");
-        (void)rotated;
-        for (int try_index = 0; try_index < SCREEN_ROTATE_TRIES; try_index++) {
-            if (display_is_rotated_left())
-                break;
-            rotated = system("xrandr --output DP-1 --rotate left 2>/dev/null");
-            sleep_for(milliseconds(SCREEN_WAIT_MS));
-        }
+    int rotated = system("xrandr --output DP-1 --rotate left 2>/dev/null");
+    (void)rotated;
+    for (int try_index = 0; try_index < SCREEN_ROTATE_TRIES; try_index++) {
+        if (display_is_rotated_left())
+            break;
+        rotated = system("xrandr --output DP-1 --rotate left 2>/dev/null");
+        sleep_for(milliseconds(SCREEN_WAIT_MS));
     }
+}
 
-    // Keep the touch device mapped to the rotated output
-    int mapped = system("xinput map-to-output \"WaveShare WS170120\" DP-1 2>/dev/null");
+// Keep the touch device mapped to the rotated output
+static void map_touch() {
+    string jetson = string("xinput map-to-output \"") + JETSON_TOUCH + "\" " + JETSON_OUTPUT + " 2>/dev/null";
+    int mapped = system(jetson.c_str());
     (void)mapped;
-#endif
+
+    // Pi DSI overlay names include the I2C address, match the controller
+    string pi = string("xinput list --name-only 2>/dev/null | grep -F '") + PI_TOUCH_MATCH +
+        "' | while IFS= read -r name; do xinput map-to-output \"$name\" " + PI_OUTPUT + "; done";
+    mapped = system(pi.c_str());
+    (void)mapped;
 }
 
 // True when DP-1 is already in the portrait left orientation

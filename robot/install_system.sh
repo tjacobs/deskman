@@ -351,7 +351,8 @@ set_desktop_conf_key() {
 
 # Start X already in portrait and keep GNOME from flipping it back
 persist_display_rotation() {
-    if [[ "${MACHINE}" != "jetson" ]]; then
+    if [[ "${MACHINE}" == "pi" ]]; then
+        persist_pi_touch_rotation
         return
     fi
     echo "Keeping DP-1 rotated left from X start"
@@ -367,6 +368,29 @@ persist_display_rotation() {
     mkdir -p /var/lib/gdm3/.config
     write_monitors_xml /var/lib/gdm3/.config/monitors.xml
     chown gdm:gdm /var/lib/gdm3/.config/monitors.xml 2>/dev/null || true
+}
+
+# Map the DSI touch overlay to the xrandr-rotated panel at login
+persist_pi_touch_rotation() {
+    echo "Mapping DSI touch to the rotated panel"
+    mkdir -p "${RUN_HOME}/.config/autostart"
+    cat > "${RUN_HOME}/.config/autostart/deskman-map-touch.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Map DSI touch
+Exec=sh -c 'xinput list --name-only | grep -F ft5x06 | while IFS= read -r name; do xinput map-to-output "$name" DSI-2; done'
+X-GNOME-Autostart-enabled=true
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/deskman-map-touch.desktop"
+    map_pi_touch || true
+}
+
+# Map every ft5x06 device onto DSI-2
+map_pi_touch() {
+    export DISPLAY="${DISPLAY:-:0}"
+    xinput list --name-only 2>/dev/null | { grep -F ft5x06 || true; } | while IFS= read -r touch_name; do
+        xinput map-to-output "${touch_name}" DSI-2
+    done
 }
 
 # Add the rotated MetaModes to the Tegra device section
