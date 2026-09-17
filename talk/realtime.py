@@ -47,6 +47,7 @@ SPEAK_LINE_SECONDS = 15.0
 APPEND_BYTES = 32000
 BLOCKS_PER_SECOND = 10
 REALTIME_RATE = 24000
+REALTIME_CHANNELS = 1
 
 # Hold one realtime conversation from the microphone
 def main():
@@ -480,7 +481,7 @@ class Speaker:
     # Start a player on the first chunk, then keep feeding the same one
     def play(self, chunk):
         if self.player is None:
-            self.player = subprocess.Popen([utils.audio_player(), '-q', '-f', 'S16_LE', '-r', str(REALTIME_RATE), '-c', '1', '-t', 'raw'], stdin=subprocess.PIPE)
+            self.player = subprocess.Popen(utils.play_raw_command(REALTIME_RATE, REALTIME_CHANNELS), stdin=subprocess.PIPE)
         try:
             self.player.stdin.write(chunk)
             self.player.stdin.flush()

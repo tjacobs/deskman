@@ -71,6 +71,20 @@ def play_wav_command(wav_path):
     # Play through the default device, tools/audio.sh points that at the USB soundcard
     return [audio_player(), wav_path]
 
+# Build playback command for a raw stream arriving on stdin
+def play_raw_command(rate, channels):
+    player = audio_player()
+    command = [player]
+
+    # Name the USB speaker card, so a speaker-only card wins over the mic card
+    card = find_usb_card()
+    if player == LINUX_PLAYER and card is not None:
+        command += ['-D', f'plughw:{card},0']
+
+    # plughw converts, the card may only accept another rate or channel count
+    command += ['-q', '-f', 'S16_LE', '-r', str(rate), '-c', str(channels), '-t', 'raw']
+    return command
+
 # Return true when audio player is available
 def check_audio_player():
     player = audio_player()
