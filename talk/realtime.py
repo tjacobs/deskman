@@ -33,8 +33,30 @@ TURN_DETECTION = 'semantic_vad'
 # Config the reply instructions added to the robot system prompt
 SPOKEN_STYLE = 'You are speaking out loud, so keep replies to one or two short sentences.'
 
-# Config tools to hold back, these pick a kokoro voice that OpenAI is not speaking with
+# Config the tool names answered here rather than by the text tools, those pick a kokoro voice instead
 SKIP_TOOLS = ('set_voice', 'list_voices')
+
+# Config the voices OpenAI speaks with and how each comes across, OpenAI publishes no gender so these are by ear
+REALTIME_VOICES = {
+    'cedar': 'male', 'echo': 'male',
+    'ballad': 'female', 'coral': 'female', 'marin': 'female', 'shimmer': 'female',
+    'alloy': 'neutral', 'ash': 'neutral', 'sage': 'neutral', 'verse': 'neutral'}
+
+# Config the voice tools offered in place of the kokoro ones, these drive the voice OpenAI speaks with
+REALTIME_VOICE_TOOLS = [
+    {'type': 'function',
+     'name': 'set_voice',
+     'description': 'Change the voice you speak with. Required when the user asks for a different voice. Takes one name from list_voices, matching the sound they asked for.',
+     'parameters': {'type': 'object',
+                    'properties': {'voice': {'type': 'string', 'description': 'Voice name, for example marin, cedar, or echo.'}},
+                    'required': ['voice']}},
+    {'type': 'function',
+     'name': 'list_voices',
+     'description': 'List the voices you can speak with. Required when the user asks which voices are available.',
+     'parameters': {'type': 'object', 'properties': {}}}]
+
+# Config how many past turns are replayed into a session reopened on a new voice
+REPLAY_TURNS = 10
 
 # Config the transcriber, the model hears the audio itself, this only writes the heard lines to the log
 TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
@@ -48,6 +70,9 @@ APPEND_BYTES = 32000
 BLOCKS_PER_SECOND = 10
 REALTIME_RATE = 24000
 REALTIME_CHANNELS = 1
+
+# State, the voice a set_voice call picked, it holds for the rest of the run but not past a restart
+CHOSEN_VOICE = ''
 
 # Hold one realtime conversation from the microphone
 def main():
@@ -91,7 +116,15 @@ def parse_args():
 
 # Read config.json, falling back to the defaults above for anything missing
 def load_config():
-    return utils.load_config({'realtime_model': REALTIME_MODEL, 'realtime_voice': REALTIME_VOICE, 'realtime_accent': REALTIME_ACCENT})
+    # Read the file
+    config = utils.load_config({'realtime_model': REALTIME_MODEL, 'realtime_voice': REALTIME_VOICE, 'realtime_accent': REALTIME_ACCENT})
+
+    # Prefer a voice a set_voice call picked, later conversations should keep speaking with it
+    if CHOSEN_VOICE:
+        config['realtime_voice'] = CHOSEN_VOICE
+
+    # Return the settings
+    return config
 
 # Connect to the realtime endpoint and configure the session
 def open_session(config):
@@ -106,6 +139,7 @@ def open_session(config):
     socket = websocket.create_connection(f'{REALTIME_URL}?model={model}', header=[f'Authorization: Bearer {key}'], timeout=CONNECT_TIMEOUT)
     socket.settimeout(RECEIVE_TIMEOUT)
     session = Session(socket)
+    session.config = config
     print('Connected.', flush=True)
 
     # Describe the voice, the turn taking, and the tools before any audio moves
@@ -157,10 +191,39 @@ def session_realtime_tools():
         tools.append({'type': 'function', 'name': function['name'],
                       'description': function.get('description', ''),
                       'parameters': function.get('parameters', {})})
-    return tools
+
+    # Offer the voice tools that drive the OpenAI voice, without them the model hunts through the other tools
+    return tools + REALTIME_VOICE_TOOLS
 
 # Stream microphone audio up and play replies back until the room goes quiet
 def run_conversation(session, microphone, first_question, on_turn):
+    # Keep the session handed in, the caller closes that one itself
+    opened = session
+
+    # Talk until the room goes quiet, a voice change carries the conversation into a new session
+    while True:
+        # Talk in this session
+        voice = run_session(session, microphone, first_question, on_turn)
+        if not voice:
+            break
+
+        # Reopen on the chosen voice, OpenAI fixes the voice once a session has spoken
+        microphone.mute()
+        session = reopen_session(session, voice)
+        microphone.unmute()
+
+        # Drop the opening question, the session that just closed already asked it
+        first_question = None
+
+    # Close a session opened here, the caller only knows about the one it handed in
+    if session is not opened:
+        close_session(session)
+
+    # Print the conversation closed
+    print('Conversation closed.', flush=True)
+
+# Talk in one session, returning a voice when the conversation should carry on in a new one
+def run_session(session, microphone, first_question, on_turn):
     # Set the callback for when a turn is finished
     session.on_turn = on_turn
 
@@ -197,14 +260,18 @@ def run_conversation(session, microphone, first_question, on_turn):
             # Any traffic means someone is still talking, so push the idle clock out
             if handle_event(session, microphone, speaker, event):
                 idle_deadline = time.time() + IDLE_SECONDS
+
+            # Hand the chosen voice back, the conversation carries on in a session opened on it
+            if session.voice_ready:
+                return session.voice_request
     finally:
         # Stop the session
         session.stop()
         speaker.stop()
         microphone.unmute()
 
-    # Print the conversation closed
-    print('Conversation closed.', flush=True)
+    # Say the room went quiet, so there is no voice to carry over
+    return ''
 
 # Send one written question as a user turn and ask for a spoken answer
 def ask_question(session, question):
@@ -279,6 +346,9 @@ def handle_event(session, microphone, speaker, event):
         # Call the callback
         session.on_turn(session.heard, reply)
 
+        # Keep the pair, a session reopened on a new voice is replayed from this
+        session.history.append((session.heard, reply))
+
         # Clear the heard text
         session.heard = ''
         return True
@@ -290,6 +360,12 @@ def handle_event(session, microphone, speaker, event):
 
     # Ask for the spoken answer once the turn that called the tools has finished
     if kind == 'response.done':
+        # Stay quiet when a voice was chosen, this session can only answer in the old one
+        if session.voice_request:
+            session.tool_pending = False
+            session.voice_ready = True
+            return True
+
         if session.tool_pending:
             session.tool_pending = False
             session.send({'type': 'response.create'})
@@ -303,14 +379,117 @@ def handle_event(session, microphone, speaker, event):
 
 # Run one tool locally and return its result to the model
 def run_function_call(session, event):
-    # Build the call
-    call = {'function': {'name': event.get('name'), 'arguments': event.get('arguments')}}
-    result = ask.run_tool(call)
+    # Answer the voice tools here, the text tools behind these names speak with kokoro instead
+    name = event.get('name')
+    if name in SKIP_TOOLS:
+        arguments = parse_arguments(event.get('arguments'))
+        result = run_voice_tool(session, name, arguments)
+        ask.record_tool(name, arguments, result)
+    else:
+        # Build the call, run_tool prints it and keeps it for the log itself
+        call = {'function': {'name': name, 'arguments': event.get('arguments')}}
+        result = ask.run_tool(call)
 
     # Hand the result back, the answer is asked for once the whole turn is done
     session.send({'type': 'conversation.item.create', 'item': {
         'type': 'function_call_output', 'call_id': event.get('call_id'), 'output': str(result)}})
     session.tool_pending = True
+
+# Load tool arguments, the model writes them as a JSON string
+def parse_arguments(raw_arguments):
+    try:
+        return json.loads(raw_arguments or '{}')
+    except ValueError:
+        return {}
+
+# List the voices, or hold a chosen one until the session can be reopened on it
+def run_voice_tool(session, name, arguments):
+    # List what OpenAI can speak with, the model has no other way to learn these names
+    if name == 'list_voices':
+        return f'Voices available: {voice_list()}.'
+
+    # Read the asked for voice
+    voice = str(arguments.get('voice', '')).strip().lower()
+
+    # Ask which one when the name came through empty
+    if not voice:
+        return f'Which voice? Choose from: {voice_list()}.'
+
+    # Turn down a name OpenAI does not speak with, a session opened on it would fail
+    if voice not in REALTIME_VOICES:
+        return f'There is no {voice} voice. Choose from: {voice_list()}.'
+
+    # Say nothing changed when that is the voice already speaking
+    if voice == session.config.get('realtime_voice'):
+        return f'Already speaking with {voice}.'
+
+    # Hold the request, the session is reopened on it as soon as this turn ends
+    session.voice_request = voice
+    return f'Voice changed to {voice}.'
+
+# Name the voices grouped by how they sound, people ask for a man or a woman rather than a name
+def voice_list():
+    # Gather the names under each sound
+    groups = {}
+    for name, sound in REALTIME_VOICES.items():
+        groups.setdefault(sound, []).append(name)
+
+    # Read it back as a sentence
+    return ', '.join(f'{join_names(names)} sound {sound}' for sound, names in groups.items())
+
+# Join names so a list reads aloud naturally
+def join_names(names):
+    if len(names) == 1:
+        return names[0]
+    return ', '.join(names[:-1]) + ' and ' + names[-1]
+
+# Close a session and open a new one on the chosen voice, carrying the conversation across
+def reopen_session(session, voice):
+    # Remember the voice for the rest of the run, later conversations should keep speaking with it
+    global CHOSEN_VOICE
+    CHOSEN_VOICE = voice
+
+    # Keep what was said, the new session opens knowing none of it
+    history = session.history
+
+    # Leave out the line that asked for the voice, replaying it makes the new session switch all over again
+
+    # Reuse the settings this session opened on, so a model named on the command line still applies
+    config = dict(session.config)
+    config['realtime_voice'] = voice
+
+    # Drop the old socket, its voice cannot be changed now that it has spoken
+    close_session(session)
+
+    # Open a new one on the chosen voice
+    session = open_session(config)
+    session.history = history
+
+    # Replay the conversation so the new voice picks up where the old one left off
+    replay_history(session)
+
+    # Speak straight away, the old session stayed quiet to leave the change to this one
+    introduce_voice(session, voice, config['realtime_accent'])
+    return session
+
+# Put the recent conversation into a session that opened with no memory of it
+def replay_history(session):
+    for heard, reply in session.history[-REPLAY_TURNS:]:
+        # Send what the person said
+        if heard:
+            session.send({'type': 'conversation.item.create', 'item': {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': heard}]}})
+
+        # Send what the robot answered, an assistant turn carries output text
+        if reply:
+            session.send({'type': 'conversation.item.create', 'item': {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': reply}]}})
+
+# Ask for one short line so the new voice is heard as soon as it is picked
+def introduce_voice(session, voice, accent):
+    # Say the change is done, otherwise it reaches for set_voice and changes voice a second time
+    instruction = f'{accent} You are already speaking with the {voice} voice, the change is done. Say one short line so they can hear it. Say nothing else and call no tools.'
+
+    # Response instructions replace the session ones, so the accent went in above
+    session.send({'type': 'response.create', 'response': {'instructions': instruction}})
 
 # Drop a finished turn, running standalone there is nowhere to log it
 def ignore_turn(heard, reply):
@@ -396,6 +575,10 @@ class Session:
         self.tool_pending = False
         self.heard = ''
         self.on_turn = ignore_turn
+        self.config = {}
+        self.voice_request = ''
+        self.voice_ready = False
+        self.history = []
 
     # Send one event as JSON
     def send(self, event):
