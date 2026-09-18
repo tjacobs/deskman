@@ -160,12 +160,22 @@ def main():
     global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, text_server_process
     TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE = parse_args()
 
-    # Load once, the robot service has no flags so local and realtime live here
-    config = utils.load_config({'realtime': REALTIME_MODE, 'local': False})
+    # Load once, the robot service has no flags so cloud, realtime, and local live here
+    config = utils.load_config({'cloud': False, 'realtime': REALTIME_MODE, 'local': False})
+
+    # Config cannot force both backends, the flags already reject that pair
+    if config['local'] and config['cloud']:
+        print('Error: config.json has local and cloud both true, pick one.')
+        print_usage()
+        sys.exit(1)
 
     # Config local is --local for the robot service, a --cloud or --realtime flag still wins
     if config['local'] and not realtime_flag and not cloud_flag:
         local_flag = True
+
+    # Config cloud is --cloud for the robot service, a --local flag still wins
+    if config['cloud'] and not local_flag:
+        cloud_flag = True
 
     # Take realtime from the flag or config.json
     REALTIME_MODE = realtime_flag or config['realtime']
@@ -270,10 +280,10 @@ def parse_args():
             prompt_mode = True
         elif argument == '--cloud':
             cloud_mode = True
-        elif argument == '--local':
-            local_mode = True
         elif argument == '--realtime':
             realtime_mode = True
+        elif argument == '--local':
+            local_mode = True
         elif argument == '--accent':
             accent_mode = True
         elif argument == '--model':
@@ -399,7 +409,7 @@ def say_accent_phrase():
 
 # Print usage help
 def print_usage():
-    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--local] [--realtime] [--model name]')
+    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--realtime] [--local] [--model name]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --accent           say the accent test phrase in the current voice, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
@@ -407,10 +417,10 @@ def print_usage():
     print('  --memory           print available memory while loading models')
     print('  --cold             skip local Gemma text model warm-up ask')
     print('  --prompt           print the full model context, messages, tools, and rendered prompt')
-    print('  --cloud            ask OpenAI instead of the local llama-server')
+    print('  --cloud            ask OpenAI instead of the local llama-server, see config.json')
+    print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
-    print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print(f'  (no arg)           say "{WAKE_WORD}" then a command, uses OpenAI when online, else local Gemma')
 
 # Run the talk loop with models already loaded
