@@ -24,7 +24,7 @@ TOOLS = [
                     "direction": {
                         "type": "string",
                         "enum": LOOK_DIRECTIONS,
-                        "description": "Where to look or move the hat.",
+                        "description": "left, right, center, up, and down turn the head. hat_up raises the hat. hat_down lowers the hat.",
                     },
                     "degrees": {
                         "type": "number",

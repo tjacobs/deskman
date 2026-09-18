@@ -77,13 +77,10 @@ void FaceTracker::startTracking() {
     // Collect a thread that stopped on its own, so the assign below is safe
     if (trackingThread.joinable())
         trackingThread.join();
-    cout << "Starting camera..." << endl;
 
-    // Only start tracking if camera is available
-    if (!cameraAvailable) {
-        cout << "Face tracking disabled - camera not available" << endl;
+    // Only start tracking if the camera already opened
+    if (!cameraAvailable)
         return;
-    }
 
     // Start tracking thread
     shouldQuit = false;

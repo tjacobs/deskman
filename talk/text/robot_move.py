@@ -9,8 +9,8 @@ import socket
 
 # Config
 LOOK_DEFAULT_DEGREES = 90
-HAT_OPEN_DEGREES = -35
-HAT_CLOSED_DEGREES = 90
+HAT_UP_DEGREES = 90
+HAT_DOWN_DEGREES = -35
 CONNECT_TIMEOUT_SEC = 2.0
 READ_TIMEOUT_SEC = 5.0
 
@@ -64,9 +64,9 @@ def look(direction, degrees):
     elif direction == "down":
         reply = send_command({"command": "move", "tilt": -amount})
     elif direction == "hat_up":
-        reply = send_command({"command": "move", "hat": HAT_OPEN_DEGREES})
+        reply = send_command({"command": "move", "hat": HAT_UP_DEGREES})
     elif direction == "hat_down":
-        reply = send_command({"command": "move", "hat": HAT_CLOSED_DEGREES})
+        reply = send_command({"command": "move", "hat": HAT_DOWN_DEGREES})
     else:
         raise RuntimeError(f"unknown direction {direction}")
 

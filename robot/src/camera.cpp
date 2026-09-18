@@ -25,8 +25,12 @@ static const int CAPTURE_RETRIES = 3;
 static const int CAPTURE_RETRY_WAIT_MS = 100;
 static const int PIPELINE_RETRY_WAIT_SECONDS = 1;
 
+// Ask rpicam whether a CSI camera is attached
+static const char *LIBCAMERA_LIST_COMMAND = "rpicam-hello --list-cameras 2>&1";
+
 // Later in this file
 static bool video_device_present();
+static bool libcamera_camera_present();
 static int count_video_devices();
 static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int width, int height, int framerate);
 
@@ -57,18 +61,24 @@ bool Camera::initialize() {
     capturing = false;
 
     // Close any previous capture handle
-    if (capture.isOpened()) {
+    if (capture.isOpened())
         capture.release();
-    }
 
-    // Skip OpenCV open when no camera device is attached
-    if (!video_device_present() && !isRaspberryPi) {
-        cerr << "Error: No camera device found, continuing without camera" << endl;
+    // Say this before any probe so a missing camera fails in the startup log
+    cout << "Starting camera..." << endl;
+    fflush(stdout);
+
+    // Skip OpenCV open when nothing is plugged in
+    bool have_usb = video_device_present();
+    bool have_libcamera = isRaspberryPi && libcamera_camera_present();
+    if (!have_usb && !have_libcamera) {
+        cout << "No camera plugged in, face tracking off." << endl;
+        fflush(stdout);
         return false;
     }
 
-    // Use libcamera on Raspberry Pi
-    if (isRaspberryPi) {
+    // Use libcamera when a CSI camera answered
+    if (have_libcamera) {
         string pipeline = "libcamerasrc ! "
                          "video/x-raw,width=" + to_string(width) +
                          ",height=" + to_string(height) +
@@ -87,14 +97,17 @@ bool Camera::initialize() {
             cerr << "Failed to open camera with GStreamer pipeline (attempt " << (attempt + 1) << "/" << CAPTURE_RETRIES << ")" << endl;
             this_thread::sleep_for(chrono::seconds(PIPELINE_RETRY_WAIT_SECONDS));
         }
-
-        // No libcamera source on this Pi
-        return false;
     }
 
     // Open a USB camera through V4L2
-    capturing = open_USB_camera(capture, cameraIndex, width, height, framerate);
-    return capturing;
+    if (have_usb) {
+        capturing = open_USB_camera(capture, cameraIndex, width, height, framerate);
+        return capturing;
+    }
+
+    cout << "No camera plugged in, face tracking off." << endl;
+    fflush(stdout);
+    return false;
 }
 
 // Read one frame, reopening the camera if needed
@@ -156,6 +169,23 @@ static bool video_device_present() {
     return count_video_devices() > 0;
 }
 
+// True when rpicam lists a CSI camera, ISP leftover nodes do not count
+static bool libcamera_camera_present() {
+    if (!filesystem::exists("/usr/bin/rpicam-hello"))
+        return false;
+
+    FILE *pipe = popen(LIBCAMERA_LIST_COMMAND, "r");
+    if (pipe == nullptr)
+        return false;
+
+    string output;
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+        output += buffer;
+    pclose(pipe);
+    return !output.empty() && output.find("No cameras available") == string::npos;
+}
+
 // Count attached /dev/videoN nodes
 static int count_video_devices() {
     // Walk the whole range so a gap does not stop the count
@@ -169,8 +199,6 @@ static int count_video_devices() {
 
 // Try each video node until one returns a frame
 static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int width, int height, int framerate) {
-    cout << "Starting camera..." << endl;
-
     // Try the stereo capture node first when a stereo pair is attached
     int probe_order[MAX_VIDEO_INDEX];
     int probe_count = 0;

@@ -194,14 +194,16 @@ int main(int argc, char **argv) {
     // Listen so other programs can move the head and pause the camera
     start_interface();
 
-    // Spawn talk after the bus and socket, and before the camera
-    if (!g_no_talk)
-        start_talk_process();
-
-    // Create face tracker after args so --camera and --no-camera apply
+    // Open the camera before talk, so a missing one fails in the startup log
     FaceTracker faceTracker(show_camera, use_camera);
     if (use_camera && faceTracker.isCameraAvailable())
         faceTracker.startTracking();
+    else
+        use_camera = false;
+
+    // Spawn talk after the bus, socket, and camera probe
+    if (!g_no_talk)
+        start_talk_process();
 
     // Log positions after startup prints, so they do not interleave
     if (no_servos)

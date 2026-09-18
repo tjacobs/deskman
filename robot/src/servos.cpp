@@ -151,10 +151,10 @@ int open_servos() {
     // Load servo travel limits from config.json
     load_servo_limits();
 
-    // Park pan and tilt facing forward, and the hat all the way down
+    // Park pan and tilt facing forward, and the hat all the way up
     servos[0].position = degrees_to_servo(servos[0], 0);
     servos[1].position = degrees_to_servo(servos[1], 0);
-    servos[2].position = degrees_to_servo(servos[2], servos[2].degrees_min);
+    servos[2].position = degrees_to_servo(servos[2], servos[2].degrees_high);
 
     // Try USB first, then the onboard UART, keep the first bus that answers
     servo_bus.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
