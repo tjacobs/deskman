@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deskman — The Friendly Robot for Your Desk</title>
+  <meta name="description" content="Deskman is a friendly little desk robot you can talk to. Natural voice conversation, video calls with family, and a face that looks around and reacts. Plug in and say hi." />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="nav__inner">
+      <a class="brand" href="#top">
+        <span class="brand__face" aria-hidden="true"><span class="eye"></span><span class="eye"></span></span>
+        Deskman
+      </a>
+      <nav class="nav__links">
+        <a href="#does">What it does</a>
+        <a href="#specs">Specs</a>
+        <a class="btn btn--primary btn--sm" href="https://www.tindie.com/products/teleport/deskman/" target="_blank" rel="noopener">Buy on Tindie</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero__copy">
+        <p class="eyebrow">Your friendly desk robot</p>
+        <h1>The little robot that <span class="wiggle">talks back</span>.</h1>
+        <p class="lede">
+          Deskman sits on your desk, looks around, and holds a real conversation.
+          Ask it anything, hop on a video call with family, and enjoy a little
+          company through the day.
+        </p>
+        <div class="hero__cta">
+          <a class="btn btn--primary btn--lg" href="https://www.tindie.com/products/teleport/deskman/" target="_blank" rel="noopener">Buy on Tindie</a>
+          <a class="btn btn--ghost btn--lg" href="#watch">Watch it in action ↓</a>
+        </div>
+        <p class="hero__meta">Ships assembled — plug in, join Wi-Fi, and start talking.</p>
+      </div>
+
+      <div class="hero__stage">
+        <div class="deskman" role="img" aria-label="Deskman robot">
+          <div class="deskman__head">
+            <div class="deskman__cam"></div>
+            <div class="deskman__screen">
+              <div class="deskman__eyes">
+                <span class="deskman__eye"></span>
+                <span class="deskman__eye"></span>
+              </div>
+            </div>
+            <div class="deskman__speaker"></div>
+          </div>
+          <div class="deskman__neck"></div>
+          <div class="deskman__base">
+            <div class="deskman__badge"><span>Hello</span>my name is<strong>Deskman</strong></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Benefits -->
+    <section class="trio">
+      <div class="trio__inner">
+        <div class="pill"><strong>Talks</strong><span>naturally</span></div>
+        <div class="pill"><strong>Video calls</strong><span>face to face</span></div>
+        <div class="pill"><strong>Looks at you</strong><span>and reacts</span></div>
+      </div>
+    </section>
+
+    <!-- What it does -->
+    <section id="does" class="build">
+      <h2 class="section-title">What can it do?</h2>
+      <p class="section-sub">
+        No apps, no fuss. Just talk to it — Deskman is happy to help, chat, or
+        keep you company.
+      </p>
+      <div class="tags">
+        <span>Answer your questions</span>
+        <span>Video call family</span>
+        <span>Set reminders &amp; timers</span>
+        <span>Tell you the weather</span>
+        <span>Hold a real chat</span>
+        <span>Keep you company</span>
+        <span>Follow your face</span>
+        <span>React when you talk</span>
+        <span>Look around the room</span>
+        <span>Be a friendly face</span>
+      </div>
+    </section>
+
+    <!-- Voice: OpenAI Realtime -->
+    <section class="local">
+      <div class="local__inner">
+        <div class="local__copy">
+          <p class="eyebrow eyebrow--light">Natural voice</p>
+          <h2>Just talk to it — and it talks right back.</h2>
+          <p>
+            Deskman uses <strong>OpenAI's Realtime</strong> voice, so conversation
+            feels instant and natural. No wake-word gymnastics, no menus, no phone
+            app. Say something, and Deskman answers out loud in real time.
+          </p>
+        </div>
+        <div class="pipeline">
+          <span>You talk</span><i>→</i>
+          <span>Deskman listens</span><i>→</i>
+          <span>Replies out loud</span>
+        </div>
+        <p class="local__note">Quick, back-and-forth conversation — like chatting with a helpful little friend.</p>
+      </div>
+    </section>
+
+    <!-- Video calls -->
+    <section class="feature feature--split">
+      <div class="feature__text">
+        <h2>Face to face, wherever you are</h2>
+        <p>
+          Deskman makes <strong>video calls</strong> — call another Deskman across
+          the house or across the country, or hop on from any web browser. Great
+          for keeping up with family, checking in on grandparents, or bringing a
+          far-away friend to the table.
+        </p>
+      </div>
+      <div class="feature__card">
+        <img src="images/deskman_kitchen.jpg" alt="Deskman on a kitchen counter" loading="lazy" style="width:100%; height:100%; object-fit:cover; border-radius:var(--radius); display:block;" />
+      </div>
+    </section>
+
+    <!-- Looks / Sees -->
+    <section class="twoup">
+      <article class="twoup__card">
+        <div class="twoup__icon twoup__icon--blue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none" />
+            <path d="M12 6.2V3M9.8 4.6 12 3l2.2 1.6" />
+            <path d="M12 17.8V21M9.8 19.4 12 21l2.2-1.6" />
+            <path d="M6.2 12H3M4.6 9.8 3 12l1.6 2.2" />
+            <path d="M17.8 12H21M19.4 9.8 21 12l-1.6 2.2" />
+          </svg>
+        </div>
+        <h3>Looks at you</h3>
+        <p>
+          Deskman turns its head to face you and nods along as you chat. Its little
+          hat lifts to reveal the camera when it's time to see and talk.
+        </p>
+      </article>
+      <article class="twoup__card">
+        <div class="twoup__icon twoup__icon--teal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M2.5 12S6.5 5 12 5s9.5 7 9.5 7-4 7-9.5 7-9.5-7-9.5-7Z" />
+            <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+          </svg>
+        </div>
+        <h3>Sees you</h3>
+        <p>
+          A built-in camera tracks your face, so Deskman keeps looking your way as
+          you move around — and it's the same camera you'll use for video calls.
+        </p>
+      </article>
+    </section>
+
+    <!-- Gallery -->
+    <section class="gallery">
+      <h2 class="section-title">On Your Desk</h2>
+      <p class="section-sub">A friendly little robot that lives on your desk — or wherever you put him.</p>
+      <div class="gallery__grid">
+        <figure class="shot"><img src="images/deskman_hero.jpg" alt="Deskman close-up on a desk" loading="lazy" /></figure>
+        <figure class="shot"><img src="images/deskman_kitchen.jpg" alt="Deskman on a kitchen counter" loading="lazy" /></figure>
+      </div>
+    </section>
+
+    <!-- Watch -->
+    <section id="watch" class="watch">
+      <h2 class="section-title">See Deskman in action</h2>
+      <p class="section-sub">Fresh off the bench — plus more of Deskman doing its thing.</p>
+      <div class="watch__featured">
+        <iframe src="https://www.youtube.com/embed/SGH1Ce32jVI" title="Deskman — latest video"
+          frameborder="0" loading="lazy" allowfullscreen
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"></iframe>
+      </div>
+      <div class="watch__grid">
+        <a class="vid" href="https://www.youtube.com/watch?v=luznl6VUY04" target="_blank" rel="noopener" aria-label="Watch Deskman video">
+          <img src="https://img.youtube.com/vi/luznl6VUY04/maxresdefault.jpg" onerror="this.onerror=null;this.src='https://img.youtube.com/vi/luznl6VUY04/hqdefault.jpg'" alt="Deskman video thumbnail" loading="lazy" />
+          <span class="vid__play" aria-hidden="true">▶</span>
+        </a>
+        <a class="vid" href="https://www.youtube.com/watch?v=Xb3BSRsD0Rc" target="_blank" rel="noopener" aria-label="Watch Deskman video">
+          <img src="https://img.youtube.com/vi/Xb3BSRsD0Rc/maxresdefault.jpg" onerror="this.onerror=null;this.src='https://img.youtube.com/vi/Xb3BSRsD0Rc/hqdefault.jpg'" alt="Deskman video thumbnail" loading="lazy" />
+          <span class="vid__play" aria-hidden="true">▶</span>
+        </a>
+      </div>
+    </section>
+
+    <!-- Specs -->
+    <section id="specs" class="specs">
+      <h2 class="section-title">What's inside</h2>
+      <div class="specs__grid">
+        <div class="spec">Raspberry Pi 5</div>
+        <div class="spec">7" touchscreen face</div>
+        <div class="spec">Camera</div>
+        <div class="spec">Microphone</div>
+        <div class="spec">Speaker</div>
+        <div class="spec">3 motors (head &amp; hat)</div>
+        <div class="spec">Rechargeable battery</div>
+        <div class="spec">Wi-Fi</div>
+        <div class="spec">3D-printed body</div>
+      </div>
+    </section>
+
+    <!-- Why -->
+    <section class="why">
+      <div class="why__inner">
+        <h2>Why a robot on your desk?</h2>
+        <p>
+          Talking to an assistant on your phone is fine. A little robot that turns
+          to look at you, chats naturally, and puts a friendly face on your video
+          calls is something else entirely. Deskman gives your desk a bit of
+          personality — and a genuinely helpful companion.
+        </p>
+        <div class="perfect">
+          <span>Home</span><span>Work desk</span><span>Kids</span>
+          <span>Grandparents</span><span>Company</span><span>Video calls</span><span>Just for fun</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta">
+      <div class="cta__card">
+        <h2>Put a friendly robot<br />on your desk.</h2>
+        <p>Deskman arrives assembled and ready to say hi.</p>
+        <div class="cta__buttons">
+          <a class="btn btn--primary btn--lg" href="https://www.tindie.com/products/teleport/deskman/" target="_blank" rel="noopener">Buy on Tindie</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Designed by <a href="https://www.tindie.com/stores/teleport/" target="_blank" rel="noopener">Teleport Devices</a> in the USA</span>
+    <span class="footer__made">Tinkerer? Deskman is <a href="https://github.com/tjacobs/deskman" target="_blank" rel="noopener">open-source</a> &amp; hackable.</span>
+    <span>© <span id="year"></span> Teleport Devices</span>
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    // Click the logo or the robot → his head looks around
+    (function () {
+      var brand = document.querySelector('.brand');
+      var deskman = document.querySelector('.deskman');
+      if (!brand || !deskman) return;
+      function excite() {
+        deskman.classList.remove('is-excited');
+        void deskman.offsetWidth;
+        deskman.classList.add('is-excited');
+      }
+      brand.addEventListener('click', function (e) { e.preventDefault(); excite(); });
+      deskman.addEventListener('click', excite);
+      deskman.addEventListener('animationend', function (e) {
+        if (e.animationName === 'head-look') deskman.classList.remove('is-excited');
+      });
+    })();
+  </script>
+</body>
+</html>
