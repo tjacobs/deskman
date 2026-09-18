@@ -36,6 +36,7 @@ main() {
     disable_software_updater
     configure_session
     configure_dsi_panel
+    configure_servo_uart
     install_panel_backlight_service
     persist_display_rotation
     disable_screen_idle
@@ -99,6 +100,8 @@ PI_PCMANFM_DEFAULT="/etc/xdg/pcmanfm/default"
 BOOT_CONFIG="/boot/firmware/config.txt"
 PANEL_OVERLAY="vc4-kms-dsi-waveshare-panel,8_0_inch"
 PANEL_COMMENT="Waveshare Rev2.1 driver board, 7 inch 1280x800 panel, I2C0, CAM/DISP 1"
+SERVO_UART_OVERLAY="uart0-pi5"
+SERVO_UART_COMMENT="GPIO 14/15 UART for the STS3215 servo bus"
 
 # Panel MCU on the DSI connector I2C bus, one register enables the LCD rails and another sets the backlight PWM
 PANEL_I2C_BUS="11"
@@ -109,6 +112,8 @@ PANEL_LCD_ENABLE="0x17"
 PANEL_PWM_FULL="0xff"
 PANEL_BACKLIGHT_SERVICE="panel-backlight.service"
 PANEL_BACKLIGHT_UNIT="/etc/systemd/system/panel-backlight.service"
+PANEL_BACKLIGHT_SCRIPT="/usr/local/sbin/panel-backlight"
+PANEL_I2C_DEVICE="/dev/i2c-${PANEL_I2C_BUS}"
 I2C_SET="/usr/sbin/i2cset"
 
 # Create the user config folders a first graphical login would
@@ -476,6 +481,24 @@ configure_dsi_panel() {
     printf '\n%s\n%s\n%s\n' '[all]' "# ${PANEL_COMMENT}" "dtoverlay=${PANEL_OVERLAY}" >> "${BOOT_CONFIG}"
 }
 
+# Enable GPIO 14/15 UART so the STS3215 servo bus has a port on Pi 5
+configure_servo_uart() {
+    # Only the Pi 5 overlay creates ttyAMA0 on the 40-pin header
+    if [[ "${MACHINE}" != "pi" || ! -f "${BOOT_CONFIG}" ]]; then
+        return
+    fi
+
+    # Leave an overlay that is already there alone
+    if grep -q "^dtoverlay=${SERVO_UART_OVERLAY}$" "${BOOT_CONFIG}"; then
+        echo "Servo UART overlay already set"
+        return
+    fi
+
+    # Put it in the pi5 filter so other Pi models keep their own UART setup
+    echo "Adding servo UART overlay to ${BOOT_CONFIG}"
+    printf '\n%s\n%s\n%s\n' '[pi5]' "# ${SERVO_UART_COMMENT}" "dtoverlay=${SERVO_UART_OVERLAY}" >> "${BOOT_CONFIG}"
+}
+
 # Light the panel every boot, the kernel backlight device never reaches the hardware
 install_panel_backlight_service() {
     # Only the Pi carries the panel MCU on I2C
@@ -483,8 +506,25 @@ install_panel_backlight_service() {
         return
     fi
 
-    # Write a unit that enables the LCD rails then drives the backlight to full
+    # Write a script that lights the panel, or exits clean when it is unplugged
     echo "Installing ${PANEL_BACKLIGHT_SERVICE}"
+    cat > "${PANEL_BACKLIGHT_SCRIPT}" <<EOF
+#!/bin/bash
+# Light the Waveshare DSI panel, or skip cleanly when it is unplugged
+if [[ ! -e ${PANEL_I2C_DEVICE} ]]; then
+    echo "DSI panel I2C bus not present, backlight skipped."
+    exit 0
+fi
+if ! ${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_LCD_REGISTER} ${PANEL_LCD_ENABLE} 2>/dev/null; then
+    echo "DSI panel not plugged in, backlight skipped."
+    exit 0
+fi
+${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_PWM_REGISTER} ${PANEL_PWM_FULL}
+echo "DSI panel backlight on."
+EOF
+    chmod 755 "${PANEL_BACKLIGHT_SCRIPT}"
+
+    # Write a unit that runs that script once at boot
     cat > "${PANEL_BACKLIGHT_UNIT}" <<EOF
 [Unit]
 Description=Force Waveshare DSI panel backlight on
@@ -492,18 +532,18 @@ After=multi-user.target
 
 [Service]
 Type=oneshot
-ExecStart=${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_LCD_REGISTER} ${PANEL_LCD_ENABLE}
-ExecStart=${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_PWM_REGISTER} ${PANEL_PWM_FULL}
+ExecStart=${PANEL_BACKLIGHT_SCRIPT}
 RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-    # Enable it for later boots and light the panel now
+    # Enable it for later boots and light the panel now, the script prints what happened
     systemctl daemon-reload
     systemctl enable "${PANEL_BACKLIGHT_SERVICE}"
-    systemctl start "${PANEL_BACKLIGHT_SERVICE}" || true
+    "${PANEL_BACKLIGHT_SCRIPT}"
+    systemctl start "${PANEL_BACKLIGHT_SERVICE}"
 }
 
 # Start X already in portrait and keep GNOME from flipping it back

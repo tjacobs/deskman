@@ -57,4 +57,29 @@ sudo i2cset -y -f 11 0x45 0x95 0x17
 sudo i2cset -y -f 11 0x45 0x96 0xff
 ```
 
-`install_system.sh` installs these as a boot service, so the panel lights on its own.
+`install_system.sh` installs these as a boot service, so the panel lights on its own. If the screen is unplugged the service stays clean and prints that the panel is not plugged in.
+
+## Servos
+
+STS3215 serial bus servos on GPIO 14 (TX) and GPIO 15 (RX), 1 Mbps. Pi 5 leaves that UART off until `uart0-pi5` is loaded, which creates `/dev/ttyAMA0`.
+
+Add to `/boot/firmware/config.txt`, then reboot:
+
+```
+[pi5]
+# GPIO 14/15 UART for the STS3215 servo bus
+dtoverlay=uart0-pi5
+```
+
+`install_system.sh` writes that overlay. To enable it without a reboot:
+
+```bash
+sudo dtoverlay uart0-pi5
+```
+
+Then ping and read positions, no moves:
+
+```bash
+cd build
+./robot --no-servos
+```

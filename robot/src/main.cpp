@@ -66,9 +66,6 @@ static const int TALK_EXEC_FAILED = 127;
 static const int FACE_TRACK_COUNTS = 20;
 static const int FACE_LOOK_TILT_DEGREES = 30;
 
-// Poll while printing servo positions
-static const int SERVO_LOG_POLL_MS = 100;
-
 // Process and script names to match
 static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
@@ -109,13 +106,12 @@ static bool g_call_had_talk = false;
 VectorRenderer vectorRenderer;
 
 // Later in this file
-static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos);
+static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos);
 static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
 static void set_up_display();
 static void signalHandler(int signal);
 static void check_already_running();
 static pid_t find_other_running();
-static int print_servo_positions();
 static void rotate_screen();
 static const char* wait_for_portrait_output();
 static bool output_is_connected(const char* output);
@@ -155,10 +151,9 @@ int main(int argc, char **argv) {
     // Default the flags the parse can turn on
     bool sweep_only = false;
     bool no_servos = false;
-    bool print_servos = false;
 
     // Parse arguments
-    int exit_code = parse_arguments(argc, argv, sweep_only, no_servos, print_servos);
+    int exit_code = parse_arguments(argc, argv, sweep_only, no_servos);
     if (exit_code != KEEP_RUNNING)
         return exit_code;
 
@@ -170,10 +165,6 @@ int main(int argc, char **argv) {
 
     // Relax servos on any later exit
     atexit([]() { relax_servos(); });
-
-    // Print positions only, skip the rest of the robot
-    if (print_servos)
-        return print_servo_positions();
 
     // Rotate the screen and keep touch aligned
     rotate_screen();
@@ -224,7 +215,7 @@ int main(int argc, char **argv) {
 }
 
 // Parse flags, return the exit code, or KEEP_RUNNING to carry on
-static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos) {
+static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos) {
     g_no_talk = false;
     for (int i = 1; i < argc; i++) {
         string argument = argv[i];
@@ -237,8 +228,6 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             g_no_talk = true;
             use_camera = false;
             show_camera = false;
-        } else if (argument == "--servos-print") {
-            print_servos = true;
         } else if (argument == "--id") {
             if (i + 2 >= argc) {
                 cerr << "Error: --id needs old and new ID" << endl;
@@ -256,7 +245,6 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             cout << "Options:" << endl;
             cout << "  --no-talk            Do not spawn talk.py" << endl;
             cout << "  --servos             Sweep servos around center, scan IDs 1 to 20, then exit" << endl;
-            cout << "  --servos-print       Relax servos and print positions every second, then exit" << endl;
             cout << "  --no-servos          Relax servos, print positions every second, no talk.py, no camera, no face tracking" << endl;
             cout << "  --id OLD NEW         Set a servo ID, OLD is 0 to address every servo on the bus" << endl;
             cout << "  --camera             Show face-tracking video feed on the display" << endl;
@@ -450,17 +438,6 @@ static pid_t find_other_running() {
     }
     pclose(pipe);
     return found_pid;
-}
-
-// Relax the servos and print where they are until quit
-static int print_servo_positions() {
-    relax_servos();
-    start_servo_position_log();
-    while (!g_quit) {
-        sleep_for(milliseconds(SERVO_LOG_POLL_MS));
-    }
-    stop_servo_position_log();
-    return 0;
 }
 
 // Rotate Jetson to portrait, then map touch on Jetson or Pi

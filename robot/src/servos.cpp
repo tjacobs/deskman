@@ -59,9 +59,9 @@ static const int SERVO_ACCELERATION = 20;
 // Sweep around center, narrow first then wide, and slower than normal
 static const int SWEEP_NUDGE_PERCENT = 20;
 static const int SWEEP_RANGE_PERCENT = 80;
-static const int SWEEP_STEP_MS = 2000;
+static const int SWEEP_STEP_MS = 5000;
 static const int SWEEP_POLL_MS = 50;
-static const int SWEEP_ARRIVAL_AMOUNT = 10;
+static const int SWEEP_ARRIVAL_AMOUNT = 15;
 static const int SWEEP_SPEED = 600;
 static const int SWEEP_ACCELERATION = 10;
 
@@ -618,18 +618,24 @@ static void sweep_line(const char *label, Servo &servo, int position) {
     printf("%-*s command %d\n", SWEEP_COMMAND_COLUMN, label, command);
     fflush(stdout);
 
-    // Wait before the next line, stop on Ctrl-C
+    // Wait until this motor is on the commanded count, or the step time runs out
     int waited_ms = 0;
+    int after = -1;
+    int delta = 0;
     while (waited_ms < SWEEP_STEP_MS && !g_quit) {
         sleep_for(milliseconds(SWEEP_POLL_MS));
         waited_ms += SWEEP_POLL_MS;
+        after = read_present_position(servo);
+        if (after == -1)
+            continue;
+        delta = after - command;
+        if (delta < 0)
+            delta = -delta;
+        if (delta <= SWEEP_ARRIVAL_AMOUNT)
+            return;
     }
 
     // Only say when the motor did not get there
-    int after = read_present_position(servo);
-    int delta = after - command;
-    if (delta < 0)
-        delta = -delta;
     if (after == -1) {
         printf("%s failed, commanded %d, no position reply\n", label, command);
         fflush(stdout);

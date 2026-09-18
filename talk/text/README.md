@@ -69,7 +69,7 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 
 ### Talk logs
 
-`load_talk_log` reads `../talks/YYYY-MM-DD.txt` into context for today, yesterday, or a date, so the model can answer questions about prior conversations.
+`load_talk_log` reads `../history/YYYY-MM-DD.txt` into context for today, yesterday, or a date, so the model can answer questions about prior conversations.
 
 ### System
 

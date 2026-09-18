@@ -121,7 +121,7 @@ Facts you ask it to remember are saved in `memory.json` and survive reboot. Dail
 
 Say `quit` or `exit` as the command and it says `Goodbye!` and stops. If talk.py started the text server, it stops it on exit. 
 
-Conversations are appended to `talks/YYYY-MM-DD.txt`, including tool calls and results. You can ask it to remember a day's conversations to put it into memory context.
+Conversations are appended to `history/YYYY-MM-DD.txt`, including tool calls and results. You can ask it to remember a day's conversations to put it into memory context.
 
 Say `remind me at dinner time` or `remind me at 10 PM for bedtime` to schedule a spoken reminder. Say `what reminders do I have` to list them, or `cancel the dinner reminder` to remove one. On startup, dinner and bedtime reminders are seeded from matching memory facts when those reminders are missing.
 
@@ -153,17 +153,17 @@ Streams microphone audio up to the [OpenAI Realtime API](https://platform.openai
 
 On its own, `realtime.py` opens the microphone and talks until the room goes quiet for 20 seconds. Pass a question to send that first instead of waiting for speech. `--model` and `--voice` override `config.json` for one run.
 
-Under `talk.py --realtime`, the wake word still runs locally on whisper, and only what follows is streamed, so the microphone is not on a paid connection all day. Each conversation opens a session and closes it after the room has been quiet, and turns are written to `talks/` the same as any other.
+Under `talk.py --realtime`, the wake word still runs locally on whisper, and only what follows is streamed, so the microphone is not on a paid connection all day. Startup greets on the realtime session and keeps it open, so the first line needs no wake word. Each conversation closes after 20 seconds of quiet, then a 20 second follow-up window still takes speech without the wake word, then it waits for `robot` again. Turns are written to `history/` the same as any other.
 
 The local tools all still work, bridged into Realtime function calls, so the head, clock, memory, reminders, and volume behave as usual. The kokoro voice tools are held back, they pick a voice OpenAI is not speaking with, so `set_voice` and `list_voices` are answered here instead with the ten OpenAI voices.
 
 OpenAI fixes a session's voice once that session has spoken, so a voice change cannot be sent to the open one. Changing voice closes the session and opens a new one on the chosen voice, replays the last ten turns into it so nothing is forgotten, and has the new voice say a line so you hear the change. The session asked to switch stays silent, since it could only confirm in the old voice. A pick holds for the rest of the run and is not written to `config.json`, so a restart goes back to the configured voice. `list_voices` also reports how each voice sounds, male, female, or neutral, so asking for a man or a woman lands on one.
 
-Realtime needs OpenAI, so it forces the cloud backend and never starts the local Gemma server, and it cannot be combined with `--local`. It needs `websocket-client`, which `install.sh` installs. Kokoro is not loaded at startup since replies arrive as OpenAI audio, so the greeting prints instead of being spoken and kokoro waits until a reminder or a goodbye actually needs a local voice. That takes talk from usable in about fifteen seconds to under two.
+Realtime needs OpenAI, so it forces the cloud backend and never starts the local Gemma server, and it cannot be combined with `--local`. It needs `websocket-client`, which `install.sh` installs. Kokoro is not loaded at startup since replies arrive as OpenAI audio, so the greeting is spoken on the realtime session and kokoro waits until a reminder or a goodbye actually needs a local voice. That takes talk from usable in about fifteen seconds to under two.
 
 Audio only travels at 24 kHz mono, the only rate the API takes, so microphone blocks are resampled up from 16 kHz on the way out. The microphone is muted while it speaks, so it does not hear itself, which also means you cannot interrupt it mid-reply.
 
-Input audio is transcribed by a second, cheap model purely so the heard lines reach the console and `talks/`. The model itself never reads that text. `gpt-live-transcribe` runs by default and sends words while you are still talking, so the `Heard:` line fills in as you speak. The model's own words are not a second transcriber, they arrive as `response.output_audio_transcript.delta` from the realtime model while it speaks, so the `Reply:` line fills in the same way. Set `TRANSCRIBE_LIVE` to false in `realtime.py` for the older `gpt-4o-mini-transcribe` on input and to print each `Reply:` in one go after the turn, which is what `PRINT_REPLY_LIVE` follows. Dropping the `transcription` key from the session would still answer normally, it would just have no record of what you said.
+Input audio is transcribed by a second, cheap model purely so the heard lines reach the console and `history/`. The model itself never reads that text. `gpt-live-transcribe` runs by default and sends words while you are still talking, so the `Heard:` line fills in as you speak. The model's own words are not a second transcriber, they arrive as `response.output_audio_transcript.delta` from the realtime model while it speaks, so the `Reply:` line fills in the same way. Set `TRANSCRIBE_LIVE` to false in `realtime.py` for the older `gpt-4o-mini-transcribe` on input and to print each `Reply:` in one go after the turn, which is what `PRINT_REPLY_LIVE` follows. Dropping the `transcription` key from the session would still answer normally, it would just have no record of what you said.
 
 ## config.json
 

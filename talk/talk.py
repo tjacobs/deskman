@@ -97,7 +97,7 @@ TEST_QUESTION = 'What is the time?'
 ACCENT_PHRASE = 'I would rather park the car than pass the time scheduling a due date.'
 
 # Config dirs and env
-TALKS_DIR = os.path.join(utils.SCRIPT_DIR, 'talks')
+HISTORY_DIR = os.path.join(utils.SCRIPT_DIR, 'history')
 SPOKEN_WAV = 'talk.wav'
 HEARD_WAV = 'heard.wav'
 WAKE_WAV = 'wake.wav'
@@ -441,10 +441,18 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     start_reminder_checker(listener, kokoro_pipeline)
 
     # Greet, then keep the conversation open so the first line needs no wake word
-    if SAY_HI:
+    if SAY_HI and not REALTIME_MODE:
         greet(listener, kokoro_pipeline)
         LAST_ASK_AT = time.time()
+    elif SAY_HI:
+        LAST_ASK_AT = time.time()
     print_talk_help()
+
+    # Realtime listens itself after the greeting, so the first line is not lost to whisper
+    if SAY_HI and REALTIME_MODE:
+        run_realtime_turn(listener, '', True)
+        LAST_ASK_AT = time.time()
+        print_talk_status()
     try:
         while True:
             # Ask itself the test question, mic stays on so it hears itself
@@ -479,7 +487,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
             # Hand the whole conversation to OpenAI when streaming audio both ways
             if REALTIME_MODE:
-                run_realtime_turn(listener, command)
+                run_realtime_turn(listener, command, False)
                 LAST_ASK_AT = time.time()
                 print_talk_status()
                 continue
@@ -534,7 +542,10 @@ def print_talk_status():
     print(TALK_READY, flush=True)
 
 # Hold one spoken conversation with OpenAI, audio up and audio down
-def run_realtime_turn(listener, command):
+def run_realtime_turn(listener, command, greet):
+    # Drop leftover capture from loading and connecting, it would go up as speech
+    listener.mute()
+
     # Load the config
     config = realtime.load_config()
 
@@ -548,7 +559,7 @@ def run_realtime_turn(listener, command):
 
     # Share the microphone this loop already owns, so nothing fights for the device
     try:
-        realtime.run_conversation(session, listener, command, log_talk)
+        realtime.run_conversation(session, listener, command, log_talk, GREETING if greet else '')
     except Exception as error:
         print_error('realtime conversation failed', error)
         reply_after_cloud_failure(listener, command)
@@ -773,10 +784,8 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
             close_conversation()
             continue
 
-        # While the follow-up window is still open, treat any speech as the command
-        if conversation_open():
-            if not text:
-                continue
+        # Treat speech from that wait as the command, even if the window ended while it was heard
+        if follow_up:
             if has_wake_word(text):
                 acknowledge_wake(listener)
                 command = text_after_wake(text)
@@ -980,8 +989,8 @@ def available_memory_gb():
 
 # Append one command, tool lines, and reply to today's talk log
 def log_talk(command, reply):
-    os.makedirs(TALKS_DIR, exist_ok=True)
-    path = os.path.join(TALKS_DIR, time.strftime('%Y-%m-%d') + '.txt')
+    os.makedirs(HISTORY_DIR, exist_ok=True)
+    path = os.path.join(HISTORY_DIR, time.strftime('%Y-%m-%d') + '.txt')
     stamp = talk_log_time()
     with open(path, 'a', encoding='utf-8') as talk_file:
         talk_file.write(f'{stamp} {command}\n')

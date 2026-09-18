@@ -73,6 +73,7 @@ CONNECT_TIMEOUT = 30
 RECEIVE_TIMEOUT = 0.2
 IDLE_SECONDS = 20.0
 SPEAK_LINE_SECONDS = 15.0
+ECHO_SECONDS = 0.8
 APPEND_BYTES = 32000
 BLOCKS_PER_SECOND = 10
 REALTIME_RATE = 24000
@@ -95,8 +96,9 @@ def main():
     if arguments.voice:
         config['realtime_voice'] = arguments.voice
 
-    # Open the microphone before the socket
+    # Open the microphone before the socket, muted so connect time is not sent as speech
     microphone = Microphone()
+    microphone.mute()
 
     # Open the session
     session = open_session(config)
@@ -104,7 +106,7 @@ def main():
     # Talk until the room goes quiet
     try:
         # Run the conversation
-        run_conversation(session, microphone, arguments.ask, ignore_turn)
+        run_conversation(session, microphone, arguments.ask, ignore_turn, '')
     except KeyboardInterrupt:
         # Stop the conversation
         print('Stopped.', flush=True)
@@ -209,24 +211,26 @@ def session_realtime_tools():
     return tools + REALTIME_VOICE_TOOLS
 
 # Stream microphone audio up and play replies back until the room goes quiet
-def run_conversation(session, microphone, first_question, on_turn):
+def run_conversation(session, microphone, first_question, on_turn, greet_text):
     # Keep the session handed in, the caller closes that one itself
     opened = session
 
     # Talk until the room goes quiet, a voice change carries the conversation into a new session
+    expect_audio = bool(first_question or greet_text)
     while True:
         # Talk in this session
-        voice = run_session(session, microphone, first_question, on_turn)
+        voice = run_session(session, microphone, first_question, on_turn, greet_text, expect_audio)
         if not voice:
             break
 
         # Reopen on the chosen voice, OpenAI fixes the voice once a session has spoken
         microphone.mute()
         session = reopen_session(session, voice)
-        microphone.unmute()
 
-        # Drop the opening question, the session that just closed already asked it
+        # Drop the opening question and greeting, the session that just closed already said them
         first_question = None
+        greet_text = ''
+        expect_audio = True
 
     # Close a session opened here, the caller only knows about the one it handed in
     if session is not opened:
@@ -236,9 +240,12 @@ def run_conversation(session, microphone, first_question, on_turn):
     print('Conversation closed.', flush=True)
 
 # Talk in one session, returning a voice when the conversation should carry on in a new one
-def run_session(session, microphone, first_question, on_turn):
+def run_session(session, microphone, first_question, on_turn, greet_text, expect_audio):
     # Set the callback for when a turn is finished
     session.on_turn = on_turn
+
+    # Drop leftover capture from before this session, it would go up as the person talking
+    microphone.mute()
 
     # Send an opening question when one was passed, the wake word already heard it
     if first_question:
@@ -250,6 +257,14 @@ def run_session(session, microphone, first_question, on_turn):
 
         # Send the question as a user turn and ask for a spoken answer
         ask_question(session, first_question)
+
+    # Say hello on this session, a one-shot greet hangs up before the person can answer
+    elif greet_text:
+        speak_greeting(session, greet_text)
+
+    # Listen now when nothing is about to be spoken
+    elif not expect_audio:
+        microphone.unmute()
 
     # Push microphone audio up in the background while this loop handles replies
     sender = threading.Thread(target=send_microphone, args=(session, microphone), daemon=True)
@@ -292,6 +307,11 @@ def ask_question(session, question):
     session.send({'type': 'conversation.item.create', 'item': { 'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': question}]}})
     session.send({'type': 'response.create'})
 
+# Say a fixed line on this session, then keep it open for the person to talk
+def speak_greeting(session, text):
+    accent = session.config['realtime_accent']
+    session.send({'type': 'response.create', 'response': {'instructions': f'{accent} Say exactly this, and nothing else: {text}'}})
+
 # Read microphone blocks, resample them, and append them to the input buffer
 def send_microphone(session, microphone):
     # While running
@@ -299,6 +319,8 @@ def send_microphone(session, microphone):
         # Get the next block
         block = microphone.next_block()
         if block is None:
+            continue
+        if microphone.muted:
             continue
 
         # Resample to the only rate the realtime API takes, then send as signed 16 bit integer bytes
@@ -330,18 +352,25 @@ def handle_event(session, microphone, speaker, event):
 
     # Play the reply as it arrives, with the microphone off so it does not hear itself
     if kind == 'response.output_audio.delta':
-        microphone.mute()
+        if not microphone.muted:
+            microphone.mute()
+            session.send({'type': 'input_audio_buffer.clear'})
         speaker.play(base64.b64decode(event['delta']))
         return True
 
-    # Let the microphone back in once the speaker has drained
+    # Let the microphone back in once the speaker has drained and the room echo has died
     if kind == 'response.output_audio.done':
         speaker.drain()
+        session.send({'type': 'input_audio_buffer.clear'})
+        time.sleep(ECHO_SECONDS)
+        session.send({'type': 'input_audio_buffer.clear'})
         microphone.unmute()
         return True
 
     # Print the heard words as they arrive, the live transcriber sends them mid sentence
     if kind == 'conversation.item.input_audio_transcription.delta':
+        if microphone.muted:
+            return False
         delta = event.get('delta', '')
         if not delta:
             return False
@@ -355,22 +384,22 @@ def handle_event(session, microphone, speaker, event):
 
         # Add the words to the line already on screen
         print(delta, end='', flush=True)
+        session.heard_streamed = True
         return True
 
-    # Print both sides of the conversation, and log them as a pair once the reply lands
+    # Keep the heard text, print it only when it was not already streamed
     if kind == 'conversation.item.input_audio_transcription.completed':
-        session.heard = event.get('transcript', '').strip()
-
-        # End the line the words streamed onto, they are on screen already
-        if session.heard_open:
-            close_stream_lines(session)
-            return bool(session.heard)
-
-        # Print the whole line, the transcriber sent nothing until the turn was over
-        if not session.heard:
+        if microphone.muted:
             return False
-        print(f'Heard: {session.heard}', flush=True)
-        return True
+        session.heard = event.get('transcript', '').strip()
+        streamed = session.heard_streamed or session.heard_open
+        if session.heard_open:
+            session.heard_open = False
+            print(flush=True)
+        session.heard_streamed = False
+        if not streamed and session.heard and not session.reply_open:
+            print(f'Heard: {session.heard}', flush=True)
+        return bool(session.heard)
 
     # Print the model's words as it speaks, these come from the realtime model itself not a transcriber
     if kind == 'response.output_audio_transcript.delta':
@@ -404,11 +433,10 @@ def handle_event(session, microphone, speaker, event):
         if not streamed:
             print(f'Reply: {reply}', flush=True)
 
-        # Call the callback
-        session.on_turn(session.heard, reply)
-
-        # Keep the pair, a session reopened on a new voice is replayed from this
-        session.history.append((session.heard, reply))
+        # Call the callback when this reply was to something heard, skip the greeting
+        if session.heard:
+            session.on_turn(session.heard, reply)
+            session.history.append((session.heard, reply))
 
         # Clear the heard text
         session.heard = ''
@@ -648,6 +676,7 @@ class Session:
         self.tool_pending = False
         self.heard = ''
         self.heard_open = False
+        self.heard_streamed = False
         self.reply_open = False
         self.reply_streamed = False
         self.on_turn = ignore_turn

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# Load a day's talk log from talks/YYYY-MM-DD.txt into the model context
+# Load a day's talk log from history/YYYY-MM-DD.txt into the model context
 
 # Imports
 import os
@@ -12,7 +12,7 @@ import dates
 # Config
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SPEAK_DIR = os.path.dirname(SCRIPT_DIR)
-TALKS_DIR = os.path.join(SPEAK_DIR, "talks")
+HISTORY_DIR = os.path.join(SPEAK_DIR, "history")
 MAX_TALK_LOG_CHARS = 6000
 TALK_LOG_RETRY_PROMPT = "Do not guess. Call load_talk_log with the requested day now, then answer using only the tool result."
 
@@ -85,7 +85,7 @@ def run_load_talk_log(arguments=None):
     day = parse_talk_day(str(arguments.get("date") or "today"))
     if day is None:
         day = date.today()
-    path = os.path.join(TALKS_DIR, day.isoformat() + ".txt")
+    path = os.path.join(HISTORY_DIR, day.isoformat() + ".txt")
     if not os.path.isfile(path):
         return f"No talk log found for {day.isoformat()}."
 
