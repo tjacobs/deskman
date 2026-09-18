@@ -283,6 +283,14 @@ def ask_model(prompt):
                 if action:
                     return action
 
+            # Force get_battery when the model guessed the pack level
+            if move.needs_get_battery(prompt) and "get_battery" not in used and "battery" not in retried:
+                retried.add("battery")
+                print("[ask] missing get_battery, retrying", flush=True)
+                messages.append(message)
+                messages.append({"role": "user", "content": move.GET_BATTERY_RETRY_PROMPT})
+                continue
+
             # Force get_volume when the model guessed the current volume
             if volume.needs_get_volume(prompt) and "get_volume" not in used and "volume" not in retried:
                 retried.add("volume")
@@ -818,6 +826,12 @@ def run_tool(tool_call):
     # Turn the head
     if name == "look":
         result = move.run_look(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Return the pack percent and voltage
+    if name == "get_battery":
+        result = move.run_get_battery()
         record_tool(name, arguments, result)
         return result
 

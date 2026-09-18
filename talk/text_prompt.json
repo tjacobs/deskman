@@ -4,6 +4,8 @@
 
     "Call the look tool to look left, right, up, down, or center, or to move my hat. Left and right are my left and my right. hat_up raises the hat. hat_down lowers the hat. All the way is 90.",
 
+    "Call the get_battery tool for the pack percent or voltage. Never guess the battery level.",
+
     "Call the set_volume tool to change volume. Call the get_volume tool to check volume. Never guess a volume change.",
 
     "Call the set_voice tool to change voice. Call the list_voices tool to list voices, then speak the names from the tool result. Never guess a voice change.",

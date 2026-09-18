@@ -4,14 +4,16 @@
 
 # Imports
 import os
+import re
 import sys
 
 # Config
 ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 90
 LOOK_DIRECTIONS = ["left", "right", "center", "up", "down", "hat_up", "hat_down"]
+GET_BATTERY_RETRY_PROMPT = "Do not guess. Call get_battery now, then answer using only the tool result."
 
-# Tools the local model can call for head movement
+# Tools the local model can call for the head and pack
 TOOLS = [
     {
         "type": "function",
@@ -33,6 +35,14 @@ TOOLS = [
                 },
                 "required": ["direction"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_battery",
+            "description": "Get the robot pack battery percent and voltage.",
+            "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
@@ -64,6 +74,24 @@ def run_look(arguments):
             return f"Look failed: {error}"
 
     return f"Look is unavailable: {socket_error}"
+
+# Read pack percent and voltage from the robot socket
+def run_get_battery():
+    try:
+        from robot_move import battery_reading
+        percent, voltage = battery_reading()
+    except Exception as error:
+        return f"Battery is unavailable: {error}"
+    if percent is None or voltage is None:
+        return "Battery meter is not available."
+    return f"Battery is {percent} percent, {voltage:.2f} volts."
+
+# Return true when the user wants the pack level
+def needs_get_battery(prompt):
+    text = prompt.lower()
+    if re.search(r"\bbatter(y|ies)\b", text):
+        return True
+    return bool(re.search(r"\b(charge|voltage)\b", text) and re.search(r"\b(what|how|percent|left)\b", text))
 
 # Import ~/robot/src/look.py once
 def load_robot_look():

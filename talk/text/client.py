@@ -249,6 +249,7 @@ def content_tools_instruction(tool_names):
         "arguments must be a JSON object. "
         'For calculate use {"name":"calculate","arguments":{"expression":"7 + 8"}}. '
         'For look use {"direction":"left"|"right"|"center"|"up"|"down"|"hat_up"|"hat_down"} and degrees 90 for all the way. '
+        'For get_battery use {"name":"get_battery","arguments":{}}. '
         'For set_volume use {"percent":N}. '
         'For set_voice use {"voice":"..."}. '
         'For remember or forget use {"text":"..."}. '

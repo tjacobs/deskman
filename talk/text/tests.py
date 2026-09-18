@@ -45,6 +45,7 @@ TOOL_TESTS = [
     {"name": "get_model_size", "prompt": "Are you a 1B or 2B model?", "tools": ["get_system_info"], "contains": ["billion"]},
     {"name": "load_talk_log", "prompt": "Load yesterday's talk log.", "tools": ["load_talk_log"]},
     {"name": "get_volume", "prompt": "What is the volume?", "tools": ["get_volume"]},
+    {"name": "get_battery", "prompt": "What is your battery percent?", "tools": ["get_battery"]},
     {"name": "list_voices", "prompt": "List the voices.", "tools": ["list_voices"]},
     {"name": "list_reminders", "prompt": "What reminders are set?", "tools": ["list_reminders"]},
     {"name": "remember", "prompt": f"Remember that {TEST_MEMORY_TEXT}.", "tools": ["remember"]},
