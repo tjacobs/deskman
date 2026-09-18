@@ -58,8 +58,15 @@ REALTIME_VOICE_TOOLS = [
 # Config how many past turns are replayed into a session reopened on a new voice
 REPLAY_TURNS = 10
 
-# Config the transcriber, the model hears the audio itself, this only writes the heard lines to the log
-TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
+# Config the transcribers, the model hears the audio itself, these only write the heard lines to the log
+LIVE_TRANSCRIPTION_MODEL = 'gpt-live-transcribe'
+TURN_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
+
+# Config which transcriber runs, live sends words during the sentence, the turn one waits for the end of it
+TRANSCRIBE_LIVE = True
+
+# Config whether the model's own words print as it speaks, the same live switch, it is not a second transcriber
+PRINT_REPLY_LIVE = TRANSCRIBE_LIVE
 
 # Config the timing
 CONNECT_TIMEOUT = 30
@@ -149,13 +156,19 @@ def open_session(config):
         'audio': {
             'input': {'format': {'type': 'audio/pcm', 'rate': REALTIME_RATE},
                       'turn_detection': {'type': TURN_DETECTION},
-                      'transcription': {'model': TRANSCRIPTION_MODEL}},
+                      'transcription': {'model': transcription_model()}},
             'output': {'format': {'type': 'audio/pcm', 'rate': REALTIME_RATE},
                        'voice': config['realtime_voice']}},
         'instructions': session_instructions(config['realtime_accent']),
         'tools': session_realtime_tools(),
         'tool_choice': 'auto'}})
     return session
+
+# Name the transcriber to write the heard lines with
+def transcription_model():
+    if TRANSCRIBE_LIVE:
+        return LIVE_TRANSCRIPTION_MODEL
+    return TURN_TRANSCRIPTION_MODEL
 
 # Build the system prompt, the robot personality plus a reminder that this reply is spoken
 def session_instructions(accent):
@@ -327,12 +340,56 @@ def handle_event(session, microphone, speaker, event):
         microphone.unmute()
         return True
 
+    # Print the heard words as they arrive, the live transcriber sends them mid sentence
+    if kind == 'conversation.item.input_audio_transcription.delta':
+        delta = event.get('delta', '')
+        if not delta:
+            return False
+
+        # Open the line on the first words, which arrive with a leading space of their own
+        if not session.heard_open:
+            close_stream_lines(session)
+            session.heard_open = True
+            print('Heard: ', end='', flush=True)
+            delta = delta.lstrip()
+
+        # Add the words to the line already on screen
+        print(delta, end='', flush=True)
+        return True
+
     # Print both sides of the conversation, and log them as a pair once the reply lands
     if kind == 'conversation.item.input_audio_transcription.completed':
         session.heard = event.get('transcript', '').strip()
+
+        # End the line the words streamed onto, they are on screen already
+        if session.heard_open:
+            close_stream_lines(session)
+            return bool(session.heard)
+
+        # Print the whole line, the transcriber sent nothing until the turn was over
         if not session.heard:
             return False
         print(f'Heard: {session.heard}', flush=True)
+        return True
+
+    # Print the model's words as it speaks, these come from the realtime model itself not a transcriber
+    if kind == 'response.output_audio_transcript.delta':
+        if not PRINT_REPLY_LIVE:
+            return True
+        delta = event.get('delta', '')
+        if not delta:
+            return False
+
+        # Open the line on the first words
+        if not session.reply_open:
+            close_stream_lines(session)
+            session.reply_open = True
+            print('Reply: ', end='', flush=True)
+            delta = delta.lstrip()
+
+        # Add the words to the line already on screen
+        print(delta, end='', flush=True)
+        session.reply_streamed = True
         return True
 
     # If the reply is done, print it and call the callback
@@ -340,8 +397,12 @@ def handle_event(session, microphone, speaker, event):
         # Get the reply
         reply = event.get('transcript', '').strip()
 
-        # Print the reply
-        print(f'Reply: {reply}', flush=True)
+        # End the line the words streamed onto, they are on screen already
+        streamed = session.reply_streamed
+        close_stream_lines(session)
+        session.reply_streamed = False
+        if not streamed:
+            print(f'Reply: {reply}', flush=True)
 
         # Call the callback
         session.on_turn(session.heard, reply)
@@ -373,12 +434,24 @@ def handle_event(session, microphone, speaker, event):
 
     # Show why the server gave up
     if kind == 'error':
+        close_stream_lines(session)
         print(f'Realtime error: {event.get("error", {}).get("message", "")}', flush=True)
         return False
     return False
 
+# End an open streamed line, so the next print does not land on top of the words
+def close_stream_lines(session):
+    if not session.heard_open and not session.reply_open:
+        return
+    session.heard_open = False
+    session.reply_open = False
+    print(flush=True)
+
 # Run one tool locally and return its result to the model
 def run_function_call(session, event):
+    # Finish any streamed words first, a tool can run before the transcript arrives
+    close_stream_lines(session)
+
     # Answer the voice tools here, the text tools behind these names speak with kokoro instead
     name = event.get('name')
     if name in SKIP_TOOLS:
@@ -574,6 +647,9 @@ class Session:
         self.running = True
         self.tool_pending = False
         self.heard = ''
+        self.heard_open = False
+        self.reply_open = False
+        self.reply_streamed = False
         self.on_turn = ignore_turn
         self.config = {}
         self.voice_request = ''
