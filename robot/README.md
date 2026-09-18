@@ -83,3 +83,13 @@ Then ping and read positions, no moves:
 cd build
 ./robot --no-servos
 ```
+
+## Battery
+
+Pack voltage and current come from an INA219 at I2C address `0x40` on the 40-pin header, GPIO 2 (SDA) and GPIO 3 (SCL). Pi OS leaves that bus off until:
+
+```
+dtparam=i2c_arm=on
+```
+
+is in `/boot/firmware/config.txt`. `install_system.sh` turns that on. Reboot after, then `/dev/i2c-1` should show the chip at `0x40`. Without the meter, talk no longer treats `0 V` as a low pack.

@@ -268,9 +268,12 @@ static string handle_request(const string& line) {
             send_menu();
             reply = {{"ok", true}};
 
-        // Report the last battery reading
+        // Report the last battery reading, or say the meter is missing
         } else if (command == "battery") {
-            reply = {{"ok", true}, {"voltage", battery_voltage()}, {"percent", battery_percent()}, {"current", battery_current()}};
+            if (battery_voltage() <= 0)
+                reply = {{"ok", false}, {"error", "no battery meter"}};
+            else
+                reply = {{"ok", true}, {"voltage", battery_voltage()}, {"percent", battery_percent()}, {"current", battery_current()}};
 
         // Tell every client to quit, then quit
         } else if (command == "quit") {

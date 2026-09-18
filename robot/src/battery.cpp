@@ -100,6 +100,11 @@ static void update_battery_reading() {
     // Leave the label empty until the chip opens
     if (battery_file < 0 && !open_INA219()) {
         battery_label.clear();
+        if (!battery_logged) {
+            printf("Battery meter not found on I2C\n");
+            fflush(stdout);
+            battery_logged = true;
+        }
         return;
     }
 

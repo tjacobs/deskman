@@ -1053,7 +1053,7 @@ def speak_low_battery(listener, kokoro_pipeline):
 
     # Read the pack and keep this voltage to compare against next minute
     percent, voltage = robot_move.battery_reading()
-    if percent is None or voltage is None:
+    if percent is None or voltage is None or voltage <= 0:
         return
     previous = LAST_BATTERY_VOLTAGE
     LAST_BATTERY_VOLTAGE = voltage

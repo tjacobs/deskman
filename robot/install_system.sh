@@ -37,6 +37,7 @@ main() {
     configure_session
     configure_dsi_panel
     configure_servo_uart
+    configure_i2c_arm
     install_panel_backlight_service
     persist_display_rotation
     disable_screen_idle
@@ -102,6 +103,8 @@ PANEL_OVERLAY="vc4-kms-dsi-waveshare-panel,8_0_inch"
 PANEL_COMMENT="Waveshare Rev2.1 driver board, 7 inch 1280x800 panel, I2C0, CAM/DISP 1"
 SERVO_UART_OVERLAY="uart0-pi5"
 SERVO_UART_COMMENT="GPIO 14/15 UART for the STS3215 servo bus"
+I2C_ARM_PARAM="i2c_arm=on"
+I2C_ARM_COMMENT="INA219 battery meter on GPIO 2 and 3"
 
 # Panel MCU on the DSI connector I2C bus, one register enables the LCD rails and another sets the backlight PWM
 PANEL_I2C_BUS="11"
@@ -497,6 +500,30 @@ configure_servo_uart() {
     # Put it in the pi5 filter so other Pi models keep their own UART setup
     echo "Adding servo UART overlay to ${BOOT_CONFIG}"
     printf '\n%s\n%s\n%s\n' '[pi5]' "# ${SERVO_UART_COMMENT}" "dtoverlay=${SERVO_UART_OVERLAY}" >> "${BOOT_CONFIG}"
+}
+
+# Turn on the 40-pin I2C1 header so the INA219 battery meter can be read
+configure_i2c_arm() {
+    # Only the Pi boots the header I2C from this firmware key
+    if [[ "${MACHINE}" != "pi" || ! -f "${BOOT_CONFIG}" ]]; then
+        return
+    fi
+
+    # Leave an enabled line alone
+    if grep -q "^dtparam=${I2C_ARM_PARAM}$" "${BOOT_CONFIG}"; then
+        echo "I2C1 already enabled"
+        return
+    fi
+
+    # Uncomment the stock line when it is still disabled
+    echo "Enabling I2C1 for the battery meter"
+    if grep -q "^#dtparam=${I2C_ARM_PARAM}" "${BOOT_CONFIG}"; then
+        sed -i "s/^#dtparam=${I2C_ARM_PARAM}.*/dtparam=${I2C_ARM_PARAM}/" "${BOOT_CONFIG}"
+        return
+    fi
+
+    # Otherwise append it
+    printf '\n%s\n%s\n' "# ${I2C_ARM_COMMENT}" "dtparam=${I2C_ARM_PARAM}" >> "${BOOT_CONFIG}"
 }
 
 # Light the panel every boot, the kernel backlight device never reaches the hardware
