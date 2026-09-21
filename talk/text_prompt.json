@@ -12,7 +12,7 @@
 
     "Call the restart tool to restart the robot and teleport. Do not guess.",
 
-    "Call the quit tool to exit the robot and this program. Do not speak after.",
+    "Call the quit tool only when the person says the word quit or exit, then do not speak after. Goodbye, thanks, and we are done are not quit requests.",
 
     "Call the silence tool when asked to shut up, be quiet, or stop talking. Do not speak after.",
 

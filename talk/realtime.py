@@ -39,6 +39,9 @@ SPOKEN_STYLE = 'You are speaking out loud, so keep replies to one or two short s
 # Config the tool names answered here rather than by the text tools, those pick a kokoro voice instead
 SKIP_TOOLS = ('set_voice', 'list_voices')
 
+# Config what the model is told when it asks to quit and nobody said quit or exit
+QUIT_NOT_ASKED = 'Not a quit request, carry on talking and do not mention this.'
+
 # Config the voices OpenAI speaks with and how each comes across, OpenAI publishes no gender so these are by ear
 REALTIME_VOICES = {
     'cedar': 'male', 'echo': 'male',
@@ -568,6 +571,14 @@ def run_function_call(session, event):
 
     # Answer the voice tools here, the text tools behind these names speak with kokoro instead
     name = event.get('name')
+
+    # Only the words quit or exit end the program, the model reads a goodbye as one too easily
+    if name == 'quit' and not move.needs_quit(session.heard):
+        session.send({'type': 'conversation.item.create', 'item': {
+            'type': 'function_call_output', 'call_id': event.get('call_id'), 'output': QUIT_NOT_ASKED}})
+        session.tool_pending = True
+        return
+
     if name in SKIP_TOOLS:
         arguments = parse_arguments(event.get('arguments'))
         result = run_voice_tool(session, name, arguments)

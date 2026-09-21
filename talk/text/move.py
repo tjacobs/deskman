@@ -74,7 +74,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "quit",
-            "description": "Exit the robot and this program. Call when asked to quit or exit.",
+            "description": "Exit the robot and this program. Call only when the person says the word quit or exit. Goodbye, we are done, and similar endings are not quit requests.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
