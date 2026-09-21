@@ -1263,8 +1263,8 @@ class Listener:
                 speech_blocks = 0
                 silence_blocks = 0
 
-            # Give up when the hear timeout is reached, so --test can fall back
-            if deadline is not None:
+            # Give up when the hear timeout is reached, but never cut off speech that already started
+            if deadline is not None and not utterance:
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     return np.zeros(0, dtype=np.float32)

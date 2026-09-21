@@ -354,6 +354,14 @@ def start_quit(session):
     session.running = False
     return True
 
+# Move as soon as the person asks, so the head goes before the model speaks
+def start_look(session):
+    arguments = move.look_arguments(session.heard)
+    if arguments is None:
+        return
+    result = move.run_look(arguments)
+    ask.record_tool('look', arguments, result)
+
 # Stop speech and leave the realtime session, talk.py then goes ready
 def go_silent(session, speaker):
     if not move.needs_silence(session.heard):
@@ -453,6 +461,7 @@ def handle_event(session, microphone, speaker, event):
             return True
         if go_silent(session, speaker):
             return True
+        start_look(session)
         streamed = session.heard_streamed or session.heard_open
         if session.heard_open:
             session.heard_open = False

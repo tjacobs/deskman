@@ -12,6 +12,8 @@ import sys
 ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 90
 LOOK_DIRECTIONS = ["left", "right", "center", "up", "down", "hat_up", "hat_down"]
+LOOK_WORDS = ("look", "turn", "face", "hat")
+LOOK_ALIASES = {"left": "left", "right": "right", "up": "up", "down": "down", "center": "center", "centre": "center", "straight": "center", "ahead": "center", "forward": "center", "forwards": "center"}
 GET_BATTERY_RETRY_PROMPT = "Do not guess. Call get_battery now, then answer using only the tool result."
 RESTART_COMMAND = "/usr/local/bin/deskman-restart-services"
 RESTART_MESSAGE = "Restarting!"
@@ -26,7 +28,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "look",
-            "description": "Move my head or hat.",
+            "description": "Move my head or hat. Call this immediately. Do not speak first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -105,6 +107,33 @@ def run_look(arguments):
             return f"Look failed: {error}"
 
     return f"Look is unavailable: {socket_error}"
+
+# Direction the spoken words ask for, or none when this is not a look
+def look_arguments(prompt):
+    text = str(prompt or "").lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    words = text.split()
+
+    # Only a head or hat command moves, so other talk of left and right is left alone
+    if not any(word in words for word in LOOK_WORDS):
+        return None
+
+    # The hat has its own up and down
+    if "hat" in words:
+        if "up" in words:
+            direction = "hat_up"
+        elif "down" in words:
+            direction = "hat_down"
+        else:
+            return None
+    else:
+        direction = next((LOOK_ALIASES[word] for word in words if word in LOOK_ALIASES), None)
+    if direction is None:
+        return None
+
+    # Take a spoken angle, otherwise go all the way
+    degrees = next((int(word) for word in words if word.isdigit()), LOOK_DEFAULT_DEGREES)
+    return {"direction": direction, "degrees": degrees}
 
 # Read pack percent and voltage from the robot socket
 def run_get_battery():
