@@ -106,7 +106,7 @@ def check_playback():
         PLAYBACK_AVAILABLE = False
         print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
-# Return card index for the playback-only USB sound device
+# Return card index for the USB speaker
 def find_usb_card():
     if not os.path.isfile(CARDS_PATH):
         return None
@@ -121,12 +121,21 @@ def find_usb_card():
             if card_index_text.isdigit():
                 usb_cards.append(int(card_index_text))
 
-    # Prefer the speaker-only card, one without a mic
+    # Skip cameras and capture-only nodes, they cannot play
+    speaker_cards = []
     for card_index in usb_cards:
+        if card_is_camera(card_index):
+            continue
+        if not card_has_playback(card_index):
+            continue
+        speaker_cards.append(card_index)
+
+    # Prefer the speaker-only card, one without a mic
+    for card_index in speaker_cards:
         if not card_has_capture(card_index):
             return card_index
-    if usb_cards:
-        return usb_cards[0]
+    if speaker_cards:
+        return speaker_cards[0]
     return None
 
 # Return true when a card has a capture stream
