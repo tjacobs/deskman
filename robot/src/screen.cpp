@@ -91,6 +91,9 @@ static int g_log_console_fd = -1;
 static int g_log_file_fd = -1;
 static int g_log_pipe_read = -1;
 
+// Invisible pointer so the compositor does not draw one over the face
+static SDL_Cursor* g_blank_cursor = nullptr;
+
 // Tail of log.txt for the on-screen line
 static string g_last_log_line;
 static string g_log_pending;
@@ -101,6 +104,7 @@ static bool g_log_opened = false;
 static string robot_log_path();
 static void write_robot_log_loop();
 static void write_log_chunk(int descriptor, const char* buffer, ssize_t count);
+static void install_blank_cursor();
 static SDL_Rect call_button_rect();
 static SDL_Rect exit_button_rect();
 static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
@@ -195,6 +199,26 @@ static void write_log_chunk(int descriptor, const char* buffer, ssize_t count) {
     (void)written;
 }
 
+// Hide the pointer, and replace it with an empty cursor
+void hide_cursor() {
+    SDL_ShowCursor(SDL_DISABLE);
+    install_blank_cursor();
+    if (g_blank_cursor)
+        SDL_SetCursor(g_blank_cursor);
+}
+
+// One transparent pixel, so Wayland still has a cursor to hide
+static void install_blank_cursor() {
+    if (g_blank_cursor)
+        return;
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, 1, 1, 32, SDL_PIXELFORMAT_RGBA32);
+    if (!surface)
+        return;
+    SDL_FillRect(surface, nullptr, SDL_MapRGBA(surface->format, 0, 0, 0, 0));
+    g_blank_cursor = SDL_CreateColorCursor(surface, 0, 0);
+    SDL_FreeSurface(surface);
+}
+
 // Create window
 bool create_window() {
     // Cover the whole screen on the robot, use a plain window elsewhere
@@ -264,10 +288,8 @@ bool create_window() {
     // Use the desktop size the window actually covered
     SDL_GetWindowSize(window, &screen_width, &screen_height);
 
-    // Hide cursor in fullscreen mode
-    if (fullscreen) {
-        SDL_ShowCursor(SDL_DISABLE);
-    }
+    // Keep the pointer off the face
+    hide_cursor();
 
     // Create renderer for the window
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
@@ -486,6 +508,10 @@ bool close_window() {
     if (window) {
         SDL_DestroyWindow(window);
         window = nullptr;
+    }
+    if (g_blank_cursor) {
+        SDL_FreeCursor(g_blank_cursor);
+        g_blank_cursor = nullptr;
     }
     IMG_Quit();
     SDL_Quit();

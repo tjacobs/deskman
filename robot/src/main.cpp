@@ -328,7 +328,8 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             continue;
         }
 
-        // Clear to white, then draw the eyes and mouth
+        // Keep the pointer off the face, then clear to white and draw the eyes and mouth
+        hide_cursor();
         SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
         SDL_RenderClear(renderer);
         vectorRenderer.render(renderer);
@@ -536,6 +537,7 @@ static void draw_face() {
     }
 
     // Animate the face and keep the battery strip on the first frames
+    hide_cursor();
     check_battery();
     update_face_animation(&face);
     SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);

@@ -25,6 +25,9 @@ extern mutex statusMutex;
 bool create_window();
 bool close_window();
 
+// Keep the pointer off the face
+void hide_cursor();
+
 // Draw text, and the status bar
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
 void draw_status_bar(const char* battery, TTF_Font* font, bool show_exit);
