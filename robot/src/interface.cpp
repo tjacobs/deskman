@@ -44,6 +44,30 @@ const int CALL_MENU_TAP_DEBOUNCE_MS = 300;
 // Turn on to print where each screen tap lands, off so the face status bar stays quiet
 static const bool LOG_TAPS = false;
 
+// Menu items stacked above the button
+static const int MENU_QUIET = 0;
+static const int MENU_LISTEN = 1;
+static const int MENU_MOVE = 2;
+static const int MENU_CAMERA = 3;
+static const int MENU_CALL = 4;
+static const int MENU_EXIT = 5;
+static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Call", "Exit"};
+
+// Menu item size
+static const int MENU_ITEM_COUNT = 6;
+static const int MENU_ITEM_WIDTH = 160;
+
+// Hamburger button size and its three lines
+static const int HAMBURGER_BUTTON_WIDTH = 72;
+static const int HAMBURGER_LINE_HEIGHT = 5;
+static const int HAMBURGER_LINE_GAP = 7;
+
+// Menu button colors
+static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
+static const SDL_Color EXIT_BUTTON_COLOR = {180, 40, 40, 255};
+static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
+static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
+
 // Socket file name, backlog, owner-only mode, and the read buffer size
 static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 static const int INTERFACE_BACKLOG = 4;
@@ -64,6 +88,11 @@ static vector<thread> g_client_threads;
 // Overlay and listen state the face and tracker read
 static atomic<bool> g_overlay_open{false};
 static atomic<bool> g_listen_open{true};
+static atomic<bool> g_wake_requested{false};
+static atomic<bool> g_quiet_requested{false};
+static atomic<bool> g_camera_toggle{false};
+static atomic<bool> g_move_request{false};
+static atomic<bool> g_menu_open{false};
 static steady_clock::time_point g_last_menu_tap{};
 static steady_clock::time_point g_interface_start{};
 
@@ -85,6 +114,13 @@ static json position_reply();
 static int request_int(const json& request, const char* key, int fallback);
 static bool wait_call_handoff(int command);
 static void send_menu();
+static bool debounce_tap();
+static void set_menu_open(bool open);
+static SDL_Rect menu_button_rect();
+static SDL_Rect menu_item_rect(int index);
+static bool tap_in_rect(int x, int y, SDL_Rect rect);
+static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
+static void draw_hamburger_icon(SDL_Rect rect);
 static void send_to_clients(const string& line);
 static void remove_client(int client_fd);
 static double seconds_since_start();
@@ -281,6 +317,18 @@ static string handle_request(const string& line) {
             g_quit = true;
             reply = {{"ok", true}};
 
+        // Hand back a Listen press, then clear it
+        } else if (command == "wake") {
+            bool wake = g_wake_requested.load();
+            g_wake_requested = false;
+            reply = {{"ok", true}, {"wake", wake}};
+
+        // Hand back a Quiet press, then clear it
+        } else if (command == "quiet") {
+            bool quiet = g_quiet_requested.load();
+            g_quiet_requested = false;
+            reply = {{"ok", true}, {"quiet", quiet}};
+
         // Follow a face while talk is listening, and while an overlay is up
         } else if (command == "listen") {
             g_listen_open = request.value("open", false);
@@ -336,12 +384,19 @@ static bool wait_call_handoff(int command) {
 
 // Flip the peer list, ignoring a second tap that lands too soon
 static void send_menu() {
-    auto now = steady_clock::now();
-    if (g_last_menu_tap.time_since_epoch().count() != 0 && duration_cast<milliseconds>(now - g_last_menu_tap).count() < CALL_MENU_TAP_DEBOUNCE_MS)
+    if (!debounce_tap())
         return;
-    g_last_menu_tap = now;
     g_overlay_open = !g_overlay_open.load();
     send_to_clients(json{{"command", "menu"}}.dump());
+}
+
+// True when this tap is far enough from the last one
+static bool debounce_tap() {
+    auto now = steady_clock::now();
+    if (g_last_menu_tap.time_since_epoch().count() != 0 && duration_cast<milliseconds>(now - g_last_menu_tap).count() < CALL_MENU_TAP_DEBOUNCE_MS)
+        return false;
+    g_last_menu_tap = now;
+    return true;
 }
 
 // Send one line to every connected client
@@ -384,7 +439,89 @@ void complete_call_handoff(bool ok) {
     g_handoff_cv.notify_all();
 }
 
-// Route a screen tap to Exit, to Call, or to the status bar
+// Place the menu toggle on the right of the status bar
+static SDL_Rect menu_button_rect() {
+    int pad = status_bar_pad();
+    int bar_y = screen_height - status_bar_height();
+    int height = status_bar_height() - pad * 2;
+    return {screen_width - pad - HAMBURGER_BUTTON_WIDTH, bar_y + pad, HAMBURGER_BUTTON_WIDTH, height};
+}
+
+// Place a popup item above the menu button, one extra gap under Exit, Quiet at the top
+static SDL_Rect menu_item_rect(int index) {
+    SDL_Rect menu_rect = menu_button_rect();
+    int pad = status_bar_pad();
+    int from_bottom = MENU_ITEM_COUNT - index;
+    return {screen_width - pad - MENU_ITEM_WIDTH, menu_rect.y - from_bottom * (menu_rect.h + pad) - pad, MENU_ITEM_WIDTH, menu_rect.h};
+}
+
+// True when a tap lands inside a button
+static bool tap_in_rect(int x, int y, SDL_Rect rect) {
+    return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
+}
+
+// Draw a filled button with a centered label
+static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font) {
+    SDL_SetRenderDrawColor(renderer, fill.r, fill.g, fill.b, fill.a);
+    SDL_RenderFillRect(renderer, &rect);
+    if (!font || !label)
+        return;
+
+    // Measure the label so it can sit in the middle of the button
+    int text_width = 0;
+    int text_height = 0;
+    if (TTF_SizeUTF8(font, label, &text_width, &text_height) != 0)
+        return;
+    draw_text(label, rect.x + (rect.w - text_width) / 2, rect.y + (rect.h - text_height) / 2, font, BUTTON_LABEL_COLOR);
+}
+
+// Draw three horizontal lines in the menu button
+static void draw_hamburger_icon(SDL_Rect rect) {
+    int line_width = rect.w / 2;
+    int total_height = HAMBURGER_LINE_HEIGHT * 3 + HAMBURGER_LINE_GAP * 2;
+    int x = rect.x + (rect.w - line_width) / 2;
+    int y = rect.y + (rect.h - total_height) / 2;
+    SDL_SetRenderDrawColor(renderer, BUTTON_LABEL_COLOR.r, BUTTON_LABEL_COLOR.g, BUTTON_LABEL_COLOR.b, BUTTON_LABEL_COLOR.a);
+    for (int line = 0; line < 3; line++) {
+        SDL_Rect bar = {x, y + line * (HAMBURGER_LINE_HEIGHT + HAMBURGER_LINE_GAP), line_width, HAMBURGER_LINE_HEIGHT};
+        SDL_RenderFillRect(renderer, &bar);
+    }
+}
+
+// Draw the menu button, and the popup above it when it is open
+void draw_menu(TTF_Font* font) {
+    if (g_menu_open) {
+        for (int index = 0; index < MENU_ITEM_COUNT; index++) {
+            SDL_Color fill = index == MENU_EXIT ? EXIT_BUTTON_COLOR : MENU_BUTTON_COLOR;
+            draw_bar_button(menu_item_rect(index), MENU_ITEM_LABELS[index], fill, font);
+        }
+    }
+
+    // Three-line toggle on the right of the status bar
+    SDL_Rect menu_rect = menu_button_rect();
+    SDL_Color menu_fill = g_menu_open ? MENU_OPEN_COLOR : MENU_BUTTON_COLOR;
+    draw_bar_button(menu_rect, nullptr, menu_fill, font);
+    draw_hamburger_icon(menu_rect);
+}
+
+// True when the popup list is showing
+bool menu_open() {
+    return g_menu_open;
+}
+
+// Left edge of the menu button, so status text stops before it
+int menu_button_left() {
+    return menu_button_rect().x;
+}
+
+// Show or hide the popup list
+static void set_menu_open(bool open) {
+    g_menu_open = open;
+    if (open)
+        set_status_bar_visible(true);
+}
+
+// Route a screen tap to the menu popup, or to the status bar
 void handle_call_event(const SDL_Event& event) {
     // Take the tap position from a mouse click or a finger
     int x = 0;
@@ -407,17 +544,25 @@ void handle_call_event(const SDL_Event& event) {
     if (!tap)
         return;
 
-    // Overlay keeps the bar up so Exit and Call stay reachable
-    bool bar_showing = status_bar_visible() || g_overlay_open.load();
-    bool hit_exit = bar_showing && g_overlay_open.load() && tap_is_exit(x, y);
-    bool hit_call = !hit_exit && bar_showing && tap_is_call(x, y);
+    // Keep the bar reachable while the popup or a call overlay is up
+    bool bar_showing = status_bar_visible() || menu_open() || g_overlay_open.load();
+    int item = -1;
+    if (bar_showing && menu_open()) {
+        for (int index = 0; index < MENU_ITEM_COUNT; index++) {
+            if (tap_in_rect(x, y, menu_item_rect(index))) {
+                item = index;
+                break;
+            }
+        }
+    }
+    bool hit_menu = bar_showing && item < 0 && tap_in_rect(x, y, menu_button_rect());
 
     // Name what the tap landed on
     const char* hit_name = "face";
-    if (hit_exit)
-        hit_name = "Exit";
-    if (hit_call)
-        hit_name = "Call";
+    if (item >= 0)
+        hit_name = MENU_ITEM_LABELS[item];
+    else if (hit_menu)
+        hit_name = "Menu";
 
     // Log every tap so a stray one at boot stands apart from a real press
     if (LOG_TAPS) {
@@ -425,18 +570,49 @@ void handle_call_event(const SDL_Event& event) {
         fflush(stdout);
     }
 
-    // Exit tells every client to quit, Call opens the peer list
-    if (hit_exit) {
+    // Popup items close the list, then do the action
+    if (item >= 0)
+        set_menu_open(false);
+    if (item == MENU_EXIT) {
         send_to_clients(json{{"command", "quit"}}.dump());
         g_quit = true;
         return;
     }
-    if (hit_call) {
-        send_menu();
+    if (item == MENU_QUIET) {
+        g_quiet_requested = true;
+        return;
+    }
+    if (item == MENU_LISTEN) {
+        g_wake_requested = true;
+        return;
+    }
+    if (item == MENU_MOVE) {
+        g_move_request = true;
+        return;
+    }
+    if (item == MENU_CAMERA) {
+        g_camera_toggle = true;
+        return;
+    }
+    if (item == MENU_CALL) {
+        g_overlay_open = !g_overlay_open.load();
+        send_to_clients(json{{"command", "menu"}}.dump());
         return;
     }
 
-    // A tap on the face shows or hides the status bar, unless the overlay owns it
+    // Menu button toggles the popup above it
+    if (hit_menu) {
+        if (!debounce_tap())
+            return;
+        set_menu_open(!menu_open());
+        return;
+    }
+
+    // A tap elsewhere closes the popup, or shows and hides the status bar
+    if (menu_open()) {
+        set_menu_open(false);
+        return;
+    }
     if (g_overlay_open.load())
         return;
     set_status_bar_visible(!bar_showing);
@@ -449,9 +625,17 @@ static double seconds_since_start() {
     return duration_cast<milliseconds>(steady_clock::now() - g_interface_start).count() / 1000.0;
 }
 
-// True while the peer list is up and Exit is showing
+// True while the peer list is up
 bool call_overlay_open() {
     return g_overlay_open.load();
+}
+
+// Camera and Move presses since the last check, then clear them
+void take_menu_presses(bool& camera, bool& move) {
+    camera = g_camera_toggle.load();
+    g_camera_toggle = false;
+    move = g_move_request.load();
+    g_move_request = false;
 }
 
 // True while face tracking should follow, off after ready following a listen

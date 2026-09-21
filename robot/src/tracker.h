@@ -38,6 +38,7 @@ public:
     // Where the tracked face sits, and the preview drawn over the face
     bool getFacePosition(float& x, float& y);
     void updateWindow();
+    atomic<bool> showWindow;
 
 private:
     // Worker thread body, and the detection it runs
@@ -55,7 +56,6 @@ private:
     atomic<bool> tracking{false};
     atomic<bool> shouldQuit{false};
     bool cameraAvailable{false};
-    bool showWindow;
 
     // Latest frame, and the texture the preview is drawn from
     mutex frameMutex;

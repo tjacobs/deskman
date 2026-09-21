@@ -1,6 +1,7 @@
 // Local
 #include "screen.h"
 #include "face.h"
+#include "interface.h"
 
 // SDL
 #include <SDL2/SDL_ttf.h>
@@ -32,15 +33,11 @@ static const char* DEFAULT_DISPLAY = ":0";
 static const int STATUS_BAR_HEIGHT = 96;
 static const int STATUS_BAR_PAD = 12;
 static const int STATUS_BAR_LINE_GAP = 4;
-static const int EXIT_BUTTON_WIDTH = 100;
 
 // Status bar and button colors
 static const SDL_Color BAR_FILL_COLOR = {180, 180, 180, 255};
 static const SDL_Color BAR_BORDER_COLOR = {120, 120, 120, 255};
 static const SDL_Color BAR_TEXT_COLOR = {0, 0, 0, 255};
-static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
-static const SDL_Color EXIT_BUTTON_COLOR = {180, 40, 40, 255};
-static const SDL_Color CALL_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color CLEAR_COLOR = {255, 255, 255, 255};
 
 // Skip this much old history on the first read, and clip a long line
@@ -83,7 +80,7 @@ int screen_height = 600;
 string currentStatus;
 mutex statusMutex;
 
-// Grey bar and Call start visible, a tap on the face hides them
+// Grey bar starts visible, a tap on the face hides it
 static bool g_status_bar_visible = true;
 
 // Console, log file, and the read end of the tee pipe
@@ -105,10 +102,6 @@ static string robot_log_path();
 static void write_robot_log_loop();
 static void write_log_chunk(int descriptor, const char* buffer, ssize_t count);
 static void install_blank_cursor();
-static SDL_Rect call_button_rect();
-static SDL_Rect exit_button_rect();
-static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
-static bool tap_in_rect(int x, int y, SDL_Rect rect);
 
 // Append stdout and stderr to log.txt, and still print to the console
 void start_robot_log() {
@@ -327,8 +320,8 @@ void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color) 
 }
 
 // Draw status bar
-void draw_status_bar(const char* battery, TTF_Font* font, bool show_exit) {
-    if (!show_exit && !g_status_bar_visible)
+void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible) {
+    if (!keep_visible && !g_status_bar_visible && !menu_open())
         return;
 
     // Fill the bar
@@ -356,8 +349,8 @@ void draw_status_bar(const char* battery, TTF_Font* font, bool show_exit) {
         block_height += STATUS_BAR_LINE_GAP;
     int text_y = bar_y + (STATUS_BAR_HEIGHT - block_height) / 2;
 
-    // Clip the text so a long line does not run into the buttons
-    int text_right = (show_exit ? exit_button_rect() : call_button_rect()).x - STATUS_BAR_PAD;
+    // Clip the text so a long line does not run into the menu button
+    int text_right = menu_button_left() - STATUS_BAR_PAD;
     int clip_width = text_right - STATUS_BAR_PAD;
     if (clip_width < 0)
         clip_width = 0;
@@ -373,10 +366,8 @@ void draw_status_bar(const char* battery, TTF_Font* font, bool show_exit) {
         draw_text(log_line.c_str(), STATUS_BAR_PAD, text_y, font, BAR_TEXT_COLOR);
     SDL_RenderSetClipRect(renderer, nullptr);
 
-    // Draw the buttons
-    if (show_exit)
-        draw_bar_button(exit_button_rect(), "Exit", EXIT_BUTTON_COLOR, font);
-    draw_bar_button(call_button_rect(), "Call", CALL_BUTTON_COLOR, font);
+    // Menu button and the popup above it
+    draw_menu(font);
 }
 
 // Newest complete line from log.txt, talk and robot both write there
@@ -434,54 +425,22 @@ string last_log_line() {
     return g_last_log_line;
 }
 
-// Place Call on the right of the status bar
-static SDL_Rect call_button_rect() {
-    int bar_y = screen_height - STATUS_BAR_HEIGHT;
-    return {screen_width - STATUS_BAR_PAD - EXIT_BUTTON_WIDTH, bar_y + STATUS_BAR_PAD, EXIT_BUTTON_WIDTH, STATUS_BAR_HEIGHT - STATUS_BAR_PAD * 2};
+// Height of the grey bar
+int status_bar_height() {
+    return STATUS_BAR_HEIGHT;
 }
 
-// Place Exit to the left of Call
-static SDL_Rect exit_button_rect() {
-    SDL_Rect call_rect = call_button_rect();
-    return {call_rect.x - STATUS_BAR_PAD - EXIT_BUTTON_WIDTH, call_rect.y, call_rect.w, call_rect.h};
+// Inset of the menu button inside the grey bar
+int status_bar_pad() {
+    return STATUS_BAR_PAD;
 }
 
-// Draw a filled button with centered label
-static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font) {
-    SDL_SetRenderDrawColor(renderer, fill.r, fill.g, fill.b, fill.a);
-    SDL_RenderFillRect(renderer, &rect);
-    if (!font || !label)
-        return;
-
-    // Measure the label so it can sit in the middle of the button
-    int text_width = 0;
-    int text_height = 0;
-    if (TTF_SizeUTF8(font, label, &text_width, &text_height) != 0)
-        return;
-    draw_text(label, rect.x + (rect.w - text_width) / 2, rect.y + (rect.h - text_height) / 2, font, BUTTON_LABEL_COLOR);
-}
-
-// True when a tap lands on Exit
-bool tap_is_exit(int x, int y) {
-    return tap_in_rect(x, y, exit_button_rect());
-}
-
-// True when a tap lands on Call
-bool tap_is_call(int x, int y) {
-    return tap_in_rect(x, y, call_button_rect());
-}
-
-// True when a tap lands inside a button
-static bool tap_in_rect(int x, int y, SDL_Rect rect) {
-    return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
-}
-
-// True when the grey bar and Call are on screen
+// True when the grey bar is on screen
 bool status_bar_visible() {
     return g_status_bar_visible;
 }
 
-// Show or hide the grey bar and Call
+// Show or hide the grey bar
 void set_status_bar_visible(bool visible) {
     g_status_bar_visible = visible;
 }

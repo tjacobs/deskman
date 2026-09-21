@@ -66,6 +66,14 @@ static const int TALK_EXEC_FAILED = 127;
 static const int FACE_TRACK_COUNTS = 20;
 static const int FACE_LOOK_TILT_DEGREES = 30;
 
+// Look left, right, then center when Move is pressed
+static const int MENU_MOVE_STEP_MS = 500;
+static const int MENU_MOVE_LOOK_DEGREES = 35;
+static const int MENU_MOVE_STEP_NONE = -1;
+static const int MENU_MOVE_STEP_LEFT = 0;
+static const int MENU_MOVE_STEP_RIGHT = 1;
+static const int MENU_MOVE_STEP_CENTER = 2;
+
 // Process and script names to match
 static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
@@ -101,6 +109,8 @@ static pid_t g_talk_pid = -1;
 static bool g_no_talk = false;
 static bool g_call_paused = false;
 static bool g_call_had_talk = false;
+static int g_menu_move_step = MENU_MOVE_STEP_NONE;
+static Uint32 g_menu_move_at = 0;
 
 // Renderer holding the face shapes
 VectorRenderer vectorRenderer;
@@ -108,6 +118,8 @@ VectorRenderer vectorRenderer;
 // Later in this file
 static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos);
 static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
+static void toggle_camera_preview(FaceTracker& faceTracker);
+static void step_menu_move();
 static void set_up_display();
 static void signalHandler(int signal);
 static void check_already_running();
@@ -270,6 +282,17 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         check_battery();
         apply_call_handoff(faceTracker);
 
+        // Camera preview and the Move look sequence from the popup
+        bool camera_pressed = false;
+        bool move_pressed = false;
+        take_menu_presses(camera_pressed, move_pressed);
+        if (camera_pressed)
+            toggle_camera_preview(faceTracker);
+        if (move_pressed) {
+            g_menu_move_step = MENU_MOVE_STEP_LEFT;
+            g_menu_move_at = 0;
+        }
+
         // Process keyboard input on the main thread when a window exists
         while (show_window && SDL_PollEvent(&event) != 0) {
             if (event.type == SDL_QUIT ||
@@ -301,7 +324,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
                 saveConfig(current);
             }
 
-            // Hand the event to the servo keys and the Call and Exit buttons
+            // Hand the event to the servo keys and the menu button
             handle_servo_keyboard_input(&event, &face);
             handle_call_event(event);
         }
@@ -309,7 +332,9 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Point eyes and head at the tracked face until talk goes ready after listening
         float faceX, faceY;
         bool hasFaceTracking = use_camera && listen_open() && faceTracker.isCameraAvailable() && faceTracker.getFacePosition(faceX, faceY);
-        if (hasFaceTracking) {
+        if (g_menu_move_step != MENU_MOVE_STEP_NONE) {
+            step_menu_move();
+        } else if (hasFaceTracking) {
             face.lookTiltX = -faceX * FACE_LOOK_TILT_DEGREES;
             face.lookTiltY = faceY * FACE_LOOK_TILT_DEGREES;
 
@@ -342,8 +367,8 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (!temperature_warning.empty())
             draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
 
-        // Last log line, pack voltage, Call, and Exit while the overlay is up
-        draw_status_bar(battery_text().c_str(), face.font, call_overlay_open());
+        // Last log line, pack voltage, and the menu button
+        draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
 
         // Show the tracking preview over the face
         if (use_camera && faceTracker.isCameraAvailable())
@@ -357,6 +382,62 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             SDL_Delay(FRAME_MS - frameTime);
         lastFrameTime = SDL_GetTicks();
     }
+}
+
+// Show or hide the camera preview on the face
+static void toggle_camera_preview(FaceTracker& faceTracker) {
+    show_camera = !show_camera;
+    if (show_camera) {
+        if (!faceTracker.isCameraAvailable()) {
+            if (!faceTracker.initializeCamera()) {
+                show_camera = false;
+                setStatus("No camera");
+                return;
+            }
+        }
+        if (!faceTracker.isTracking())
+            faceTracker.startTracking();
+        faceTracker.showWindow = true;
+        use_camera = true;
+        setStatus("Camera preview on");
+        return;
+    }
+    faceTracker.showWindow = false;
+    setStatus("Camera preview off");
+}
+
+// Step the Move look sequence
+static void step_menu_move() {
+    if (g_menu_move_step == MENU_MOVE_STEP_NONE)
+        return;
+
+    // Wait between looks so the head can finish each one
+    Uint32 now = SDL_GetTicks();
+    if (g_menu_move_at != 0 && now - g_menu_move_at < MENU_MOVE_STEP_MS)
+        return;
+    g_menu_move_at = now;
+
+    // Keep the hat where it is, only pan left, right, then center
+    int pan = 0;
+    int tilt = 0;
+    int hat = 0;
+    get_degrees(pan, tilt, hat);
+    if (g_menu_move_step == MENU_MOVE_STEP_LEFT) {
+        set_degrees(-MENU_MOVE_LOOK_DEGREES, 0, hat);
+        g_menu_move_step = MENU_MOVE_STEP_RIGHT;
+        return;
+    }
+    if (g_menu_move_step == MENU_MOVE_STEP_RIGHT) {
+        set_degrees(MENU_MOVE_LOOK_DEGREES, 0, hat);
+        g_menu_move_step = MENU_MOVE_STEP_CENTER;
+        return;
+    }
+    if (g_menu_move_step == MENU_MOVE_STEP_CENTER) {
+        set_degrees(0, 0, hat);
+        g_menu_move_step = MENU_MOVE_STEP_NONE;
+        return;
+    }
+    g_menu_move_step = MENU_MOVE_STEP_NONE;
 }
 
 // Point at the local display, its runtime directory, and its X authority
@@ -543,7 +624,7 @@ static void draw_face() {
     SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
     SDL_RenderClear(renderer);
     vectorRenderer.render(renderer);
-    draw_status_bar(battery_text().c_str(), face.font, call_overlay_open());
+    draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
     SDL_RenderPresent(renderer);
     SDL_Delay(FRAME_MS);
 }

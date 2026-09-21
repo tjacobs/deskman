@@ -63,10 +63,6 @@ FaceTracker::FaceTracker(bool show_window, bool use_camera): showWindow(show_win
         if (!cameraAvailable)
             showWindow = false;
     }
-
-    // Preview is drawn on the main SDL display when showWindow is set
-    if (showWindow)
-        cout << "Camera preview enabled on main display" << endl;
 }
 
 // Start the detection thread, unless it is already running
@@ -118,8 +114,8 @@ void FaceTracker::trackingThreadFunction() {
             }
             lock.unlock();
 
-            // Draw faces and update frame buffer if window is enabled
-            if (showWindow) {
+            // Draw faces and update frame buffer if the preview is on
+            if (showWindow.load()) {
                 for (size_t i = 0; i < faces.size(); i++) {
                     cv::Scalar color = i == largestFaceIndex ? TRACKED_FACE_COLOR : OTHER_FACE_COLOR;
                     cv::rectangle(frame, faces[i], color, FACE_BOX_THICKNESS);
@@ -184,7 +180,7 @@ bool FaceTracker::getFacePosition(float& x, float& y) {
 
 // Draw the camera preview over the face
 void FaceTracker::updateWindow() {
-    if (!showWindow || !cameraAvailable || !renderer)
+    if (!showWindow.load() || !cameraAvailable || !renderer)
         return;
     try {
         // Pull a new camera frame into the preview buffer when one is ready

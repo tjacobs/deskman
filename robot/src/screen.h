@@ -30,13 +30,13 @@ void hide_cursor();
 
 // Draw text, and the status bar
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
-void draw_status_bar(const char* battery, TTF_Font* font, bool show_exit);
+void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible);
 
-// Route a tap to the Exit and Call buttons
-bool tap_is_exit(int x, int y);
-bool tap_is_call(int x, int y);
+// Grey bar size, so the menu button can sit inside it
+int status_bar_height();
+int status_bar_pad();
 
-// Show or hide the grey bar and Call
+// Show or hide the grey bar
 bool status_bar_visible();
 void set_status_bar_visible(bool visible);
 
