@@ -102,6 +102,8 @@ static string robot_log_path();
 static void write_robot_log_loop();
 static void write_log_chunk(int descriptor, const char* buffer, ssize_t count);
 static void install_blank_cursor();
+static string log_display_line();
+static string clip_log_line(const string& text);
 
 // Append stdout and stderr to log.txt, and still print to the console
 void start_robot_log() {
@@ -370,13 +372,13 @@ void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible) {
     draw_menu(font);
 }
 
-// Newest complete line from log.txt, talk and robot both write there
+// Newest line from log.txt, talk and robot both write there
 string last_log_line() {
     error_code error;
     string path = robot_log_path();
     uintmax_t size = filesystem::file_size(path, error);
     if (error)
-        return g_last_log_line;
+        return log_display_line();
 
     // File was truncated, read from the start
     if (size < g_log_offset) {
@@ -392,12 +394,12 @@ string last_log_line() {
             g_log_offset = size - LOG_TAIL_BYTES;
     }
     if (size == g_log_offset)
-        return g_last_log_line;
+        return log_display_line();
 
     // Read whatever was appended since last time
     ifstream input(path);
     if (!input)
-        return g_last_log_line;
+        return log_display_line();
     input.seekg(static_cast<streamoff>(g_log_offset));
     string chunk((istreambuf_iterator<char>(input)), istreambuf_iterator<char>());
     g_log_offset = size;
@@ -412,17 +414,30 @@ string last_log_line() {
     // Keep the last non-empty line
     size_t newline;
     while ((newline = g_log_pending.find('\n')) != string::npos) {
-        string line = g_log_pending.substr(0, newline);
+        string line = clip_log_line(g_log_pending.substr(0, newline));
         g_log_pending.erase(0, newline + 1);
-        while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
-            line.pop_back();
-        if (line.empty())
-            continue;
-        if (static_cast<int>(line.size()) > LOG_LINE_MAX)
-            line.resize(LOG_LINE_MAX);
-        g_last_log_line = line;
+        if (!line.empty())
+            g_last_log_line = line;
     }
+    return log_display_line();
+}
+
+// Characters written since the last newline, so a line appears as it is typed
+static string log_display_line() {
+    string partial = clip_log_line(g_log_pending);
+    if (!partial.empty())
+        return partial;
     return g_last_log_line;
+}
+
+// Drop trailing blanks and cut a long line down to the bar width
+static string clip_log_line(const string& text) {
+    string line = text;
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t'))
+        line.pop_back();
+    if (static_cast<int>(line.size()) > LOG_LINE_MAX)
+        line.resize(LOG_LINE_MAX);
+    return line;
 }
 
 // Height of the grey bar

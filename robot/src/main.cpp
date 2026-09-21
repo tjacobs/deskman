@@ -681,6 +681,9 @@ static bool start_talk_process() {
         }
         for (int descriptor = 3; descriptor < max_descriptor; descriptor++) close(descriptor);
 
+        // Stop Python buffering its output down the pipe, so the face log keeps up
+        setenv("PYTHONUNBUFFERED", "1", 1);
+
         // Exec talk.py, and report it when the exec itself fails
         execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), static_cast<char*>(nullptr));
         cerr << "Error: talk.py: " << strerror(errno) << endl;
