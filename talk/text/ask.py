@@ -291,6 +291,27 @@ def ask_model(prompt):
                 messages.append({"role": "user", "content": move.GET_BATTERY_RETRY_PROMPT})
                 continue
 
+            # Restart when the model talked instead of calling the tool
+            if move.needs_restart(prompt) and "restart" not in used:
+                result = move.run_restart()
+                record_tool("restart", {}, result)
+                remember_turn(messages, result)
+                return result
+
+            # Exit when the model talked instead of calling quit
+            if move.needs_quit(prompt) and "quit" not in used:
+                result = move.run_quit()
+                record_tool("quit", {}, result)
+                remember_turn(messages, result)
+                return result
+
+            # Go ready when the model talked instead of calling silence
+            if move.needs_silence(prompt) and "silence" not in used:
+                result = move.run_silence()
+                record_tool("silence", {}, result)
+                remember_turn(messages, result)
+                return result
+
             # Force get_volume when the model guessed the current volume
             if volume.needs_get_volume(prompt) and "get_volume" not in used and "volume" not in retried:
                 retried.add("volume")
@@ -383,6 +404,19 @@ def ask_model(prompt):
             if tool_name:
                 used.add(tool_name)
             if tool_name == "look" and result.startswith("My hat"):
+                remember_turn(messages, result)
+                return result
+            if tool_name == "set_volume":
+                reply = volume.confirm_volume_set() or result
+                remember_turn(messages, reply)
+                return reply
+            if tool_name == "restart":
+                remember_turn(messages, result)
+                return result
+            if tool_name == "quit":
+                remember_turn(messages, result)
+                return result
+            if tool_name == "silence":
                 remember_turn(messages, result)
                 return result
             if tool_name == "calculate":
@@ -832,6 +866,24 @@ def run_tool(tool_call):
     # Return the pack percent and voltage
     if name == "get_battery":
         result = move.run_get_battery()
+        record_tool(name, arguments, result)
+        return result
+
+    # Bounce robot and teleport
+    if name == "restart":
+        result = move.run_restart()
+        record_tool(name, arguments, result)
+        return result
+
+    # Exit the robot and this program
+    if name == "quit":
+        result = move.run_quit()
+        record_tool(name, arguments, result)
+        return result
+
+    # Stop talking and go back to ready
+    if name == "silence":
+        result = move.run_silence()
         record_tool(name, arguments, result)
         return result
 

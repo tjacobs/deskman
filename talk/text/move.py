@@ -5,6 +5,7 @@
 # Imports
 import os
 import re
+import subprocess
 import sys
 
 # Config
@@ -12,6 +13,12 @@ ROBOT_SRC = os.path.expanduser("~/robot/src")
 LOOK_DEFAULT_DEGREES = 90
 LOOK_DIRECTIONS = ["left", "right", "center", "up", "down", "hat_up", "hat_down"]
 GET_BATTERY_RETRY_PROMPT = "Do not guess. Call get_battery now, then answer using only the tool result."
+RESTART_COMMAND = "/usr/local/bin/deskman-restart-services"
+RESTART_MESSAGE = "Restarting!"
+RESTART_WORD = "restart"
+QUIT_WORDS = ("quit", "exit")
+QUIT_MESSAGE = "Goodbye!"
+QUIT_PENDING = False
 
 # Tools the local model can call for the head and pack
 TOOLS = [
@@ -42,6 +49,30 @@ TOOLS = [
         "function": {
             "name": "get_battery",
             "description": "Get the robot pack battery percent and voltage.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "restart",
+            "description": "Restart the robot and teleport services now.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "silence",
+            "description": "Stop talking and end the conversation. Call when asked to shut up, be quiet, or be silent.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "quit",
+            "description": "Exit the robot and this program. Call when asked to quit or exit.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -92,6 +123,60 @@ def needs_get_battery(prompt):
     if re.search(r"\bbatter(y|ies)\b", text):
         return True
     return bool(re.search(r"\b(charge|voltage)\b", text) and re.search(r"\b(what|how|percent|left)\b", text))
+
+# Bounce robot and teleport after this process can finish
+def run_restart():
+    print("Restarting robot and teleport.", flush=True)
+    try:
+        subprocess.Popen(["sudo", "-n", RESTART_COMMAND], start_new_session=True)
+    except Exception as error:
+        return f"Restart failed: {error}"
+    return RESTART_MESSAGE
+
+# Return true when the command asks to restart the services
+def needs_restart(prompt):
+    text = str(prompt or "").lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\brobot\b", " ", text)
+    text = " ".join(text.split())
+    return text == RESTART_WORD or text.startswith(RESTART_WORD)
+
+# End the conversation without a spoken reply
+def run_silence():
+    return "Ready."
+
+# Return true when the person wants talking to stop
+def needs_silence(prompt):
+    text = str(prompt or "").lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\brobot\b", " ", text)
+    text = " ".join(text.split())
+    if "shut up" in text or "be quiet" in text:
+        return True
+    words = text.split()
+    return "silence" in words or "quiet" in words
+
+# Exit the robot and this program
+def run_quit():
+    global QUIT_PENDING
+    QUIT_PENDING = True
+    try:
+        from robot_move import quit_robot
+        quit_robot()
+    except Exception as error:
+        return f"Quit failed: {error}"
+    return QUIT_MESSAGE
+
+# True after quit was requested
+def quit_pending():
+    return QUIT_PENDING
+
+# Return true when the command asks to exit
+def needs_quit(prompt):
+    text = str(prompt or "").lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    words = text.split()
+    return any(word in words for word in QUIT_WORDS)
 
 # Import ~/robot/src/look.py once
 def load_robot_look():

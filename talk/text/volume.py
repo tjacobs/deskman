@@ -11,6 +11,7 @@ import subprocess
 VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
 VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested percent, then answer using only the tool result."
 GET_VOLUME_RETRY_PROMPT = "Do not guess. Call get_volume now, then answer using only the tool result."
+VOLUME_SET_REPLY = "Set to {percent} percent."
 
 # Tools the local model can call for volume
 TOOLS = [
@@ -18,7 +19,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_volume",
-            "description": "Set the speaker volume to a percent from 0 to 100.",
+            "description": "Set the speaker volume to a percent from 0 to 100. Call this immediately. Do not speak first. Do not call get_volume first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -53,7 +54,7 @@ def main():
 def confirm_volume_set():
     if last_volume_percent is None:
         return None
-    return f"I have set the volume to {last_volume_percent} percent."
+    return VOLUME_SET_REPLY.format(percent=last_volume_percent)
 
 # Return true when the question needs a volume tool
 def needs_volume_tool(prompt):
@@ -115,7 +116,7 @@ def force_set_volume(prompt, messages, message, already_retried, record_tool):
     result = run_set_volume(arguments)
     record_tool("set_volume", arguments, result)
     print(f"[volume] forced set_volume -> {result}", flush=True)
-    return f"I have set the volume to {percent} percent."
+    return VOLUME_SET_REPLY.format(percent=percent)
 
 # Set speaker volume from tool arguments
 def run_set_volume(arguments):
@@ -133,7 +134,7 @@ def run_set_volume(arguments):
 
     # Remember the requested value, ALSA rounds and should not be spoken back
     last_volume_percent = percent
-    return f"Volume set to {percent} percent."
+    return VOLUME_SET_REPLY.format(percent=percent)
 
 # Read speaker volume for the tool
 def run_get_volume(arguments=None):

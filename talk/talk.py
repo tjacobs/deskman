@@ -35,7 +35,6 @@ TALK_READY = 'Robot ready.'
 TALK_LISTENING = 'Robot listening...'
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
-QUIT_WORDS = ('quit', 'exit')
 RESTART_WORD = 'restart'
 RESTART_MESSAGE = 'Restarting!'
 RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
@@ -52,6 +51,9 @@ WAKE_TONE_AMPLITUDE = 0.0625
 
 # Config follow-up window
 FOLLOW_UP_SECONDS = 20.0
+
+# Config how often the wake wait checks the face menu
+WAKE_POLL_SECONDS = 0.4
 
 # Config how long --test waits to hear itself before using the question text
 TEST_HEAR_SECONDS = 8.0
@@ -144,6 +146,7 @@ text_server_process = None
 sys.path.insert(0, TEXT_DIR)
 import ask as text_ask
 import client as text_client
+import move
 import reminders
 import robot_move
 text_ask.set_talk_module(sys.modules[__name__])
@@ -450,9 +453,14 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
     # Realtime listens itself after the greeting, so the first line is not lost to whisper
     if SAY_HI and REALTIME_MODE:
-        run_realtime_turn(listener, '', True)
-        LAST_ASK_AT = time.time()
-        print_talk_status()
+        silenced = run_realtime_turn(listener, '', True)
+        if move.quit_pending():
+            return
+        if silenced:
+            close_conversation()
+        else:
+            LAST_ASK_AT = time.time()
+            print_talk_status()
     try:
         while True:
             # Ask itself the test question, mic stays on so it hears itself
@@ -467,12 +475,16 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 break
             print(f'Command: {command}', flush=True)
 
+            # Stop talking and go back to ready
+            if move.needs_silence(command):
+                close_conversation()
+                continue
+
             # Restart robot and teleport when asked
             if wants_to_restart(command):
                 print(f'Reply: {RESTART_MESSAGE}', flush=True)
                 text_ask.last_tool_log.clear()
                 log_talk(command, RESTART_MESSAGE)
-                speak_muted(listener, kokoro_pipeline, RESTART_MESSAGE)
                 restart_services()
                 break
 
@@ -487,7 +499,12 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
             # Hand the whole conversation to OpenAI when streaming audio both ways
             if REALTIME_MODE:
-                run_realtime_turn(listener, command, False)
+                silenced = run_realtime_turn(listener, command, False)
+                if move.quit_pending():
+                    break
+                if silenced:
+                    close_conversation()
+                    continue
                 LAST_ASK_AT = time.time()
                 print_talk_status()
                 continue
@@ -498,6 +515,10 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 print(f'Reply: {reply}', flush=True)
             log_talk(command, reply)
             speak_muted(listener, kokoro_pipeline, reply)
+
+            # Quit ends the program, the robot is already exiting
+            if move.quit_pending():
+                break
 
             # Keep the conversation open so the next line needs no wake word
             LAST_ASK_AT = time.time()
@@ -555,17 +576,19 @@ def run_realtime_turn(listener, command, greet):
     except Exception as error:
         print_error('realtime session failed', error)
         reply_after_cloud_failure(listener, command)
-        return
+        return False
 
     # Share the microphone this loop already owns, so nothing fights for the device
     try:
-        realtime.run_conversation(session, listener, command, log_talk, GREETING if greet else '')
+        silenced = realtime.run_conversation(session, listener, command, log_talk, GREETING if greet else '')
     except Exception as error:
         print_error('realtime conversation failed', error)
         reply_after_cloud_failure(listener, command)
+        return False
     finally:
         realtime.close_session(session)
         listener.unmute()
+    return silenced
 
 # Answer with the local model after a live cloud or realtime failure
 def reply_after_cloud_failure(listener, command):
@@ -777,11 +800,32 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
         if LAST_ASK_AT > 0.0 and remaining <= 0.0:
             close_conversation()
         follow_up = remaining > 0.0
-        text = hear_utterance(whisper_model, kokoro_pipeline, listener, remaining)
+
+        # Poll often enough that Listen on the robot face can start a turn
+        wait = remaining
+        if wait <= 0.0:
+            wait = WAKE_POLL_SECONDS
+        else:
+            wait = min(wait, WAKE_POLL_SECONDS)
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener, wait)
         if text is None:
             return None
-        if follow_up and not text:
+
+        # Quiet on the face ends the turn and goes back to ready
+        if robot_move.consume_request("quiet"):
             close_conversation()
+            continue
+
+        # Listen on the face is the same as hearing the wake word
+        if robot_move.consume_request("wake"):
+            acknowledge_wake(listener)
+            if text:
+                command = text_after_wake(text)
+                return command if command else text
+            return hear_command(whisper_model, kokoro_pipeline, listener, '')
+        if follow_up and not text:
+            if conversation_remaining() <= 0.0:
+                close_conversation()
             continue
 
         # Treat speech from that wait as the command, even if the window ended while it was heard
@@ -925,16 +969,11 @@ def wants_to_restart(command):
 
 # Schedule robot and teleport to restart after this process finishes
 def restart_services():
-    print('Restarting robot and teleport.', flush=True)
-    try:
-        subprocess.Popen(['sudo', '-n', RESTART_COMMAND], start_new_session=True)
-    except Exception as error:
-        print_error('restart services', error)
+    move.run_restart()
 
 # Return true when the command asks to stop
 def wants_to_quit(command):
-    text = command.lower()
-    return any(word in text for word in QUIT_WORDS)
+    return move.needs_quit(command)
 
 # Tell robot to exit, it also tells teleport to exit
 def quit_robot():

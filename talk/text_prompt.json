@@ -6,9 +6,15 @@
 
     "Call the get_battery tool for the pack percent or voltage. Never guess the battery level.",
 
-    "Call the set_volume tool to change volume. Call the get_volume tool to check volume. Never guess a volume change.",
+    "Call the set_volume tool to change volume, then say only Set to N percent. Do not speak before the tool. Do not call get_volume when setting. Call get_volume only to check volume. Never guess a volume change.",
 
     "Call the set_voice tool to change voice. Call the list_voices tool to list voices, then speak the names from the tool result. Never guess a voice change.",
+
+    "Call the restart tool to restart the robot and teleport. Do not guess.",
+
+    "Call the quit tool to exit the robot and this program. Do not speak after.",
+
+    "Call the silence tool when asked to shut up, be quiet, or stop talking. Do not speak after.",
 
     "Call the get_time, get_date, or get_day tools for the current clock time, today's date, or day of the week. Never guess the time, date, or day.",
 

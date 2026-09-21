@@ -19,7 +19,10 @@ SCRIPT_DIR = __file__.rsplit('/', 1)[0]
 sys.path.insert(0, f'{SCRIPT_DIR}/text')
 import ask
 import client
+import move
+import robot_move
 import utils
+import volume
 
 # Config the session, config.json overrides these
 REALTIME_MODEL = 'gpt-realtime-2.1-mini'
@@ -217,10 +220,12 @@ def run_conversation(session, microphone, first_question, on_turn, greet_text):
 
     # Talk until the room goes quiet, a voice change carries the conversation into a new session
     expect_audio = bool(first_question or greet_text)
+    silenced = False
     while True:
         # Talk in this session
         voice = run_session(session, microphone, first_question, on_turn, greet_text, expect_audio)
-        if not voice:
+        silenced = session.silence_requested
+        if silenced or not voice:
             break
 
         # Reopen on the chosen voice, OpenAI fixes the voice once a session has spoken
@@ -238,6 +243,7 @@ def run_conversation(session, microphone, first_question, on_turn, greet_text):
 
     # Print the conversation closed
     print('Conversation closed.', flush=True)
+    return silenced
 
 # Talk in one session, returning a voice when the conversation should carry on in a new one
 def run_session(session, microphone, first_question, on_turn, greet_text, expect_audio):
@@ -280,6 +286,17 @@ def run_session(session, microphone, first_question, on_turn, greet_text, expect
     try:
         # While the idle deadline is not reached
         while time.time() < idle_deadline:
+            if not session.running:
+                return ''
+
+            # Quiet on the face stops this session and goes back to ready
+            if robot_move.consume_request("quiet"):
+                speaker.stop()
+                session.send({'type': 'response.cancel'})
+                session.silence_requested = True
+                session.running = False
+                return ''
+
             # Receive an event
             event = session.receive()
             if event is None:
@@ -303,6 +320,8 @@ def run_session(session, microphone, first_question, on_turn, greet_text, expect
 
 # Send one written question as a user turn and ask for a spoken answer
 def ask_question(session, question):
+    hide_volume_chatter(session, question)
+
     # Send the question as a user turn and ask for a spoken answer
     session.send({'type': 'conversation.item.create', 'item': { 'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': question}]}})
     session.send({'type': 'response.create'})
@@ -311,6 +330,39 @@ def ask_question(session, question):
 def speak_greeting(session, text):
     accent = session.config['realtime_accent']
     session.send({'type': 'response.create', 'response': {'instructions': f'{accent} Say exactly this, and nothing else: {text}'}})
+
+# Drop the model's set-volume chatter, the confirmation line is spoken after the tool
+def hide_volume_chatter(session, text):
+    if volume.needs_set_volume(text):
+        session.hide_volume_chatter = True
+
+# Restart as soon as the person asks, do not wait for the model to call the tool
+def start_restart(session):
+    if not move.needs_restart(session.heard):
+        return False
+    print(f'Reply: {move.RESTART_MESSAGE}', flush=True)
+    move.run_restart()
+    session.running = False
+    return True
+
+# Exit as soon as the person asks, do not wait for the model to call the tool
+def start_quit(session):
+    if not move.needs_quit(session.heard):
+        return False
+    print(f'Reply: {move.QUIT_MESSAGE}', flush=True)
+    move.run_quit()
+    session.running = False
+    return True
+
+# Stop speech and leave the realtime session, talk.py then goes ready
+def go_silent(session, speaker):
+    if not move.needs_silence(session.heard):
+        return False
+    speaker.stop()
+    session.send({'type': 'response.cancel'})
+    session.silence_requested = True
+    session.running = False
+    return True
 
 # Read microphone blocks, resample them, and append them to the input buffer
 def send_microphone(session, microphone):
@@ -355,6 +407,8 @@ def handle_event(session, microphone, speaker, event):
         if not microphone.muted:
             microphone.mute()
             session.send({'type': 'input_audio_buffer.clear'})
+        if session.hide_volume_chatter:
+            return True
         speaker.play(base64.b64decode(event['delta']))
         return True
 
@@ -392,6 +446,13 @@ def handle_event(session, microphone, speaker, event):
         if microphone.muted:
             return False
         session.heard = event.get('transcript', '').strip()
+        hide_volume_chatter(session, session.heard)
+        if start_restart(session):
+            return True
+        if start_quit(session):
+            return True
+        if go_silent(session, speaker):
+            return True
         streamed = session.heard_streamed or session.heard_open
         if session.heard_open:
             session.heard_open = False
@@ -403,6 +464,8 @@ def handle_event(session, microphone, speaker, event):
 
     # Print the model's words as it speaks, these come from the realtime model itself not a transcriber
     if kind == 'response.output_audio_transcript.delta':
+        if session.hide_volume_chatter:
+            return True
         if not PRINT_REPLY_LIVE:
             return True
         delta = event.get('delta', '')
@@ -423,6 +486,11 @@ def handle_event(session, microphone, speaker, event):
 
     # If the reply is done, print it and call the callback
     if kind == 'response.output_audio_transcript.done':
+        if session.hide_volume_chatter:
+            close_stream_lines(session)
+            session.reply_streamed = False
+            return True
+
         # Get the reply
         reply = event.get('transcript', '').strip()
 
@@ -453,6 +521,15 @@ def handle_event(session, microphone, speaker, event):
         if session.voice_request:
             session.tool_pending = False
             session.voice_ready = True
+            return True
+
+        if session.volume_confirm:
+            text = session.volume_confirm
+            session.volume_confirm = ''
+            session.tool_pending = False
+            session.hide_volume_chatter = False
+            speaker.stop()
+            speak_greeting(session, text)
             return True
 
         if session.tool_pending:
@@ -490,6 +567,36 @@ def run_function_call(session, event):
         # Build the call, run_tool prints it and keeps it for the log itself
         call = {'function': {'name': name, 'arguments': event.get('arguments')}}
         result = ask.run_tool(call)
+
+        # Set the pack as soon as the person asked, even if the model called get_volume first
+        if name == 'get_volume' and volume.needs_set_volume(session.heard):
+            percent = volume.parse_volume_percent(session.heard)
+            if percent is not None:
+                arguments = {'percent': percent}
+                result = volume.run_set_volume(arguments)
+                ask.record_tool('set_volume', arguments, result)
+                name = 'set_volume'
+
+    # Speak a fixed confirmation after a volume set, skip a second model reply
+    if name == 'set_volume':
+        session.volume_confirm = volume.confirm_volume_set() or str(result)
+
+    # Bounce the services as soon as the restart tool returns
+    if name == 'restart':
+        session.running = False
+
+    # Exit the robot and this program, with no further speech
+    if name == 'quit':
+        session.send({'type': 'response.cancel'})
+        session.running = False
+        return
+
+    # Stop talking and leave this session
+    if name == 'silence':
+        session.send({'type': 'response.cancel'})
+        session.silence_requested = True
+        session.running = False
+        return
 
     # Hand the result back, the answer is asked for once the whole turn is done
     session.send({'type': 'conversation.item.create', 'item': {
@@ -684,6 +791,9 @@ class Session:
         self.voice_request = ''
         self.voice_ready = False
         self.history = []
+        self.hide_volume_chatter = False
+        self.volume_confirm = ''
+        self.silence_requested = False
 
     # Send one event as JSON
     def send(self, event):

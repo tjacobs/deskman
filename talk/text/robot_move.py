@@ -127,6 +127,14 @@ def battery_reading():
 def set_listen(open):
     send_command({"command": "listen", "open": bool(open)})
 
+# True when the face menu asked for this command, then clear it
+def consume_request(command):
+    try:
+        reply = send_command({"command": command})
+    except Exception:
+        return False
+    return bool(reply.get(command))
+
 # Ask the robot process to exit, it also tells teleport to exit
 def quit_robot():
     reply = send_command({"command": "quit"})
