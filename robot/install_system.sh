@@ -118,6 +118,9 @@ PANEL_BACKLIGHT_UNIT="/etc/systemd/system/panel-backlight.service"
 PANEL_BACKLIGHT_SCRIPT="/usr/local/sbin/panel-backlight"
 PANEL_I2C_DEVICE="/dev/i2c-${PANEL_I2C_BUS}"
 I2C_SET="/usr/sbin/i2cset"
+PANEL_OUTPUT="DSI-2"
+PANEL_MODE="1280x800"
+PANEL_TRANSFORM="270"
 
 # Create the user config folders a first graphical login would
 prepare_user_dirs() {
@@ -594,26 +597,59 @@ persist_display_rotation() {
     chown gdm:gdm /var/lib/gdm3/.config/monitors.xml 2>/dev/null || true
 }
 
-# Map the DSI touch overlay to the xrandr-rotated panel at login
+# Rotate the Waveshare DSI panel to portrait and keep touch on that output
 persist_pi_touch_rotation() {
-    echo "Mapping DSI touch to the rotated panel"
-    mkdir -p "${RUN_HOME}/.config/autostart"
-    cat > "${RUN_HOME}/.config/autostart/deskman-map-touch.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Map DSI touch
-Exec=sh -c 'xinput list --name-only | grep -F ft5x06 | while IFS= read -r name; do xinput map-to-output "$name" DSI-2; done'
-X-GNOME-Autostart-enabled=true
-EOF
-    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/deskman-map-touch.desktop"
+    echo "Rotating ${PANEL_OUTPUT} to portrait"
+    write_kanshi_portrait
+    apply_pi_panel_rotation
+    write_pi_touch_map
     map_pi_touch || true
 }
 
-# Map every ft5x06 device onto DSI-2
+# labwc starts kanshi, this profile is what keeps DSI-2 rotated after login
+write_kanshi_portrait() {
+    mkdir -p "${RUN_HOME}/.config/kanshi"
+    cat > "${RUN_HOME}/.config/kanshi/config" <<EOF
+profile {
+    output ${PANEL_OUTPUT} enable mode ${PANEL_MODE} transform ${PANEL_TRANSFORM}
+}
+EOF
+    chown -R "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/kanshi"
+}
+
+# Rotate the live compositor now, then ask kanshi to reload
+apply_pi_panel_rotation() {
+    wayland_display=""
+    for socket_name in wayland-0 wayland-1; do
+        if [[ -S "/run/user/${RUN_UID}/${socket_name}" ]]; then
+            wayland_display="${socket_name}"
+            break
+        fi
+    done
+    if [[ -n "${wayland_display}" ]]; then
+        sudo -u "${RUN_USER}" env HOME="${RUN_HOME}" XDG_RUNTIME_DIR="/run/user/${RUN_UID}" WAYLAND_DISPLAY="${wayland_display}" wlr-randr --output "${PANEL_OUTPUT}" --transform "${PANEL_TRANSFORM}" >/dev/null 2>&1 || true
+    fi
+    pkill -HUP -u "${RUN_USER}" kanshi >/dev/null 2>&1 || true
+}
+
+# Map Goodix or ft5x06 onto DSI-2 at login, for an X session
+write_pi_touch_map() {
+    mkdir -p "${RUN_HOME}/.config/autostart"
+    cat > "${RUN_HOME}/.config/autostart/deskman-map-touch.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Map DSI touch
+Exec=sh -c 'xinput list --name-only | grep -E "ft5x06|Goodix" | while IFS= read -r name; do xinput map-to-output "\$name" ${PANEL_OUTPUT}; done'
+X-GNOME-Autostart-enabled=true
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/autostart/deskman-map-touch.desktop"
+}
+
+# Map every DSI touch device onto the panel
 map_pi_touch() {
     export DISPLAY="${DISPLAY:-:0}"
-    xinput list --name-only 2>/dev/null | { grep -F ft5x06 || true; } | while IFS= read -r touch_name; do
-        xinput map-to-output "${touch_name}" DSI-2
+    xinput list --name-only 2>/dev/null | { grep -E 'ft5x06|Goodix' || true; } | while IFS= read -r touch_name; do
+        xinput map-to-output "${touch_name}" "${PANEL_OUTPUT}"
     done
 }
 
