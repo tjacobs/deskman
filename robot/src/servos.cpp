@@ -247,6 +247,13 @@ static void load_servo_limits() {
         swap_inverted_limits(servo);
     }
 
+    // Reverse the hat count range so up still means up when the horn is flipped
+    if (config.hat_dir < 0) {
+        int high = servos[2].min_limit;
+        servos[2].min_limit = servos[2].max_limit;
+        servos[2].max_limit = high;
+    }
+
     // Log the limits, so a lost config.json can be rebuilt from the log
     string limits = "Servo limits:";
     const char *separator = " ";
@@ -257,6 +264,9 @@ static void load_servo_limits() {
         separator = ", ";
     }
     printf("%s\n", limits.c_str());
+    if (config.hat_dir < 0) {
+        printf("Hat direction: -1\n");
+    }
     fflush(stdout);
 }
 

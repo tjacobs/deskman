@@ -10,6 +10,7 @@ struct AppConfig {
     int tilt_max = 840;
     int hat_min = 2040;
     int hat_max = 3400;
+    int hat_dir = 1;
     bool has_servo_limits = true;
     bool loaded = true;
 };
