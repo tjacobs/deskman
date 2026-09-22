@@ -45,4 +45,5 @@ void setStatus(const string& status);
 
 // Tee stdout and stderr into log.txt, and read the newest line back
 void start_robot_log();
+void write_robot_log_direct(const char* line);
 string last_log_line();

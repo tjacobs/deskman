@@ -20,6 +20,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -86,13 +87,10 @@ static string g_socket_path;
 // Connected clients and the threads serving them
 static mutex g_clients_mutex;
 static vector<int> g_client_fds;
-static vector<thread> g_client_threads;
 
 // Overlay and listen state the face and tracker read
 static atomic<bool> g_overlay_open{false};
 static atomic<bool> g_listen_open{false};
-static atomic<bool> g_wake_requested{false};
-static atomic<bool> g_quiet_requested{false};
 static atomic<bool> g_camera_toggle{false};
 static atomic<bool> g_move_request{false};
 static atomic<bool> g_menu_open{false};
@@ -214,10 +212,15 @@ static void interface_loop() {
             continue;
         }
 
-        // One thread per client so look, pause, and talk can connect together
-        thread client_thread(serve_client_thread, client_fd);
-        lock_guard<mutex> lock(g_clients_mutex);
-        g_client_threads.push_back(std::move(client_thread));
+        // One thread per request, detach so finished ones do not pile up
+        try {
+            thread client_thread(serve_client_thread, client_fd);
+            client_thread.detach();
+        } catch (const system_error& error) {
+            printf("Interface client thread failed: %s\n", error.what());
+            fflush(stdout);
+            close(client_fd);
+        }
     }
 }
 
@@ -319,18 +322,6 @@ static string handle_request(const string& line, int from_fd) {
             send_to_clients(json{{"command", "quit"}}.dump(), from_fd);
             g_quit = true;
             reply = {{"ok", true}};
-
-        // Hand back a Listen press, then clear it
-        } else if (command == "wake") {
-            bool wake = g_wake_requested.load();
-            g_wake_requested = false;
-            reply = {{"ok", true}, {"wake", wake}};
-
-        // Hand back a Quiet press, then clear it
-        } else if (command == "quiet") {
-            bool quiet = g_quiet_requested.load();
-            g_quiet_requested = false;
-            reply = {{"ok", true}, {"quiet", quiet}};
 
         // Follow a face while talk is listening, and while an overlay is up
         } else if (command == "listen") {
@@ -578,11 +569,11 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
     if (item == MENU_QUIET) {
-        g_quiet_requested = true;
+        send_to_clients(json{{"command", "quiet"}}.dump(), NO_CLIENT);
         return;
     }
     if (item == MENU_LISTEN) {
-        g_wake_requested = true;
+        send_to_clients(json{{"command", "wake"}}.dump(), NO_CLIENT);
         return;
     }
     if (item == MENU_MOVE) {
@@ -642,7 +633,7 @@ bool listen_open() {
     return g_listen_open.load();
 }
 
-// Close the socket, join every client thread, and remove the socket file
+// Close the socket, wake detached clients, and remove the socket file
 void stop_interface() {
     if (!g_interface_running.load() && g_listen_fd < 0)
         return;
@@ -657,23 +648,15 @@ void stop_interface() {
     if (g_interface_thread.joinable())
         g_interface_thread.join();
 
-    // Shut every client down, taking the thread list out from under the lock
-    vector<thread> client_threads;
+    // Shut every client down so its detached thread can leave
     {
         lock_guard<mutex> lock(g_clients_mutex);
         for (int client_fd : g_client_fds) {
             if (client_fd >= 0)
                 shutdown(client_fd, SHUT_RDWR);
         }
-        client_threads.swap(g_client_threads);
+        g_client_fds.clear();
     }
-
-    // Wait for the client threads to finish, then forget them
-    for (thread& client_thread : client_threads) {
-        if (client_thread.joinable())
-            client_thread.join();
-    }
-    g_client_fds.clear();
 
     // Remove the socket file so the next run can bind
     if (!g_socket_path.empty()) {

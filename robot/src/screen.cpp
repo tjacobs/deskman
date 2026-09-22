@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -18,6 +19,7 @@
 #include <string>
 #include <system_error>
 #include <thread>
+#include <typeinfo>
 
 // Posix
 #include <fcntl.h>
@@ -101,12 +103,17 @@ static bool g_log_opened = false;
 static string robot_log_path();
 static void write_robot_log_loop();
 static void write_log_chunk(int descriptor, const char* buffer, ssize_t count);
+static void log_uncaught_exception();
 static void install_blank_cursor();
 static string log_display_line();
 static string clip_log_line(const string& text);
 
 // Append stdout and stderr to log.txt, and still print to the console
 void start_robot_log() {
+    // Print uncaught exceptions into log.txt before abort
+    set_terminate(log_uncaught_exception);
+
+    // Find log.txt beside the sources
     string path = robot_log_path();
 
     // Keep the original console so lines still print when run from a terminal
@@ -165,6 +172,36 @@ void start_robot_log() {
     cout << "=== Robot on " << stamp << " ===" << endl;
 }
 
+// Name the exception that is about to kill the process
+static void log_uncaught_exception() {
+    string message = "terminate called";
+    exception_ptr pending = current_exception();
+    if (!pending) {
+        write_robot_log_direct("terminate called without an active exception");
+        return;
+    }
+
+    // Pull the type and what() off the pending exception
+    try {
+        rethrow_exception(pending);
+    } catch (const system_error& error) {
+        message += " after throwing std::system_error: ";
+        message += error.what();
+        message += ", code ";
+        message += to_string(error.code().value());
+        message += " ";
+        message += error.code().message();
+    } catch (const exception& error) {
+        message += " after throwing ";
+        message += typeid(error).name();
+        message += ": ";
+        message += error.what();
+    } catch (...) {
+        message += " after throwing an unknown exception";
+    }
+    write_robot_log_direct(message.c_str());
+}
+
 // Get log path
 static string robot_log_path() {
     error_code error;
@@ -181,8 +218,31 @@ static void write_robot_log_loop() {
         ssize_t count = read(g_log_pipe_read, buffer, sizeof(buffer));
         if (count <= 0)
             break;
-        write_log_chunk(g_log_console_fd, buffer, count);
         write_log_chunk(g_log_file_fd, buffer, count);
+        write_log_chunk(g_log_console_fd, buffer, count);
+    }
+}
+
+// Write one line straight to log.txt and the console, so abort cannot lose it
+void write_robot_log_direct(const char* line) {
+    if (!line)
+        return;
+    string text = line;
+    if (text.empty() || text.back() != '\n')
+        text.push_back('\n');
+
+    // File first, then fsync, then the journal copy
+    string path = robot_log_path();
+    int log_fd = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, LOG_FILE_MODE);
+    if (log_fd >= 0) {
+        ssize_t written = write(log_fd, text.data(), text.size());
+        (void)written;
+        fsync(log_fd);
+        close(log_fd);
+    }
+    if (g_log_console_fd >= 0) {
+        ssize_t written = write(g_log_console_fd, text.data(), text.size());
+        (void)written;
     }
 }
 

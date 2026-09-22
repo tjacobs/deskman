@@ -52,9 +52,6 @@ WAKE_TONE_AMPLITUDE = 0.0625
 # Config follow-up window
 FOLLOW_UP_SECONDS = 20.0
 
-# Config how often the wake wait checks the face menu
-WAKE_POLL_SECONDS = 0.4
-
 # Config how long --test waits to hear itself before using the question text
 TEST_HEAR_SECONDS = 8.0
 
@@ -212,6 +209,9 @@ def main():
 
     # Exit if audio playback is unavailable
     check_ready()
+
+    # Hold a socket so Listen and Quiet arrive as pushes
+    robot_move.start_push_listener()
 
     # Speak the accent phrase and stop, this is for judging the voice, no models needed beyond the voice
     if ACCENT_MODE:
@@ -789,13 +789,8 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
             close_conversation()
         follow_up = remaining > 0.0
 
-        # Poll often enough that Listen on the robot face can start a turn
-        wait = remaining
-        if wait <= 0.0:
-            wait = WAKE_POLL_SECONDS
-        else:
-            wait = min(wait, WAKE_POLL_SECONDS)
-        text = hear_utterance(whisper_model, kokoro_pipeline, listener, wait)
+        # Wait for speech, or until the follow-up window ends, Listen and Quiet are pushed
+        text = hear_utterance(whisper_model, kokoro_pipeline, listener, remaining)
         if text is None:
             return None
 
@@ -883,7 +878,7 @@ def hear_command(whisper_model, kokoro_pipeline, listener, fallback):
 # Wait for one utterance and return what was said
 def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
     # Transcribe one whole utterance, empty when the hear timeout expired
-    audio = listener.next_utterance(timeout_seconds)
+    audio = listener.next_utterance(timeout_seconds, robot_move.has_pending_request)
     if audio is None:
         return None
     if len(audio) == 0:
@@ -1237,7 +1232,7 @@ class Listener:
             return None
 
     # Collect audio from when speech starts until it stops, empty array on timeout
-    def next_utterance(self, timeout_seconds):
+    def next_utterance(self, timeout_seconds, stop):
         pre_roll = collections.deque(maxlen=PRE_ROLL_BLOCKS)
         utterance = []
         speech_blocks = 0
@@ -1252,15 +1247,20 @@ class Listener:
                 speech_blocks = 0
                 silence_blocks = 0
 
-            # Give up when the hear timeout is reached, but never cut off speech that already started
-            if deadline is not None and not utterance:
-                remaining = deadline - time.time()
-                if remaining <= 0:
+            # Stop for a face menu push, or when the hear timeout is reached, never cut off speech that already started
+            if not utterance:
+                if stop():
                     return np.zeros(0, dtype=np.float32)
+                remaining = BLOCK_SECONDS
+                if deadline is not None:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        return np.zeros(0, dtype=np.float32)
+                    remaining = min(remaining, BLOCK_SECONDS)
                 try:
                     block = self.blocks.get(timeout=remaining)
                 except queue.Empty:
-                    return np.zeros(0, dtype=np.float32)
+                    continue
             else:
                 block = self.blocks.get()
 

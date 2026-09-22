@@ -62,6 +62,10 @@ static const int TALK_STOP_WAIT_MS = 200;
 static const int TALK_STOP_POLL_MS = 50;
 static const int TALK_EXEC_FAILED = 127;
 
+// Turn on to print memory, threads, and open files once a minute
+static const bool LOG_HEALTH = false;
+static const int HEALTH_LOG_SECONDS = 60;
+
 // How far the head and eyes swing for a full face offset
 static const int FACE_TRACK_COUNTS = 20;
 static const int FACE_LOOK_TILT_DEGREES = 30;
@@ -141,6 +145,8 @@ static void apply_call_handoff(FaceTracker& faceTracker);
 static void reap_talk_process();
 static void stop_robot(FaceTracker& faceTracker);
 static void stop_talk_process();
+static void log_robot_health();
+static int count_open_files();
 
 int main(int argc, char **argv) {
     // Log
@@ -280,6 +286,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         reap_talk_process();
         check_fan();
         check_battery();
+        log_robot_health();
         apply_call_handoff(faceTracker);
 
         // Camera preview and the Move look sequence from the popup
@@ -495,9 +502,9 @@ static pid_t find_other_running() {
 
         // Skip user, pid, cpu, mem, and the other ps columns so the rest is the command
         stringstream stream(line);
-        string user, cpu, memory, vsz, rss, tty, stat, start, time;
+        string user, cpu, memory, virtual_size, resident, tty, stat, start, time;
         pid_t pid = 0;
-        if (!(stream >> user >> pid >> cpu >> memory >> vsz >> rss >> tty >> stat >> start >> time))
+        if (!(stream >> user >> pid >> cpu >> memory >> virtual_size >> resident >> tty >> stat >> start >> time))
             continue;
         if (pid == my_pid)
             continue;
@@ -879,4 +886,47 @@ static void stop_talk_process() {
     kill(g_talk_pid, SIGKILL);
     waitpid(g_talk_pid, &status, WNOHANG);
     g_talk_pid = -1;
+}
+
+// Print memory, threads, and open files once a minute
+static void log_robot_health() {
+    if (!LOG_HEALTH) {
+        return;
+    }
+
+    // Wait out the interval
+    static steady_clock::time_point last_health{};
+    static bool have_last_health = false;
+    auto now = steady_clock::now();
+    if (have_last_health && duration_cast<seconds>(now - last_health).count() < HEALTH_LOG_SECONDS)
+        return;
+    last_health = now;
+    have_last_health = true;
+
+    // Status has the thread count and resident memory
+    int threads = 0;
+    int memory_kb = 0;
+    ifstream status("/proc/self/status");
+    string line;
+    while (getline(status, line)) {
+        if (line.rfind("Threads:", 0) == 0) {
+            threads = atoi(line.c_str() + 8);
+        }
+        if (line.rfind("VmRSS:", 0) == 0) {
+            memory_kb = atoi(line.c_str() + 6);
+        }
+    }
+    printf("Health threads %d, memory %d MB, open files %d, talk pid %d\n", threads, memory_kb / 1024, count_open_files(), (int)g_talk_pid);
+    fflush(stdout);
+}
+
+// Count open files under /proc/self/fd
+static int count_open_files() {
+    error_code error;
+    int count = 0;
+    for (const auto& entry : filesystem::directory_iterator("/proc/self/fd", error)) {
+        if (!error)
+            count++;
+    }
+    return count;
 }
