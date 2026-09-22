@@ -90,16 +90,22 @@ bool cameraSenderReady = false;
 int videoPayloadType = 103;
 string videoProfileLevelId = CONSTRAINED_BASELINE_PROFILE;
 bool remoteDescriptionSet = false;
-guint iceDisconnectTimerId = 0;
-int iceDisconnectSessionId = 0;
+guint candidateDropTimerId = 0;
+int candidateDropSessionId = 0;
 int videoSessionId = 0;
 gint64 remoteVideoBufferTimeUs = 0;
 guint remoteVideoTimerId = 0;
 bool remoteVideoShowing = false;
+
+// Counts of what the peer actually sent, so a silent call can be told from a decode failure
+gint64 remoteMediaStartUs = 0;
+guint64 remoteVideoPackets = 0;
+guint64 remoteAudioPackets = 0;
+guint64 remoteVideoFrames = 0;
 GstElement* remoteVideoSink = NULL;
 int remoteVideoWidth = 0;
 int remoteVideoHeight = 0;
-const int ICE_DISCONNECT_HANGOVER_MS = 3000;
+const int CANDIDATE_DROP_HANGOVER_MS = 3000;
 const int REMOTE_VIDEO_IDLE_MS = 1500;
 const int REMOTE_VIDEO_POLL_MS = 500;
 #ifdef HAVE_X11_FULLSCREEN
@@ -199,13 +205,16 @@ void requestFullscreenVideoWindow();
 void destroyFullscreenVideoWindow();
 #endif
 void startRemoteVideoIdleTimer();
+GstPadProbeReturn countRemoteVideoPacket(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
+GstPadProbeReturn countRemoteAudioPacket(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
+void reportRemoteMedia();
 GstPadProbeReturn noteRemoteVideoBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 gboolean hideRemoteVideoWhenIdle(gpointer userData);
 void showRemoteVideoWindow();
 void hideRemoteVideoWindow();
-void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer userData);
-gboolean iceDisconnectHangup(gpointer userData);
-void cancelIceDisconnectTimer();
+void logVideoCandidateState(GObject* object, GParamSpec* spec, gpointer userData);
+gboolean candidateDropHangup(gpointer userData);
+void cancelCandidateDropTimer();
 void logVideoSignalingState(GObject* object, GParamSpec* spec, gpointer userData);
 void onVideoOfferSet(GstPromise* promise, gpointer userData);
 void onVideoAnswerCreated(GstPromise* promise, gpointer userData);
@@ -340,7 +349,7 @@ void handleVideoMessage(string command, string payload) {
 #endif
     }
 
-    // Handle ICE candidate
+    // Handle a connection candidate
     else if (command == "VIDEO_ADDRESS") {
 #ifdef HAVE_GSTREAMER_WEBRTC
         handleVideoAddress(payload);
@@ -440,7 +449,7 @@ bool initVideoBackend() {
     // Quiet expected audio setup noise
     quietCallAudioLog();
 
-    // Check WebRTC ICE plugin
+    // Check the WebRTC connection plugin
     if (!gst_element_factory_find("nicesrc")) {
         cout << "Missing GStreamer nice plugin. On macOS run: brew install libnice-gstreamer" << endl;
         cout << "On Linux run: sudo apt install gstreamer1.0-nice" << endl;
@@ -556,7 +565,7 @@ bool startParsedVideoPipeline(string pipelineString) {
     // Register signaling callbacks
     g_signal_connect(videoWebrtc, "on-ice-candidate", G_CALLBACK(sendVideoAddress), NULL);
     g_signal_connect(videoWebrtc, "notify::connection-state", G_CALLBACK(logVideoConnectionState), NULL);
-    g_signal_connect(videoWebrtc, "notify::ice-connection-state", G_CALLBACK(logVideoIceConnectionState), NULL);
+    g_signal_connect(videoWebrtc, "notify::ice-connection-state", G_CALLBACK(logVideoCandidateState), NULL);
     g_signal_connect(videoWebrtc, "notify::signaling-state", G_CALLBACK(logVideoSignalingState), NULL);
 
     // Receive remote audio from the web client, and remote video on robot calls
@@ -933,17 +942,17 @@ string getCameraPixelName(__u32 pixelFormat) {
 #endif
 
 // Stop video pipeline
-void cancelIceDisconnectTimer() {
-    if (iceDisconnectTimerId) {
-        g_source_remove(iceDisconnectTimerId);
-        iceDisconnectTimerId = 0;
+void cancelCandidateDropTimer() {
+    if (candidateDropTimerId) {
+        g_source_remove(candidateDropTimerId);
+        candidateDropTimerId = 0;
     }
 }
 
 void stopVideoPipeline() {
     // Ignore hangups from the webrtcbin we are about to drop
     videoSessionId++;
-    cancelIceDisconnectTimer();
+    cancelCandidateDropTimer();
 
     // Stop watching remote frames, the window goes away with the pipeline
     if (remoteVideoTimerId) {
@@ -951,6 +960,7 @@ void stopVideoPipeline() {
         remoteVideoTimerId = 0;
     }
     remoteVideoShowing = false;
+    reportRemoteMedia();
     stopCallAudio();
     if (videoPipeline) gst_element_set_state(videoPipeline, GST_STATE_NULL);
     if (videoWebrtc) gst_object_unref(videoWebrtc);
@@ -1286,6 +1296,8 @@ void handleVideoAddress(string payload) {
         return;
     }
 
+    // Log the route the peer offers, an unreachable one explains media that never flows
+    cout << "Remote address " << candidate << endl;
     g_signal_emit_by_name(videoWebrtc, "add-ice-candidate", mediaLineIndex, candidate);
     json_object_unref(object);
 }
@@ -1332,8 +1344,14 @@ void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData) {
     if (!padCaps) padCaps = gst_pad_query_caps(pad, NULL);
     gchar* capsText = padCaps ? gst_caps_to_string(padCaps) : g_strdup("none");
     cout << "Remote WebRTC pad " << (GST_PAD_NAME(pad) ? GST_PAD_NAME(pad) : "?") << " caps=" << capsText << endl;
+
+    // Count the RTP arriving on this stream, so a peer sending nothing is obvious
+    bool isVideoPad = capsText && strstr(capsText, "media=(string)video");
     g_free(capsText);
     if (padCaps) gst_caps_unref(padCaps);
+    if (!remoteMediaStartUs)
+        remoteMediaStartUs = g_get_monotonic_time();
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, isVideoPad ? countRemoteVideoPacket : countRemoteAudioPacket, NULL, NULL);
 
     // Decode remote RTP with decodebin
     GstElement* decodebin = gst_element_factory_make("decodebin", NULL);
@@ -1497,6 +1515,7 @@ void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidat
     json_object_set_string_member(object, "sdpMid", mid.c_str());
 
     // Send candidate
+    cout << "Local address " << candidate << endl;
     string payload = encodeJson(object);
     if (videoWebSocket) videoWebSocket->send(videoDeviceName + " VIDEO_ADDRESS " + payload);
     json_object_unref(object);
@@ -1567,6 +1586,43 @@ void startRemoteVideoIdleTimer() {
     g_source_unref(source);
 }
 
+// Count video RTP from the peer, and say when the first packet landed
+GstPadProbeReturn countRemoteVideoPacket(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
+    // Ignore unused values
+    (void)pad;
+    (void)info;
+    (void)userData;
+
+    remoteVideoPackets++;
+    if (remoteVideoPackets == 1)
+        cout << "First remote video packet after " << (g_get_monotonic_time() - remoteMediaStartUs) / 1000 << "ms." << endl;
+    return GST_PAD_PROBE_OK;
+}
+
+// Count audio RTP from the peer, so a dead transport is told from a dead camera
+GstPadProbeReturn countRemoteAudioPacket(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
+    // Ignore unused values
+    (void)pad;
+    (void)info;
+    (void)userData;
+
+    remoteAudioPackets++;
+    if (remoteAudioPackets == 1)
+        cout << "First remote audio packet after " << (g_get_monotonic_time() - remoteMediaStartUs) / 1000 << "ms." << endl;
+    return GST_PAD_PROBE_OK;
+}
+
+// Say what arrived from the peer over the whole call
+void reportRemoteMedia() {
+    if (!remoteMediaStartUs)
+        return;
+    cout << "Remote media: " << remoteVideoPackets << " video packets, " << remoteVideoFrames << " decoded frames, " << remoteAudioPackets << " audio packets." << endl;
+    remoteMediaStartUs = 0;
+    remoteVideoPackets = 0;
+    remoteAudioPackets = 0;
+    remoteVideoFrames = 0;
+}
+
 // Note the arrival time of each remote frame, and show the screen again on the first one
 GstPadProbeReturn noteRemoteVideoBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
     // Ignore unused values
@@ -1575,6 +1631,9 @@ GstPadProbeReturn noteRemoteVideoBuffer(GstPad* pad, GstPadProbeInfo* info, gpoi
     (void)userData;
 
     remoteVideoBufferTimeUs = g_get_monotonic_time();
+    remoteVideoFrames++;
+    if (remoteVideoFrames == 1)
+        cout << "First remote video frame after " << (remoteVideoBufferTimeUs - remoteMediaStartUs) / 1000 << "ms." << endl;
     if (!remoteVideoShowing) showRemoteVideoWindow();
     return GST_PAD_PROBE_OK;
 }
@@ -1740,11 +1799,11 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
     }
 }
 
-// Log ICE connection state
-gboolean iceDisconnectHangup(gpointer userData) {
+// Hang up once the connection has stayed dropped
+gboolean candidateDropHangup(gpointer userData) {
     (void)userData;
-    iceDisconnectTimerId = 0;
-    if (iceDisconnectSessionId != videoSessionId) {
+    candidateDropTimerId = 0;
+    if (candidateDropSessionId != videoSessionId) {
         cout << "Ignoring hangup from old WebRTC session." << endl;
         return G_SOURCE_REMOVE;
     }
@@ -1754,7 +1813,7 @@ gboolean iceDisconnectHangup(gpointer userData) {
     return G_SOURCE_REMOVE;
 }
 
-void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer userData) {
+void logVideoCandidateState(GObject* object, GParamSpec* spec, gpointer userData) {
     (void)spec;
     (void)userData;
 
@@ -1763,7 +1822,7 @@ void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer user
 
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED ||
         state == GST_WEBRTC_ICE_CONNECTION_STATE_COMPLETED) {
-        cancelIceDisconnectTimer();
+        cancelCandidateDropTimer();
         return;
     }
 
@@ -1773,11 +1832,11 @@ void logVideoIceConnectionState(GObject* object, GParamSpec* spec, gpointer user
         return;
     }
 
-    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED && videoRunning && videoLoop && !iceDisconnectTimerId) {
-        iceDisconnectSessionId = videoSessionId;
-        GSource* source = g_timeout_source_new(ICE_DISCONNECT_HANGOVER_MS);
-        g_source_set_callback(source, iceDisconnectHangup, NULL, NULL);
-        iceDisconnectTimerId = g_source_attach(source, g_main_loop_get_context(videoLoop));
+    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED && videoRunning && videoLoop && !candidateDropTimerId) {
+        candidateDropSessionId = videoSessionId;
+        GSource* source = g_timeout_source_new(CANDIDATE_DROP_HANGOVER_MS);
+        g_source_set_callback(source, candidateDropHangup, NULL, NULL);
+        candidateDropTimerId = g_source_attach(source, g_main_loop_get_context(videoLoop));
         g_source_unref(source);
     }
 }
