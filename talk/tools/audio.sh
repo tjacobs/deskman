@@ -252,12 +252,35 @@ write_asound_config() {
     local card_name="$1"
     local output_path="$2"
 
+    # Send everything through pulse when it runs, it owns the card and locks direct openers out
+    if run_as_user pactl info >/dev/null 2>&1; then
+        cat > "${output_path}" <<EOF
+# Written by speak tools/audio.sh, sends ALSA through pulse so programs share the USB soundcard
+pcm.!default {
+    type pulse
+}
+
+ctl.!default {
+    type pulse
+}
+EOF
+        return
+    fi
+
     # Name the card rather than number it, indexes shift when other cards come and go
     cat > "${output_path}" <<EOF
 # Written by speak tools/audio.sh, defaults ALSA to the USB soundcard
+# Playback goes through the dmix software mixer, so speech and a call can share the speaker
 pcm.!default {
-    type plug
-    slave.pcm "hw:CARD=${card_name},DEV=0"
+    type asym
+    playback.pcm {
+        type plug
+        slave.pcm "dmix:CARD=${card_name},DEV=0"
+    }
+    capture.pcm {
+        type plug
+        slave.pcm "hw:CARD=${card_name},DEV=0"
+    }
 }
 
 ctl.!default {

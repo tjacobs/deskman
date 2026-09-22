@@ -1507,6 +1507,9 @@ void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidat
     (void)element;
     (void)userData;
 
+    // Skip the empty candidate that marks the end of gathering
+    if (!candidate || !*candidate) return;
+
     // Build candidate
     JsonObject* object = json_object_new();
     json_object_set_string_member(object, "candidate", candidate);

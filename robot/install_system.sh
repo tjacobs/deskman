@@ -44,6 +44,7 @@ main() {
     disable_screen_idle
     enable_service_shortcuts
     enable_screen_keyboard
+    keep_wifi_awake
     fix_mdns_name
     echo "Done."
 }
@@ -79,6 +80,10 @@ GETTY_AUTOLOGIN_CONF="${GETTY_AUTOLOGIN_DIR}/autologin.conf"
 
 # Set in detect_machine to jetson or pi
 MACHINE=""
+
+# NetworkManager drop-in that keeps the Wi-Fi radio awake for calls
+NETWORK_MANAGER_CONF_DIR="/etc/NetworkManager/conf.d"
+WIFI_POWER_SAVE_CONF_NAME="10-wifi-no-power-save.conf"
 
 # Avahi paths, the drop-in holds Avahi back until the network is up
 AVAHI_CONF="/etc/avahi/avahi-daemon.conf"
@@ -962,6 +967,31 @@ disable_gnome_screen_idle() {
 }
 
 # Publish this machine as hostname.local, Avahi renames itself when IPv6 addresses come and go
+# Stop Wi-Fi power save, it parks the radio between beacons and drops incoming call media
+keep_wifi_awake() {
+    # Tell NetworkManager to leave the radio on for every Wi-Fi connection
+    mkdir -p "${NETWORK_MANAGER_CONF_DIR}"
+    cat > "${NETWORK_MANAGER_CONF_DIR}/${WIFI_POWER_SAVE_CONF_NAME}" <<EOF
+# Written by robot/install_system.sh, keeps call audio and video flowing
+[connection]
+wifi.powersave = 2
+EOF
+    echo "Wrote ${NETWORK_MANAGER_CONF_DIR}/${WIFI_POWER_SAVE_CONF_NAME}"
+
+    # Turn it off on the radios that are already up, so this call works without a reboot
+    for wifi_device in /sys/class/net/*/wireless; do
+        [[ -e "${wifi_device}" ]] || continue
+        interface="$(basename "$(dirname "${wifi_device}")")"
+        iw dev "${interface}" set power_save off >/dev/null 2>&1 || true
+        echo "Wi-Fi power save off on ${interface}"
+    done
+
+    # Reload so the setting sticks without waiting for the next boot
+    if systemctl is-active --quiet NetworkManager; then
+        systemctl reload NetworkManager || true
+    fi
+}
+
 fix_mdns_name() {
     if [[ ! -f "${AVAHI_CONF}" ]]; then
         echo "No Avahi config, skip mDNS"
