@@ -444,24 +444,11 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     reminders.seed_reminders_from_memory()
     start_reminder_checker(listener, kokoro_pipeline)
 
-    # Greet, then keep the conversation open so the first line needs no wake word
-    if SAY_HI and not REALTIME_MODE:
+    # Greet, then wait for the wake word rather than holding the conversation open
+    if SAY_HI:
         greet(listener, kokoro_pipeline)
-        LAST_ASK_AT = time.time()
-    elif SAY_HI:
-        LAST_ASK_AT = time.time()
+    set_robot_listening(False)
     print_talk_help()
-
-    # Realtime listens itself after the greeting, so the first line is not lost to whisper
-    if SAY_HI and REALTIME_MODE:
-        silenced = run_realtime_turn(listener, '', True)
-        if move.quit_pending():
-            return
-        if silenced:
-            close_conversation()
-        else:
-            LAST_ASK_AT = time.time()
-            print_talk_status()
     try:
         while True:
             # Ask itself the test question, mic stays on so it hears itself
@@ -500,7 +487,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
             # Hand the whole conversation to OpenAI when streaming audio both ways
             if REALTIME_MODE:
-                silenced = run_realtime_turn(listener, command, False)
+                silenced = run_realtime_turn(listener, command)
                 if move.quit_pending():
                     break
                 if silenced:
@@ -564,7 +551,7 @@ def print_talk_status():
     print(TALK_READY, flush=True)
 
 # Hold one spoken conversation with OpenAI, audio up and audio down
-def run_realtime_turn(listener, command, greet):
+def run_realtime_turn(listener, command):
     # Drop leftover capture from loading and connecting, it would go up as speech
     listener.mute()
 
@@ -581,7 +568,7 @@ def run_realtime_turn(listener, command, greet):
 
     # Share the microphone this loop already owns, so nothing fights for the device
     try:
-        silenced = realtime.run_conversation(session, listener, command, log_talk, GREETING if greet else '')
+        silenced = realtime.run_conversation(session, listener, command, log_talk, '')
     except Exception as error:
         print_error('realtime conversation failed', error)
         reply_after_cloud_failure(listener, command)

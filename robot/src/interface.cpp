@@ -90,7 +90,7 @@ static vector<thread> g_client_threads;
 
 // Overlay and listen state the face and tracker read
 static atomic<bool> g_overlay_open{false};
-static atomic<bool> g_listen_open{true};
+static atomic<bool> g_listen_open{false};
 static atomic<bool> g_wake_requested{false};
 static atomic<bool> g_quiet_requested{false};
 static atomic<bool> g_camera_toggle{false};
@@ -637,7 +637,7 @@ void take_menu_presses(bool& camera, bool& move) {
     g_move_request = false;
 }
 
-// True while face tracking should follow, off after ready following a listen
+// True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open() {
     return g_listen_open.load();
 }

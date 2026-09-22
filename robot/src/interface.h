@@ -33,5 +33,5 @@ bool call_overlay_open();
 // Camera and Move presses since the last check, then clear them
 void take_menu_presses(bool& camera, bool& move);
 
-// True while face tracking should follow, off after ready following a listen
+// True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
