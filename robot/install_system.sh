@@ -40,6 +40,7 @@ main() {
     configure_i2c_arm
     install_panel_backlight_service
     persist_display_rotation
+    hide_mouse_pointer
     disable_screen_idle
     enable_service_shortcuts
     enable_screen_keyboard
@@ -121,6 +122,10 @@ I2C_SET="/usr/sbin/i2cset"
 PANEL_OUTPUT="DSI-2"
 PANEL_MODE="1280x800"
 PANEL_TRANSFORM="270"
+
+# Cursor theme holding one transparent pixel, so the compositor never draws a pointer
+CURSOR_THEME_NAME="blank"
+CURSOR_POINTER_NAMES="left_ptr pointer arrow top_left_arrow xterm text hand hand1 hand2 grab grabbing watch wait progress crosshair help question_arrow move fleur all-scroll not-allowed no-drop dnd-move dnd-copy col-resize row-resize e-resize n-resize s-resize w-resize ne-resize nw-resize se-resize sw-resize ew-resize ns-resize nesw-resize nwse-resize left_side right_side top_side bottom_side sb_h_double_arrow sb_v_double_arrow"
 
 # Create the user config folders a first graphical login would
 prepare_user_dirs() {
@@ -595,6 +600,49 @@ persist_display_rotation() {
     mkdir -p /var/lib/gdm3/.config
     write_monitors_xml /var/lib/gdm3/.config/monitors.xml
     chown gdm:gdm /var/lib/gdm3/.config/monitors.xml 2>/dev/null || true
+}
+
+# Draw nothing where the pointer is, the face should never show a cursor
+hide_mouse_pointer() {
+    echo "Hiding the mouse pointer"
+    write_blank_cursor_theme
+    select_blank_cursor_theme
+    reload_compositor_config
+}
+
+# One transparent cursor, with every common pointer name pointing at it
+write_blank_cursor_theme() {
+    theme_dir="${RUN_HOME}/.icons/${CURSOR_THEME_NAME}"
+    mkdir -p "${theme_dir}/cursors"
+    cat > "${theme_dir}/index.theme" <<EOF
+[Icon Theme]
+Name=${CURSOR_THEME_NAME}
+Comment=Transparent pointer for the robot face
+EOF
+
+    # Xcursor file holding a single fully transparent pixel, a fixed header then the image chunk
+    printf '\x58\x63\x75\x72\x10\x00\x00\x00\x00\x00\x01\x00\x01\x00\x00\x00\x02\x00\xfd\xff\x18\x00\x00\x00\x1c\x00\x00\x00\x24\x00\x00\x00\x02\x00\xfd\xff\x18\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00' > "${theme_dir}/cursors/default"
+
+    # Every shape the desktop might ask for resolves to the transparent one
+    for cursor_name in ${CURSOR_POINTER_NAMES}; do
+        ln -sf default "${theme_dir}/cursors/${cursor_name}"
+    done
+    chown -R "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.icons"
+}
+
+# labwc reads this file at login, and hands the theme to the apps it starts
+select_blank_cursor_theme() {
+    environment_file="${RUN_HOME}/.config/labwc/environment"
+    mkdir -p "${RUN_HOME}/.config/labwc"
+    touch "${environment_file}"
+    sed -i '/^XCURSOR_THEME=/d' "${environment_file}"
+    echo "XCURSOR_THEME=${CURSOR_THEME_NAME}" >> "${environment_file}"
+    chown -R "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/labwc"
+}
+
+# Ask the running compositor to re-read its config, a fresh login picks it up anyway
+reload_compositor_config() {
+    pkill -HUP -u "${RUN_USER}" labwc >/dev/null 2>&1 || true
 }
 
 # Rotate the Waveshare DSI panel to portrait and keep touch on that output

@@ -44,6 +44,9 @@ const int CALL_MENU_TAP_DEBOUNCE_MS = 300;
 // Turn on to print where each screen tap lands, off so the face status bar stays quiet
 static const bool LOG_TAPS = false;
 
+// A tap has no client waiting on a reply, so every client hears the broadcast
+static const int NO_CLIENT = -1;
+
 // Menu items stacked above the button
 static const int MENU_QUIET = 0;
 static const int MENU_LISTEN = 1;
@@ -109,7 +112,7 @@ static void interface_loop();
 static void serve_client_thread(int client_fd);
 static void add_client(int client_fd);
 static void serve_client(int client_fd);
-static string handle_request(const string& line);
+static string handle_request(const string& line, int from_fd);
 static json position_reply();
 static int request_int(const json& request, const char* key, int fallback);
 static bool wait_call_handoff(int command);
@@ -121,7 +124,7 @@ static SDL_Rect menu_item_rect(int index);
 static bool tap_in_rect(int x, int y, SDL_Rect rect);
 static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
 static void draw_hamburger_icon(SDL_Rect rect);
-static void send_to_clients(const string& line);
+static void send_to_clients(const string& line, int skip_fd);
 static void remove_client(int client_fd);
 static double seconds_since_start();
 
@@ -249,7 +252,7 @@ static void serve_client(int client_fd) {
             buffer.erase(0, position + 1);
             if (line.empty())
                 continue;
-            string reply = handle_request(line);
+            string reply = handle_request(line, client_fd);
             reply.push_back('\n');
             if (write(client_fd, reply.data(), reply.size()) < 0)
                 break;
@@ -258,8 +261,8 @@ static void serve_client(int client_fd) {
     close(client_fd);
 }
 
-// Run one JSON command and return the JSON reply
-static string handle_request(const string& line) {
+// Run one JSON command and return the JSON reply, the asking client hears no broadcast
+static string handle_request(const string& line, int from_fd) {
     json reply;
     try {
         json request = json::parse(line);
@@ -313,7 +316,7 @@ static string handle_request(const string& line) {
 
         // Tell every client to quit, then quit
         } else if (command == "quit") {
-            send_to_clients(json{{"command", "quit"}}.dump());
+            send_to_clients(json{{"command", "quit"}}.dump(), from_fd);
             g_quit = true;
             reply = {{"ok", true}};
 
@@ -387,7 +390,7 @@ static void send_menu() {
     if (!debounce_tap())
         return;
     g_overlay_open = !g_overlay_open.load();
-    send_to_clients(json{{"command", "menu"}}.dump());
+    send_to_clients(json{{"command", "menu"}}.dump(), NO_CLIENT);
 }
 
 // True when this tap is far enough from the last one
@@ -399,8 +402,8 @@ static bool debounce_tap() {
     return true;
 }
 
-// Send one line to every connected client
-static void send_to_clients(const string& line) {
+// Send one line to every connected client, apart from one waiting for a reply
+static void send_to_clients(const string& line, int skip_fd) {
     // Clients read by line, so make sure there is one
     string payload = line;
     if (payload.empty() || payload.back() != '\n')
@@ -409,7 +412,7 @@ static void send_to_clients(const string& line) {
     // Write to each client in turn, a dead one is cleaned up by its own thread
     lock_guard<mutex> lock(g_clients_mutex);
     for (int client_fd : g_client_fds) {
-        if (client_fd < 0)
+        if (client_fd < 0 || client_fd == skip_fd)
             continue;
         ssize_t written = write(client_fd, payload.data(), payload.size());
         (void)written;
@@ -574,7 +577,7 @@ void handle_call_event(const SDL_Event& event) {
     if (item >= 0)
         set_menu_open(false);
     if (item == MENU_EXIT) {
-        send_to_clients(json{{"command", "quit"}}.dump());
+        send_to_clients(json{{"command", "quit"}}.dump(), NO_CLIENT);
         g_quit = true;
         return;
     }
@@ -596,7 +599,7 @@ void handle_call_event(const SDL_Event& event) {
     }
     if (item == MENU_CALL) {
         g_overlay_open = !g_overlay_open.load();
-        send_to_clients(json{{"command", "menu"}}.dump());
+        send_to_clients(json{{"command", "menu"}}.dump(), NO_CLIENT);
         return;
     }
 
