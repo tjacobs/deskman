@@ -64,6 +64,7 @@ REMINDER_CHECK_SECONDS = 20.0
 # Config low battery voice
 LOW_BATTERY_PERCENT = 10
 LOW_BATTERY_SECONDS = 60
+LOW_BATTERY_DROP_VOLTS = 0.02
 LOW_BATTERY_ASK = "Invent one new short spoken line, eight words or fewer, that I have low battery. Soft and polite, a gentle request, not a command. In the spirit of I'm tired, could you plug me in, low battery, I'm sleepy, so hungry."
 LOW_BATTERY_FALLBACKS = ("Low battery", "Could you plug me in?", "I'm sleepy.", "So hungry.")
 
@@ -1106,9 +1107,10 @@ def speak_low_battery(listener, kokoro_pipeline):
         print(f'Low battery {percent}%, {voltage:.2f} V', flush=True)
         return
 
-    # Voltage held or rose, so it is plugged in
-    if voltage >= previous:
-        print(f'Low battery {percent}%, {voltage:.2f} V up from {previous:.2f} V, charging', flush=True)
+    # Voltage held or rose, or the drop is just meter noise
+    if previous - voltage < LOW_BATTERY_DROP_VOLTS:
+        if voltage >= previous:
+            print(f'Low battery {percent}%, {voltage:.2f} V up from {previous:.2f} V, charging', flush=True)
         return
 
     # Still draining, so ask
