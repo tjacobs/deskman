@@ -526,23 +526,19 @@ static void set_menu_open(bool open) {
 
 // Route a screen tap to the menu popup, or to the status bar
 void handle_call_event(const SDL_Event& event) {
-    // Take the tap position from a mouse click or a finger
+    // Take the tap from the mouse event, touch arrives as one with the xrandr mapping
     int x = 0;
     int y = 0;
     bool tap = false;
     const char* tap_source = "";
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-        if (event.button.which == SDL_TOUCH_MOUSEID)
-            return;
         tap = true;
-        tap_source = "mouse";
+        tap_source = event.button.which == SDL_TOUCH_MOUSEID ? "touch" : "mouse";
         x = event.button.x;
         y = event.button.y;
     } else if (event.type == SDL_FINGERDOWN) {
-        tap = true;
-        tap_source = "finger";
-        x = (int)(event.tfinger.x * screen_width);
-        y = (int)(event.tfinger.y * screen_height);
+        // Same press as the mouse event above, skip so one tap does not fire twice
+        return;
     }
     if (!tap)
         return;
