@@ -150,7 +150,7 @@ def open_session(config):
 
     # Open the socket, the receive timeout lets the reply loop check the idle clock
     model = config['realtime_model']
-    print(f'Connecting to {model}, voice {config["realtime_voice"]}...', flush=True)
+    print('Connecting to OpenAI...', flush=True)
     socket = websocket.create_connection(f'{REALTIME_URL}?model={model}', header=[f'Authorization: Bearer {key}'], timeout=CONNECT_TIMEOUT)
     socket.settimeout(RECEIVE_TIMEOUT)
     session = Session(socket)
