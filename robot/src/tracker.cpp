@@ -20,7 +20,7 @@ static const int FACE_DETECT_GAP_MS = 1000 / FACE_DETECT_FPS;
 static const int FRAME_WAIT_MS = 10;
 
 // Pace the preview, reading the camera flat out cooks the Pi for frames nobody sees
-static const int PREVIEW_FPS = 15;
+static const int PREVIEW_FPS = 30;
 static const int PREVIEW_GAP_MS = 1000 / PREVIEW_FPS;
 
 // Preview spans the screen, sitting below the top edge
@@ -88,7 +88,9 @@ void FaceTracker::startTracking() {
     // Start tracking thread
     shouldQuit = false;
     tracking = true;
+    detectBusy = false;
     trackingThread = thread(&FaceTracker::trackingThreadFunction, this);
+    detectThread = thread(&FaceTracker::detectThreadFunction, this);
 }
 
 // Follow the largest face in each frame until stopTracking
@@ -108,37 +110,28 @@ void FaceTracker::trackingThreadFunction() {
                 break;
             }
 
-            // Detect on a timer rather than on every frame, so the preview is not held to the Haar rate
+            // Hand the frame to the detector on a timer, it runs alongside so it never holds up the preview
             auto now = chrono::steady_clock::now();
-            bool detectNow = chrono::duration_cast<chrono::milliseconds>(now - lastDetectAt).count() >= FACE_DETECT_GAP_MS;
-            if (detectNow) {
-                lastDetectAt = now;
-                lastFaces = detectFaces(frame);
-
-                // Keep the largest face by area
-                unique_lock<mutex> lock(faceMutex);
-                largestFace = 0;
-                if (!lastFaces.empty()) {
-                    int maxArea = 0;
-                    for (size_t i = 0; i < lastFaces.size(); i++) {
-                        int area = lastFaces[i].width * lastFaces[i].height;
-                        if (area > maxArea) {
-                            maxArea = area;
-                            largestFace = i;
-                            currentFace = lastFaces[largestFace];
-                        }
-                    }
-                } else {
-                    currentFace = cv::Rect();
+            if (chrono::duration_cast<chrono::milliseconds>(now - lastDetectAt).count() >= FACE_DETECT_GAP_MS) {
+                unique_lock<mutex> detectLock(detectMutex);
+                if (!detectBusy) {
+                    lastDetectAt = now;
+                    frame.copyTo(detectFrame);
+                    detectBusy = true;
+                    detectLock.unlock();
+                    detectReady.notify_one();
                 }
-                lock.unlock();
             }
 
             // Draw the boxes from the last detection and update frame buffer if the preview is on
             if (showWindow.load()) {
-                for (size_t i = 0; i < lastFaces.size(); i++) {
-                    cv::Scalar color = i == largestFace ? TRACKED_FACE_COLOR : OTHER_FACE_COLOR;
-                    cv::rectangle(frame, lastFaces[i], color, FACE_BOX_THICKNESS);
+                unique_lock<mutex> faceLock(faceMutex);
+                vector<cv::Rect> faces = lastFaces;
+                size_t largest = largestFace;
+                faceLock.unlock();
+                for (size_t i = 0; i < faces.size(); i++) {
+                    cv::Scalar color = i == largest ? TRACKED_FACE_COLOR : OTHER_FACE_COLOR;
+                    cv::rectangle(frame, faces[i], color, FACE_BOX_THICKNESS);
                 }
                 unique_lock<mutex> frameLock(frameMutex);
                 frame.copyTo(currentFrame);
@@ -157,6 +150,46 @@ void FaceTracker::trackingThreadFunction() {
 
     // Let startTracking run again after the thread stops on its own
     tracking = false;
+    detectReady.notify_all();
+}
+
+// Run the Haar detector on whichever frame the capture thread last handed over
+void FaceTracker::detectThreadFunction() {
+    while (!shouldQuit) {
+        // Wait for the next frame to look at
+        cv::Mat frame;
+        {
+            unique_lock<mutex> detectLock(detectMutex);
+            detectReady.wait(detectLock, [this] { return detectBusy || shouldQuit.load(); });
+            if (shouldQuit)
+                return;
+            frame = detectFrame;
+        }
+
+        // Keep the largest face by area, and the boxes the preview draws
+        vector<cv::Rect> faces = detectFaces(frame);
+        unique_lock<mutex> faceLock(faceMutex);
+        lastFaces = faces;
+        largestFace = 0;
+        if (!faces.empty()) {
+            int maxArea = 0;
+            for (size_t i = 0; i < faces.size(); i++) {
+                int area = faces[i].width * faces[i].height;
+                if (area > maxArea) {
+                    maxArea = area;
+                    largestFace = i;
+                    currentFace = faces[largestFace];
+                }
+            }
+        } else {
+            currentFace = cv::Rect();
+        }
+        faceLock.unlock();
+
+        // Say the detector is free for the next frame
+        unique_lock<mutex> detectLock(detectMutex);
+        detectBusy = false;
+    }
 }
 
 // Find every face in one frame
@@ -268,8 +301,11 @@ void FaceTracker::stopTracking() {
     shouldQuit = true;
     camera.release();
     cameraAvailable = false;
+    detectReady.notify_all();
     if (trackingThread.joinable())
         trackingThread.join();
+    if (detectThread.joinable())
+        detectThread.join();
     tracking = false;
 }
 

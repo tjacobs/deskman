@@ -24,7 +24,7 @@ public:
     // Capture size and rate
     const int width = 640;
     const int height = 480;
-    const int framerate = 10;
+    const int framerate = 30;
 
 private:
     // Open handle, detected platform, and running state

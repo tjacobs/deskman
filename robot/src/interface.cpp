@@ -84,6 +84,7 @@ static const int HAMBURGER_LINE_GAP = 7;
 static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
 static const SDL_Color EXIT_BUTTON_COLOR = {180, 40, 40, 255};
 static const SDL_Color RECORDING_BUTTON_COLOR = {220, 30, 30, 255};
+static const SDL_Color CAMERA_ON_COLOR = {30, 140, 70, 255};
 static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
 
@@ -107,6 +108,7 @@ static vector<int> g_client_fds;
 static atomic<bool> g_overlay_open{false};
 static atomic<bool> g_listen_open{false};
 static atomic<bool> g_camera_toggle{false};
+static atomic<bool> g_camera_showing{false};
 static atomic<bool> g_move_request{false};
 static atomic<bool> g_audio_request{false};
 static atomic<bool> g_record_request{false};
@@ -466,10 +468,12 @@ static const char* menu_item_label(int index) {
     return MENU_ITEM_LABELS[index];
 }
 
-// Colour one popup item, Exit is red and Stop goes brighter red while recording
+// Colour one popup item, Exit is red, Stop goes brighter red, and Camera goes green while the preview is up
 static SDL_Color menu_item_color(int index) {
     if (index == MENU_RECORD && recording())
         return RECORDING_BUTTON_COLOR;
+    if (index == MENU_CAMERA && g_camera_showing.load())
+        return CAMERA_ON_COLOR;
     if (index == MENU_EXIT)
         return EXIT_BUTTON_COLOR;
     return MENU_BUTTON_COLOR;
@@ -690,6 +694,11 @@ void take_menu_presses(bool& camera, bool& move, bool& audio, bool& record) {
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open() {
     return g_listen_open.load();
+}
+
+// Show whether the preview is up, so the Camera button can say so
+void set_camera_showing(bool showing) {
+    g_camera_showing = showing;
 }
 
 // Show the mode talk is running, so the button starts on the right label

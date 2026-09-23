@@ -423,6 +423,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (use_camera && faceTracker.isTracking())
             faceTracker.updateWindow();
         draw_recording_mark(face.font);
+        set_camera_showing(show_camera);
         draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
         SDL_RenderPresent(renderer);
 

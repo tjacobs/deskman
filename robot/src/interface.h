@@ -42,6 +42,9 @@ const int TALK_MODE_CLOUD = 1;
 const int TALK_MODE_REALTIME = 2;
 const int TALK_MODE_NONE = -1;
 
+// Show whether the camera preview is up, so the Camera button can say so
+void set_camera_showing(bool showing);
+
 // Show the mode talk is running, take the mode the Mode button settled on, and name one
 void set_talk_mode(int mode);
 int take_talk_mode_request();

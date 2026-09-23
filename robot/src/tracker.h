@@ -12,6 +12,7 @@
 // System
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -43,8 +44,9 @@ public:
     atomic<bool> showWindow;
 
 private:
-    // Worker thread body, and the detection it runs
+    // Worker thread bodies, one grabs frames and one looks for faces in them
     void trackingThreadFunction();
+    void detectThreadFunction();
     vector<cv::Rect> detectFaces(const cv::Mat& frame);
 
     // Camera, cascade, and the face the tracker last saw
@@ -57,6 +59,13 @@ private:
     vector<cv::Rect> lastFaces;
     size_t largestFace = 0;
     chrono::steady_clock::time_point lastDetectAt{};
+
+    // Frame the detector is working on, handed over by the capture thread
+    thread detectThread;
+    cv::Mat detectFrame;
+    mutex detectMutex;
+    condition_variable detectReady;
+    bool detectBusy = false;
 
     // Worker thread, and the flags that start and stop it
     thread trackingThread;
