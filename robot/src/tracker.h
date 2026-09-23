@@ -55,6 +55,10 @@ private:
     cv::Rect currentFace;
     mutex faceMutex;
 
+    // Size of the frames being tracked on, the camera and a recording differ
+    int frameWidth = 0;
+    int frameHeight = 0;
+
     // Boxes from the last detection, drawn onto the frames in between
     vector<cv::Rect> lastFaces;
     size_t largestFace = 0;

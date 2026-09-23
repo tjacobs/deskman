@@ -140,7 +140,8 @@ static atomic<bool> g_camera_toggle{false};
 static atomic<bool> g_camera_showing{false};
 static atomic<bool> g_move_request{false};
 static atomic<bool> g_audio_request{false};
-static atomic<bool> g_record_request{false};
+static atomic<int> g_record_request{RECORD_REQUEST_NONE};
+static atomic<bool> g_play_request{false};
 
 // The recordings list, where the files are and which row asked to be deleted
 static string g_recordings_path;
@@ -200,9 +201,12 @@ static void remove_client(int client_fd);
 static double seconds_since_start();
 
 // Bind the socket and start accepting clients
-bool start_interface() {
+bool start_interface(const string& recordings_path) {
     if (g_interface_running.load())
         return true;
+
+    // Remember where the recordings are, the Videos list reads that folder
+    g_recordings_path = recordings_path;
 
     // Stamp the start so tap logs can say how far into the boot they landed
     g_interface_start = steady_clock::now();
@@ -377,6 +381,27 @@ static string handle_request(const string& line, int from_fd) {
                 reply = {{"ok", false}, {"error", "resume timeout"}};
             else
                 reply = {{"ok", true}};
+
+        // Start or stop a recording, the main loop does the work as the camera moves hands
+        } else if (command == "record") {
+            bool start = request.value("start", true);
+            if (start && recording()) {
+                reply = {{"ok", false}, {"error", "already recording"}};
+            } else if (!start && !recording()) {
+                reply = {{"ok", false}, {"error", "not recording"}};
+            } else {
+                g_record_request = start ? RECORD_REQUEST_START : RECORD_REQUEST_STOP;
+                reply = {{"ok", true}};
+            }
+
+        // Play the newest recording on the screen
+        } else if (command == "play") {
+            if (g_recordings_path.empty() || list_recordings(g_recordings_path).empty()) {
+                reply = {{"ok", false}, {"error", "no recordings"}};
+            } else {
+                g_play_request = true;
+                reply = {{"ok", true}};
+            }
 
         // Toggle the peer list
         } else if (command == "menu") {
@@ -595,7 +620,7 @@ void draw_video_list(TTF_Font* font) {
     // The video fills the space the list was using, with a hint on how to stop it
     if (playing()) {
         draw_playback_frame();
-        draw_text(VIDEO_PLAYING_TEXT, VIDEO_LIST_PAD, VIDEO_LIST_TOP - VIDEO_ROW_HEIGHT, font, BUTTON_LABEL_COLOR);
+        draw_text(VIDEO_PLAYING_TEXT, VIDEO_LIST_PAD, VIDEO_LIST_TOP, font, BUTTON_LABEL_COLOR);
         return;
     }
     if (!g_video_list_open.load())
@@ -641,11 +666,6 @@ void draw_video_list(TTF_Font* font) {
         draw_bar_button(video_page_rect(false), VIDEO_NEWER_LABEL, MENU_BUTTON_COLOR, font);
     if (g_video_first_row + rows < (int)g_recordings.size())
         draw_bar_button(video_page_rect(true), VIDEO_OLDER_LABEL, MENU_BUTTON_COLOR, font);
-}
-
-// Say where the recordings are kept, so the list can find them
-void set_recordings_path(const string& path) {
-    g_recordings_path = path;
 }
 
 // Read the folder again and show the list
@@ -898,7 +918,7 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
     if (item == MENU_RECORD) {
-        g_record_request = true;
+        g_record_request = RECORD_REQUEST_TOGGLE;
         return;
     }
     if (item == MENU_VIDEOS) {
@@ -952,16 +972,24 @@ bool call_overlay_open() {
     return g_overlay_open.load();
 }
 
-// Camera, Move, Audio, and Record presses since the last check, then clear them
-void take_menu_presses(bool& camera, bool& move, bool& audio, bool& record) {
+// Camera, Move, and Audio presses since the last check, then clear them
+void take_menu_presses(bool& camera, bool& move, bool& audio) {
     camera = g_camera_toggle.load();
     g_camera_toggle = false;
     move = g_move_request.load();
     g_move_request = false;
     audio = g_audio_request.load();
     g_audio_request = false;
-    record = g_record_request.load();
-    g_record_request = false;
+}
+
+// What the Record button or a voice command asked for, then clear it
+int take_record_request() {
+    return g_record_request.exchange(RECORD_REQUEST_NONE);
+}
+
+// True when something asked to play the newest recording, then clear it
+bool take_play_request() {
+    return g_play_request.exchange(false);
 }
 
 // True while face tracking should follow, off in ready until talk hears the wake word

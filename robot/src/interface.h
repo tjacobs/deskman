@@ -15,8 +15,8 @@ const int CALL_HANDOFF_NONE = 0;
 const int CALL_HANDOFF_PAUSE = 1;
 const int CALL_HANDOFF_RESUME = 2;
 
-// Open and close the Unix socket other programs talk to
-bool start_interface();
+// Open and close the Unix socket other programs talk to, and say where recordings are kept
+bool start_interface(const string& recordings_path);
 void stop_interface();
 
 // Pick up a pause or resume request, then report how it went
@@ -36,8 +36,7 @@ int menu_button_left();
 // True while the peer list is up
 bool call_overlay_open();
 
-// Say where the recordings are, draw the list or the playing video, and say when it is up
-void set_recordings_path(const string& path);
+// Draw the recordings list or the playing video, and say when it is up
 void draw_video_list(TTF_Font* font);
 bool video_list_open();
 
@@ -45,8 +44,18 @@ bool video_list_open();
 void draw_wifi_list(TTF_Font* font);
 bool wifi_list_open();
 
-// Camera, Move, Audio, and Record presses since the last check, then clear them
-void take_menu_presses(bool& camera, bool& move, bool& audio, bool& record);
+// Camera, Move, and Audio presses since the last check, then clear them
+void take_menu_presses(bool& camera, bool& move, bool& audio);
+
+// What the Record button or a voice command last asked for
+const int RECORD_REQUEST_NONE = 0;
+const int RECORD_REQUEST_TOGGLE = 1;
+const int RECORD_REQUEST_START = 2;
+const int RECORD_REQUEST_STOP = 3;
+
+// Take the recording request, and a request to play the newest recording
+int take_record_request();
+bool take_play_request();
 
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();

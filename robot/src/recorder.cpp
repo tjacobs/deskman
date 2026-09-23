@@ -30,6 +30,9 @@ static const char* RECORD_VIDEO_SIZE = "1920x1080";
 static const char* RECORD_FRAMERATE = "30";
 static const char* RECORD_INPUT_FORMAT = "mjpeg";
 
+// Mirror the file as it is written, so a playback matches the preview it was watched on
+static const char* RECORD_FLIP = "hflip";
+
 // Software H264, the Pi has no encoder in hardware, and quality against file size
 static const char* RECORD_VIDEO_CODEC = "libx264";
 static const char* RECORD_PRESET = "ultrafast";
@@ -109,7 +112,7 @@ bool start_recording(const string& directory, int cameraIndex) {
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-f", "v4l2", "-input_format", RECORD_INPUT_FORMAT, "-video_size", RECORD_VIDEO_SIZE, "-framerate", RECORD_FRAMERATE, "-i", cameraDevice,
         "-f", "alsa", "-ac", "1", "-use_wallclock_as_timestamps", "1", "-i", microphone,
-        "-map", "0:v", "-map", "1:a",
+        "-map", "0:v", "-map", "1:a", "-vf", RECORD_FLIP,
         "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
         "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path,
         "-map", "0:v", "-s", PREVIEW_SIZE, "-r", PREVIEW_FRAMERATE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
@@ -204,7 +207,7 @@ static string recordingFilePath(const string& directory) {
     localtime_r(&now, &parts);
     char stamp[32];
     strftime(stamp, sizeof(stamp), "%Y_%m_%d_%H_%M_%S", &parts);
-    return directory + "/deskman_" + stamp + ".mp4";
+    return directory + "/video_" + stamp + ".mp4";
 }
 
 // Name the shared capture device for the USB microphone

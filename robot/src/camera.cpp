@@ -243,7 +243,6 @@ static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int wi
         if (capture.read(test_frame) && !test_frame.empty()) {
             camera_index = index;
             cv::utils::logging::setLogLevel(log_level);
-            cout << "Using camera " << index << endl;
             return true;
         }
 

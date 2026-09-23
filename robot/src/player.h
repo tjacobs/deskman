@@ -4,6 +4,7 @@
 #include <opencv2/opencv.hpp>
 
 // System
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@ struct Recording {
     string dateText;
     double seconds;
     long long bytes;
+    filesystem::file_time_type written;
 };
 
 // List what has been recorded, newest first, lengths follow once measured

@@ -136,6 +136,18 @@ def battery_reading():
 def set_listen(open):
     send_command({"command": "listen", "open": bool(open)})
 
+# Start or stop recording a video on the robot
+def set_recording(start):
+    reply = send_command({"command": "record", "start": bool(start)})
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "unknown error"))
+
+# Play the newest recording on the robot screen
+def play_last_recording():
+    reply = send_command({"command": "play"})
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "unknown error"))
+
 # Hold a socket so Listen and Quiet arrive as pushes, not polls
 def start_push_listener():
     global push_listener_started

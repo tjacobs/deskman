@@ -20,6 +20,7 @@ import move
 import reminders
 import system
 import talks
+import video
 import voice
 import volume
 
@@ -41,7 +42,7 @@ MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
 
 # Tools the local model can call, Sonos and Google Calendar are added when an account is saved
-BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS
+BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + video.TOOLS + voice.TOOLS + volume.TOOLS
 
 # Conversation history kept across asks in this process
 conversation_history = []
@@ -860,6 +861,16 @@ def run_tool(tool_call):
     # Turn the head
     if name == "look":
         result = move.run_look(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Start or stop recording, and play the newest recording
+    if name == "record_video":
+        result = video.run_record_video(arguments)
+        record_tool(name, arguments, result)
+        return result
+    if name == "play_video":
+        result = video.run_play_video()
         record_tool(name, arguments, result)
         return result
 

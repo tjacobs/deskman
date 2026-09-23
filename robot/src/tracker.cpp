@@ -28,9 +28,6 @@ static const int PREVIEW_GAP_MS = 1000 / PREVIEW_FPS;
 static const bool LOG_PREVIEW_FPS = false;
 static const int LOG_FPS_GAP_MS = 5000;
 
-// Preview spans the screen, sitting below the top edge
-static const int PREVIEW_TOP = 120;
-
 // Green box on the face being followed, grey on the rest
 static const cv::Scalar TRACKED_FACE_COLOR = cv::Scalar(0, 255, 0);
 static const cv::Scalar OTHER_FACE_COLOR = cv::Scalar(128, 128, 128);
@@ -178,6 +175,8 @@ void FaceTracker::detectThreadFunction() {
         vector<cv::Rect> faces = detectFaces(frame);
         unique_lock<mutex> faceLock(faceMutex);
         lastFaces = faces;
+        frameWidth = frame.cols;
+        frameHeight = frame.rows;
         largestFace = 0;
         if (!faces.empty()) {
             int maxArea = 0;
@@ -219,17 +218,18 @@ vector<cv::Rect> FaceTracker::detectFaces(const cv::Mat& frame) {
 
 // Report the tracked face as an offset from centre, from -1 to 1
 bool FaceTracker::getFacePosition(float& x, float& y) {
-    if (!cameraAvailable)
+    // A recording feeds the frames when the camera has been handed over
+    if (!cameraAvailable && !recording())
         return false;
 
     // Check if we have a valid face
     unique_lock<mutex> lock(faceMutex);
-    if (currentFace.width == 0 || currentFace.height == 0)
+    if (currentFace.width == 0 || currentFace.height == 0 || frameWidth == 0 || frameHeight == 0)
         return false;
 
-    // Calculate face position relative to frame center, then normalize
-    float centerX = camera.width / 2.0f;
-    float centerY = camera.height / 2.0f;
+    // Measure against the frames being tracked on, a recording pipes a different shape back
+    float centerX = frameWidth / 2.0f;
+    float centerY = frameHeight / 2.0f;
     x = (currentFace.x + currentFace.width / 2) - centerX;
     y = (currentFace.y + currentFace.height / 2) - centerY;
     x /= centerX;
@@ -286,7 +286,7 @@ void FaceTracker::updateWindow() {
 
         // Blit the last frame so SDL_RenderClear does not flash the preview white
         int previewHeight = (screen_width * previewTextureHeight) / previewTextureWidth;
-        SDL_Rect previewRect = {0, PREVIEW_TOP, screen_width, previewHeight};
+        SDL_Rect previewRect = {0, screen_height - status_bar_height() - previewHeight, screen_width, previewHeight};
         SDL_RenderCopy(renderer, previewTexture, NULL, &previewRect);
     } catch (const exception& error) {
         cerr << "Error updating window: " << error.what() << endl;

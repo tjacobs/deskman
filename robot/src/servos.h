@@ -26,7 +26,7 @@ int set_servo_id(int old_id, int new_id);
 void move_servos();
 
 // Sweep the whole travel range
-void sweep_servos();
+void sweep_servos(bool scan_bus);
 
 // Read and write the head pose in degrees
 void get_degrees(int &pan, int &tilt, int &hat);

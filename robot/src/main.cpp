@@ -51,6 +51,10 @@ static const int KEEP_RUNNING = -1;
 // Fall back to the local HDMI seat when DISPLAY is unset
 static const char* DEFAULT_DISPLAY = ":0";
 
+// Whether a sweep probes the bus for extra servos first, which takes a few seconds
+static const bool SWEEP_SCAN_BUS = true;
+static const bool SWEEP_KNOWN_SERVOS = false;
+
 // Frame rate the face is drawn at
 static const int MAX_FPS = 30;
 static const int FRAME_MS = 1000 / MAX_FPS;
@@ -154,6 +158,8 @@ static void show_face();
 static void draw_face();
 static int start_servos();
 static int sweep_servo_test(bool no_servos);
+static void apply_record_request(FaceTracker& faceTracker);
+static void play_last_recording();
 static void toggle_recording(FaceTracker& faceTracker);
 static void take_camera_back(FaceTracker& faceTracker);
 static void log_screen_rate();
@@ -234,8 +240,7 @@ int main(int argc, char **argv) {
         return sweep_servo_test(no_servos);
 
     // Listen so other programs can move the head and pause the camera
-    start_interface();
-    set_recordings_path(repo_path(RECORDINGS_FROM_REPO));
+    start_interface(repo_path(RECORDINGS_FROM_REPO));
 
     // Open the camera before talk, so a missing one fails in the startup log
     FaceTracker faceTracker(show_camera, use_camera);
@@ -327,16 +332,18 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         bool camera_pressed = false;
         bool move_pressed = false;
         bool audio_pressed = false;
-        bool record_pressed = false;
-        take_menu_presses(camera_pressed, move_pressed, audio_pressed, record_pressed);
+        take_menu_presses(camera_pressed, move_pressed, audio_pressed);
         if (camera_pressed)
             toggle_camera_preview(faceTracker);
         if (move_pressed)
             start_servo_sweep();
         if (audio_pressed)
             start_audio_test();
-        if (record_pressed)
-            toggle_recording(faceTracker);
+
+        // Record and play, from the popup or from a voice command
+        apply_record_request(faceTracker);
+        if (take_play_request())
+            play_last_recording();
 
         // Run talk on another model once the Mode button stops changing
         int talk_mode = take_talk_mode_request();
@@ -415,8 +422,8 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (!temperature_warning.empty())
             draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
 
-        // Preview first, then the record mark and menu so they stay on top
-        if (use_camera && faceTracker.isTracking())
+        // Preview first, then the record mark and menu so they stay on top, a video takes that space
+        if (use_camera && faceTracker.isTracking() && !playing())
             faceTracker.updateWindow();
         draw_recording_mark(face.font);
         draw_video_list(face.font);
@@ -470,7 +477,7 @@ static void start_servo_sweep() {
     // Sweep off the main thread, it works each servo in turn and takes a while
     g_sweeping = true;
     thread([] {
-        sweep_servos();
+        sweep_servos(SWEEP_KNOWN_SERVOS);
         g_sweeping = false;
     }).detach();
 }
@@ -691,8 +698,32 @@ static int sweep_servo_test(bool no_servos) {
         printf("Servos disabled, not sweeping\n");
         return 0;
     }
-    sweep_servos();
+    sweep_servos(SWEEP_SCAN_BUS);
     return 0;
+}
+
+// Act on the Record button, or on a start or stop asked for by voice
+static void apply_record_request(FaceTracker& faceTracker) {
+    int request = take_record_request();
+    if (request == RECORD_REQUEST_NONE)
+        return;
+
+    // A voice command names what it wants, the button just flips
+    if (request == RECORD_REQUEST_START && recording())
+        return;
+    if (request == RECORD_REQUEST_STOP && !recording())
+        return;
+    toggle_recording(faceTracker);
+}
+
+// Play the recording made most recently
+static void play_last_recording() {
+    vector<Recording> recordings = list_recordings(repo_path(RECORDINGS_FROM_REPO));
+    if (recordings.empty()) {
+        cout << "No recordings to play" << endl;
+        return;
+    }
+    start_playback(recordings.front().path);
 }
 
 // Start or stop a recording, ffmpeg needs the camera to itself while it runs

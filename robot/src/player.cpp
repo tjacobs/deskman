@@ -34,8 +34,7 @@ static const char* RECORDING_SUFFIX = ".mp4";
 static const int PLAY_WIDTH = 640;
 static const int PLAY_HEIGHT = 360;
 
-// The video sits where the camera preview does, below the top edge
-static const int PLAY_TOP = 120;
+// The video sits where the camera preview does, at the bottom of the screen
 static const char* PLAY_SIZE = "640x360";
 static const char* PLAY_PIXEL_FORMAT = "bgr24";
 
@@ -104,12 +103,13 @@ vector<Recording> list_recordings(const string& directory) {
         recording.dateText = recordingDate(entry.path());
         recording.seconds = cachedLength(recording.path);
         recording.bytes = static_cast<long long>(entry.file_size(error));
+        recording.written = entry.last_write_time(error);
         recordings.push_back(recording);
     }
 
-    // Newest first, the file names carry the time they started
+    // Newest first, by when the file was written rather than what it is called
     sort(recordings.begin(), recordings.end(), [](const Recording& left, const Recording& right) {
-        return left.path > right.path;
+        return left.written > right.written;
     });
 
     // Go and measure whatever has not been measured yet
@@ -312,9 +312,9 @@ void draw_playback_frame() {
     if (!playTexture)
         return;
 
-    // Across the full width, keeping the shape of the recording
+    // Across the full width at the bottom, keeping the shape of the recording
     int height = (screen_width * PLAY_HEIGHT) / PLAY_WIDTH;
-    SDL_Rect where = {0, PLAY_TOP, screen_width, height};
+    SDL_Rect where = {0, screen_height - status_bar_height() - height, screen_width, height};
     SDL_RenderCopy(renderer, playTexture, NULL, &where);
 }
 

@@ -65,6 +65,9 @@ static const int SWEEP_ARRIVAL_AMOUNT = 15;
 static const int SWEEP_SPEED = 600;
 static const int SWEEP_ACCELERATION = 10;
 
+// Where the hat is left when the sweep finishes
+static const float SWEEP_HAT_UP_DEGREES = 90.0f;
+
 // How far the sweep scans for extra servos, and room for their labels
 static const int SERVO_SWEEP_SCAN_MAX = 20;
 static const int SWEEP_SCAN_NAME_SIZE = 8;
@@ -141,6 +144,7 @@ static void scan_sweep_ids();
 static Servo *known_servo(int id);
 static bool detect_or_promote_servo(Servo &servo);
 static void sweep_line(const char *label, Servo &servo, int position);
+static string capitalized(const char *label);
 static int read_present_position(Servo &servo);
 static int servo_center(const Servo &servo);
 static float servo_to_degrees(const Servo &servo, int position);
@@ -492,10 +496,15 @@ void stop_servo_position_log() {
 }
 
 // Center each motor, nudge each servo, then the same at min and max
-void sweep_servos() {
+void sweep_servos(bool scan_bus) {
     char label[SWEEP_LABEL_SIZE];
     char center_label[SWEEP_LABEL_SIZE];
-    scan_sweep_ids();
+
+    // Probing every bus ID takes seconds, so only look for extra servos when asked
+    if (scan_bus)
+        scan_sweep_ids();
+    else
+        sweep_scan_count = 0;
     Servo *list = sweep_scan_count > 0 ? sweep_scan_servos : servos;
     int count = sweep_scan_count > 0 ? sweep_scan_count : (int)(sizeof(servos) / sizeof(servos[0]));
 
@@ -543,6 +552,15 @@ void sweep_servos() {
         Servo &servo = list[index];
         snprintf(label, sizeof(label), "%s center", servo.name);
         sweep_line(label, servo, servo_center(servo));
+    }
+
+    // Leave the hat raised, it is how the robot sits when it is done
+    for (int index = 0; index < count; index++) {
+        Servo &servo = list[index];
+        if (servo.id != SERVO_ID_HAT)
+            continue;
+        snprintf(label, sizeof(label), "%s up", servo.name);
+        sweep_line(label, servo, degrees_to_servo(servo, SWEEP_HAT_UP_DEGREES));
     }
     printf(g_quit ? "Sweep stopped\n" : "Sweep done\n");
 }
@@ -625,7 +643,8 @@ static void sweep_line(const char *label, Servo &servo, int position) {
     }
 
     // Say what was asked for, lined up in a column
-    printf("%-*s command %d\n", SWEEP_COMMAND_COLUMN, label, command);
+    string name = capitalized(label);
+    printf("%-*s command %d\n", SWEEP_COMMAND_COLUMN, name.c_str(), command);
     fflush(stdout);
 
     // Wait until this motor is on the commanded count, or the step time runs out
@@ -647,12 +666,20 @@ static void sweep_line(const char *label, Servo &servo, int position) {
 
     // Only say when the motor did not get there
     if (after == -1) {
-        printf("%s failed, commanded %d, no position reply\n", label, command);
+        printf("%s failed, commanded %d, no position reply\n", name.c_str(), command);
         fflush(stdout);
     } else if (delta > SWEEP_ARRIVAL_AMOUNT) {
-        printf("%s failed, commanded %d got %d\n", label, command, after);
+        printf("%s failed, commanded %d got %d\n", name.c_str(), command, after);
         fflush(stdout);
     }
+}
+
+// Start a label with a capital, so the sweep reads like the rest of the log
+static string capitalized(const char *label) {
+    string text = label;
+    if (!text.empty())
+        text[0] = toupper(static_cast<unsigned char>(text[0]));
+    return text;
 }
 
 // Read present position for one motor
