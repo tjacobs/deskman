@@ -35,3 +35,14 @@ void take_menu_presses(bool& camera, bool& move);
 
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
+
+// Which model talk runs, and no request waiting on the Mode button
+const int TALK_MODE_LOCAL = 0;
+const int TALK_MODE_CLOUD = 1;
+const int TALK_MODE_REALTIME = 2;
+const int TALK_MODE_NONE = -1;
+
+// Show the mode talk is running, take the mode the Mode button settled on, and name one
+void set_talk_mode(int mode);
+int take_talk_mode_request();
+const char* talk_mode_name(int mode);

@@ -12,6 +12,9 @@
 #include "fan.h"
 #include "battery.h"
 
+// Json
+#include "json.hpp"
+
 // System
 #include <atomic>
 #include <cctype>
@@ -83,6 +86,7 @@ static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
 static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
+static const char* TALK_CONFIG_FROM_REPO = "talk/config.json";
 static const char* JETSON_OUTPUT = "DP-1";
 static const char* JETSON_TOUCH = "WaveShare WS170120";
 static const char* PI_OUTPUT = "DSI-2";
@@ -138,6 +142,8 @@ static void show_face();
 static void draw_face();
 static int start_servos();
 static int sweep_servo_test(bool no_servos);
+static int load_talk_mode();
+static void switch_talk_mode(int mode);
 static bool start_talk_process();
 static pid_t find_talk_pid();
 static string repo_path(const char* relative);
@@ -219,7 +225,8 @@ int main(int argc, char **argv) {
     else
         use_camera = false;
 
-    // Spawn talk after the bus, socket, and camera probe
+    // Spawn talk after the bus, socket, and camera probe, with the Mode button on the model it runs
+    set_talk_mode(load_talk_mode());
     if (!g_no_talk)
         start_talk_process();
 
@@ -299,6 +306,11 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             g_menu_move_step = MENU_MOVE_STEP_LEFT;
             g_menu_move_at = 0;
         }
+
+        // Run talk on another model once the Mode button stops changing
+        int talk_mode = take_talk_mode_request();
+        if (talk_mode != TALK_MODE_NONE)
+            switch_talk_mode(talk_mode);
 
         // Process keyboard input on the main thread when a window exists
         while (show_window && SDL_PollEvent(&event) != 0) {
@@ -660,6 +672,58 @@ static int sweep_servo_test(bool no_servos) {
     }
     sweep_servos();
     return 0;
+}
+
+// Read which model talk is set to run, the same keys talk.py reads
+static int load_talk_mode() {
+    ifstream file(repo_path(TALK_CONFIG_FROM_REPO));
+    if (!file)
+        return TALK_MODE_LOCAL;
+
+    // A broken file leaves the button on local rather than stopping the robot
+    nlohmann::json config = nlohmann::json::parse(file, nullptr, false);
+    if (config.is_discarded() || !config.is_object())
+        return TALK_MODE_LOCAL;
+    if (config.value("realtime", false))
+        return TALK_MODE_REALTIME;
+    if (config.value("cloud", false))
+        return TALK_MODE_CLOUD;
+    return TALK_MODE_LOCAL;
+}
+
+// Save the mode for the next run, then bring talk back up on it
+static void switch_talk_mode(int mode) {
+    // Keep the rest of the file, only the three model keys move
+    string path = repo_path(TALK_CONFIG_FROM_REPO);
+    nlohmann::json config = nlohmann::json::object();
+    ifstream file(path);
+    if (file) {
+        nlohmann::json loaded = nlohmann::json::parse(file, nullptr, false);
+        if (!loaded.is_discarded() && loaded.is_object())
+            config = loaded;
+    }
+    file.close();
+
+    // Realtime streams to OpenAI, so it asks for the cloud backend as well
+    config["local"] = mode == TALK_MODE_LOCAL;
+    config["cloud"] = mode != TALK_MODE_LOCAL;
+    config["realtime"] = mode == TALK_MODE_REALTIME;
+
+    // Write the file, and say so when it cannot be saved
+    ofstream out(path);
+    if (!out) {
+        cout << "Cannot save talk mode to " << path << endl;
+        return;
+    }
+    out << config.dump(2) << endl;
+    out.close();
+
+    // Restart talk so it loads the new model
+    cout << "Talk mode: " << talk_mode_name(mode) << endl;
+    if (g_no_talk)
+        return;
+    stop_talk_process();
+    start_talk_process();
 }
 
 // Fork and exec talk.py, unless one is already running

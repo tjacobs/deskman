@@ -53,13 +53,21 @@ static const int MENU_QUIET = 0;
 static const int MENU_LISTEN = 1;
 static const int MENU_MOVE = 2;
 static const int MENU_CAMERA = 3;
-static const int MENU_CALL = 4;
-static const int MENU_EXIT = 5;
-static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Call", "Exit"};
+static const int MENU_MODE = 4;
+static const int MENU_CALL = 5;
+static const int MENU_EXIT = 6;
+static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Mode", "Call", "Exit"};
 
 // Menu item size
-static const int MENU_ITEM_COUNT = 6;
+static const int MENU_ITEM_COUNT = 7;
 static const int MENU_ITEM_WIDTH = 160;
+
+// Which model talk runs, the Mode button steps through these in order
+static const char* TALK_MODE_LABELS[] = {"Local", "Cloud", "Realtime"};
+static const int TALK_MODE_COUNT = 3;
+
+// Wait out a run of taps before restarting talk, so stepping past a mode costs nothing
+static const int TALK_MODE_APPLY_MS = 2000;
 
 // Hamburger button size and its three lines
 static const int HAMBURGER_BUTTON_WIDTH = 72;
@@ -95,6 +103,11 @@ static atomic<bool> g_camera_toggle{false};
 static atomic<bool> g_move_request{false};
 static atomic<bool> g_menu_open{false};
 static steady_clock::time_point g_last_menu_tap{};
+
+// Mode shown on the button, and the tap that has not reached talk yet
+static atomic<int> g_talk_mode{0};
+static atomic<bool> g_talk_mode_pending{false};
+static steady_clock::time_point g_talk_mode_tap{};
 static steady_clock::time_point g_interface_start{};
 
 // Handoff of the camera between the robot and a call
@@ -117,6 +130,7 @@ static bool wait_call_handoff(int command);
 static void send_menu();
 static bool debounce_tap();
 static void set_menu_open(bool open);
+static const char* menu_item_label(int index);
 static SDL_Rect menu_button_rect();
 static SDL_Rect menu_item_rect(int index);
 static bool tap_in_rect(int x, int y, SDL_Rect rect);
@@ -433,6 +447,13 @@ void complete_call_handoff(bool ok) {
     g_handoff_cv.notify_all();
 }
 
+// Name one popup item, Mode wears the model talk is set to
+static const char* menu_item_label(int index) {
+    if (index == MENU_MODE)
+        return TALK_MODE_LABELS[g_talk_mode.load()];
+    return MENU_ITEM_LABELS[index];
+}
+
 // Place the menu toggle on the right of the status bar
 static SDL_Rect menu_button_rect() {
     int pad = status_bar_pad();
@@ -487,7 +508,7 @@ void draw_menu(TTF_Font* font) {
     if (g_menu_open) {
         for (int index = 0; index < MENU_ITEM_COUNT; index++) {
             SDL_Color fill = index == MENU_EXIT ? EXIT_BUTTON_COLOR : MENU_BUTTON_COLOR;
-            draw_bar_button(menu_item_rect(index), MENU_ITEM_LABELS[index], fill, font);
+            draw_bar_button(menu_item_rect(index), menu_item_label(index), fill, font);
         }
     }
 
@@ -550,7 +571,7 @@ void handle_call_event(const SDL_Event& event) {
     // Name what the tap landed on
     const char* hit_name = "face";
     if (item >= 0)
-        hit_name = MENU_ITEM_LABELS[item];
+        hit_name = menu_item_label(item);
     else if (hit_menu)
         hit_name = "Menu";
 
@@ -560,8 +581,8 @@ void handle_call_event(const SDL_Event& event) {
         fflush(stdout);
     }
 
-    // Popup items close the list, then do the action
-    if (item >= 0)
+    // Popup items close the list, then do the action, Mode stays up so it can be stepped again
+    if (item >= 0 && item != MENU_MODE)
         set_menu_open(false);
     if (item == MENU_EXIT) {
         send_to_clients(json{{"command", "quit"}}.dump(), NO_CLIENT);
@@ -582,6 +603,12 @@ void handle_call_event(const SDL_Event& event) {
     }
     if (item == MENU_CAMERA) {
         g_camera_toggle = true;
+        return;
+    }
+    if (item == MENU_MODE) {
+        g_talk_mode = (g_talk_mode.load() + 1) % TALK_MODE_COUNT;
+        g_talk_mode_pending = true;
+        g_talk_mode_tap = steady_clock::now();
         return;
     }
     if (item == MENU_CALL) {
@@ -631,6 +658,26 @@ void take_menu_presses(bool& camera, bool& move) {
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open() {
     return g_listen_open.load();
+}
+
+// Show the mode talk is running, so the button starts on the right label
+void set_talk_mode(int mode) {
+    g_talk_mode = mode;
+}
+
+// The mode the button settled on, or no mode while taps are still coming
+int take_talk_mode_request() {
+    if (!g_talk_mode_pending.load())
+        return TALK_MODE_NONE;
+    if (duration_cast<milliseconds>(steady_clock::now() - g_talk_mode_tap).count() < TALK_MODE_APPLY_MS)
+        return TALK_MODE_NONE;
+    g_talk_mode_pending = false;
+    return g_talk_mode.load();
+}
+
+// Name one talk mode for the log
+const char* talk_mode_name(int mode) {
+    return TALK_MODE_LABELS[mode];
 }
 
 // Close the socket, wake detached clients, and remove the socket file
