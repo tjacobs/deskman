@@ -54,12 +54,13 @@ static const int MENU_LISTEN = 1;
 static const int MENU_MOVE = 2;
 static const int MENU_CAMERA = 3;
 static const int MENU_MODE = 4;
-static const int MENU_CALL = 5;
-static const int MENU_EXIT = 6;
-static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Mode", "Call", "Exit"};
+static const int MENU_AUDIO = 5;
+static const int MENU_CALL = 6;
+static const int MENU_EXIT = 7;
+static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Mode", "Audio", "Call", "Exit"};
 
 // Menu item size
-static const int MENU_ITEM_COUNT = 7;
+static const int MENU_ITEM_COUNT = 8;
 static const int MENU_ITEM_WIDTH = 160;
 
 // Which model talk runs, the Mode button steps through these in order
@@ -101,6 +102,7 @@ static atomic<bool> g_overlay_open{false};
 static atomic<bool> g_listen_open{false};
 static atomic<bool> g_camera_toggle{false};
 static atomic<bool> g_move_request{false};
+static atomic<bool> g_audio_request{false};
 static atomic<bool> g_menu_open{false};
 static steady_clock::time_point g_last_menu_tap{};
 
@@ -605,6 +607,10 @@ void handle_call_event(const SDL_Event& event) {
         g_camera_toggle = true;
         return;
     }
+    if (item == MENU_AUDIO) {
+        g_audio_request = true;
+        return;
+    }
     if (item == MENU_MODE) {
         g_talk_mode = (g_talk_mode.load() + 1) % TALK_MODE_COUNT;
         g_talk_mode_pending = true;
@@ -647,12 +653,14 @@ bool call_overlay_open() {
     return g_overlay_open.load();
 }
 
-// Camera and Move presses since the last check, then clear them
-void take_menu_presses(bool& camera, bool& move) {
+// Camera, Move, and Audio presses since the last check, then clear them
+void take_menu_presses(bool& camera, bool& move, bool& audio) {
     camera = g_camera_toggle.load();
     g_camera_toggle = false;
     move = g_move_request.load();
     g_move_request = false;
+    audio = g_audio_request.load();
+    g_audio_request = false;
 }
 
 // True while face tracking should follow, off in ready until talk hears the wake word

@@ -87,6 +87,7 @@ static const char* TALK_SCRIPT_NAME = "talk.py";
 static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
 static const char* TALK_CONFIG_FROM_REPO = "talk/config.json";
+static const char* AUDIO_TEST_FROM_REPO = "talk/tools/test_audio.py";
 static const char* JETSON_OUTPUT = "DP-1";
 static const char* JETSON_TOUCH = "WaveShare WS170120";
 static const char* PI_OUTPUT = "DSI-2";
@@ -117,6 +118,10 @@ static pid_t g_talk_pid = -1;
 static bool g_no_talk = false;
 static bool g_call_paused = false;
 static bool g_call_had_talk = false;
+
+// Audio test child, and whether it took the microphone off talk
+static pid_t g_audio_test_pid = -1;
+static bool g_audio_test_had_talk = false;
 static int g_menu_move_step = MENU_MOVE_STEP_NONE;
 static Uint32 g_menu_move_at = 0;
 
@@ -142,6 +147,8 @@ static void show_face();
 static void draw_face();
 static int start_servos();
 static int sweep_servo_test(bool no_servos);
+static void start_audio_test();
+static void reap_audio_test();
 static int load_talk_mode();
 static void switch_talk_mode(int mode);
 static bool start_talk_process();
@@ -291,21 +298,25 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
     SDL_Event event;
     while (!quit && !g_quit) {
         reap_talk_process();
+        reap_audio_test();
         check_fan();
         check_battery();
         log_robot_health();
         apply_call_handoff(faceTracker);
 
-        // Camera preview and the Move look sequence from the popup
+        // Camera preview, the Move look sequence, and the audio test from the popup
         bool camera_pressed = false;
         bool move_pressed = false;
-        take_menu_presses(camera_pressed, move_pressed);
+        bool audio_pressed = false;
+        take_menu_presses(camera_pressed, move_pressed, audio_pressed);
         if (camera_pressed)
             toggle_camera_preview(faceTracker);
         if (move_pressed) {
             g_menu_move_step = MENU_MOVE_STEP_LEFT;
             g_menu_move_at = 0;
         }
+        if (audio_pressed)
+            start_audio_test();
 
         // Run talk on another model once the Mode button stops changing
         int talk_mode = take_talk_mode_request();
@@ -672,6 +683,58 @@ static int sweep_servo_test(bool no_servos) {
     }
     sweep_servos();
     return 0;
+}
+
+// Chime, record, and play back, with talk out of the way so the mic and speaker are free
+static void start_audio_test() {
+    if (g_audio_test_pid > 0) {
+        cout << "Audio test already running" << endl;
+        return;
+    }
+
+    // Talk holds the microphone, so it stands down until the test is finished
+    g_audio_test_had_talk = g_talk_pid > 0;
+    if (g_audio_test_had_talk)
+        stop_talk_process();
+
+    // Run the test, its output lands in the robot log and so on the status bar
+    string talk_python = repo_path(TALK_PYTHON_FROM_REPO);
+    string test_script = repo_path(AUDIO_TEST_FROM_REPO);
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork audio test");
+        return;
+    }
+    if (pid == 0) {
+        setenv("PYTHONUNBUFFERED", "1", 1);
+        setenv("NO_COLOR", "1", 1);
+        execl(talk_python.c_str(), talk_python.c_str(), test_script.c_str(), static_cast<char*>(nullptr));
+        cerr << "Error: test_audio.py: " << strerror(errno) << endl;
+        _exit(TALK_EXEC_FAILED);
+    }
+    g_audio_test_pid = pid;
+    cout << "Audio test: listen for the chime, then talk." << endl;
+}
+
+// Collect the test once it ends, then hand the microphone back to talk
+static void reap_audio_test() {
+    if (g_audio_test_pid <= 0)
+        return;
+    int status = 0;
+    if (waitpid(g_audio_test_pid, &status, WNOHANG) <= 0)
+        return;
+    g_audio_test_pid = -1;
+
+    // Say how it went, the detail is already in the log above this line
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+        cout << "Audio test passed." << endl;
+    else
+        cout << "Audio test failed, see the lines above." << endl;
+
+    // Start talk again when it was the one holding the microphone
+    if (g_audio_test_had_talk)
+        start_talk_process();
+    g_audio_test_had_talk = false;
 }
 
 // Read which model talk is set to run, the same keys talk.py reads

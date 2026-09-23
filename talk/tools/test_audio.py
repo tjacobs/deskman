@@ -100,10 +100,10 @@ LEVEL_SWING_MINIMUM_DB = 6.0
 SPEECH_BAND_HZ = (100, 4000)
 SPEECH_SHARE_MINIMUM = 0.3
 
-# Colour the verdicts the same way test.py does
-GREEN = '\033[92m'
-RED = '\033[91m'
-RESET = '\033[0m'
+# Colour the verdicts the same way test.py does, NO_COLOR leaves the text plain for the robot log
+GREEN = '' if os.environ.get('NO_COLOR') else '\033[92m'
+RED = '' if os.environ.get('NO_COLOR') else '\033[91m'
+RESET = '' if os.environ.get('NO_COLOR') else '\033[0m'
 
 # Put talk/ on the import path, utils already knows how to find the cards
 sys.path.insert(0, TALK_DIR)

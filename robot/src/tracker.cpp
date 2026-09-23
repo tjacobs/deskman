@@ -15,9 +15,8 @@ using namespace std;
 static const int FACE_DETECT_FPS = 3;
 static const int FACE_DETECT_SLEEP_MS = 1000 / FACE_DETECT_FPS;
 
-// Preview sits below the top of the screen, at a fraction of its width
+// Preview spans the screen, sitting below the top edge
 static const int PREVIEW_TOP = 120;
-static const int PREVIEW_WIDTH_DIVISOR = 4;
 
 // Green box on the face being followed, grey on the rest
 static const cv::Scalar TRACKED_FACE_COLOR = cv::Scalar(0, 255, 0);
@@ -218,10 +217,8 @@ void FaceTracker::updateWindow() {
             return;
 
         // Blit the last frame so SDL_RenderClear does not flash the preview white
-        int previewWidth = screen_width / PREVIEW_WIDTH_DIVISOR;
-        int previewHeight = (previewWidth * previewTextureHeight) / previewTextureWidth;
-        int previewX = (screen_width - previewWidth) / 2;
-        SDL_Rect previewRect = {previewX, PREVIEW_TOP, previewWidth, previewHeight};
+        int previewHeight = (screen_width * previewTextureHeight) / previewTextureWidth;
+        SDL_Rect previewRect = {0, PREVIEW_TOP, screen_width, previewHeight};
         SDL_RenderCopy(renderer, previewTexture, NULL, &previewRect);
     } catch (const exception& error) {
         cerr << "Error updating window: " << error.what() << endl;
