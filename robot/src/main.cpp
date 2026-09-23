@@ -397,12 +397,10 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (!temperature_warning.empty())
             draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
 
-        // Last log line, pack voltage, and the menu button
-        draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
-
-        // Show the tracking preview over the face
+        // Show the tracking preview over the face, then the bar so the menu stays on top
         if (use_camera && faceTracker.isCameraAvailable())
             faceTracker.updateWindow();
+        draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
         SDL_RenderPresent(renderer);
 
         // Hold the frame rate
