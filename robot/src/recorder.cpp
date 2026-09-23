@@ -203,8 +203,8 @@ static string recordingFilePath(const string& directory) {
     tm parts{};
     localtime_r(&now, &parts);
     char stamp[32];
-    strftime(stamp, sizeof(stamp), "%Y-%m-%d-%H-%M-%S", &parts);
-    return directory + "/deskman-" + stamp + ".mp4";
+    strftime(stamp, sizeof(stamp), "%Y_%m_%d_%H_%M_%S", &parts);
+    return directory + "/deskman_" + stamp + ".mp4";
 }
 
 // Name the shared capture device for the USB microphone

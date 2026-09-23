@@ -20,6 +20,8 @@ add_executable(${TARGET_NAME}
     src/config.cpp
     src/interface.cpp
     src/recorder.cpp
+    src/player.cpp
+    src/wifi.cpp
     src/servos/SMS_STS.cpp
     src/servos/SCS.cpp
     src/servos/SCSerial.cpp

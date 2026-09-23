@@ -4,6 +4,12 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 
+// System
+#include <string>
+
+// Namespace
+using namespace std;
+
 // What a caller wants the camera to do around a video call
 const int CALL_HANDOFF_NONE = 0;
 const int CALL_HANDOFF_PAUSE = 1;
@@ -29,6 +35,15 @@ int menu_button_left();
 
 // True while the peer list is up
 bool call_overlay_open();
+
+// Say where the recordings are, draw the list or the playing video, and say when it is up
+void set_recordings_path(const string& path);
+void draw_video_list(TTF_Font* font);
+bool video_list_open();
+
+// Draw the wireless networks, and say when that list is up
+void draw_wifi_list(TTF_Font* font);
+bool wifi_list_open();
 
 // Camera, Move, Audio, and Record presses since the last check, then clear them
 void take_menu_presses(bool& camera, bool& move, bool& audio, bool& record);

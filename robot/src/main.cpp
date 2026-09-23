@@ -10,6 +10,7 @@
 #include "config.h"
 #include "interface.h"
 #include "recorder.h"
+#include "player.h"
 #include "fan.h"
 #include "battery.h"
 
@@ -78,14 +79,6 @@ static const int HEALTH_LOG_SECONDS = 60;
 static const int FACE_TRACK_COUNTS = 20;
 static const int FACE_LOOK_TILT_DEGREES = 30;
 
-// Look left, right, then center when Move is pressed
-static const int MENU_MOVE_STEP_MS = 500;
-static const int MENU_MOVE_LOOK_DEGREES = 35;
-static const int MENU_MOVE_STEP_NONE = -1;
-static const int MENU_MOVE_STEP_LEFT = 0;
-static const int MENU_MOVE_STEP_RIGHT = 1;
-static const int MENU_MOVE_STEP_CENTER = 2;
-
 // Process and script names to match
 static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
@@ -136,8 +129,7 @@ static bool g_audio_test_had_talk = false;
 
 // Whether the preview was up before a recording turned it on
 static bool g_camera_before_record = false;
-static int g_menu_move_step = MENU_MOVE_STEP_NONE;
-static Uint32 g_menu_move_at = 0;
+static atomic<bool> g_sweeping{false};
 
 // Renderer holding the face shapes
 VectorRenderer vectorRenderer;
@@ -146,7 +138,8 @@ VectorRenderer vectorRenderer;
 static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos);
 static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
 static void toggle_camera_preview(FaceTracker& faceTracker);
-static void step_menu_move();
+static void start_servo_sweep();
+static bool sweeping();
 static void set_up_display();
 static void signalHandler(int signal);
 static void check_already_running();
@@ -242,6 +235,7 @@ int main(int argc, char **argv) {
 
     // Listen so other programs can move the head and pause the camera
     start_interface();
+    set_recordings_path(repo_path(RECORDINGS_FROM_REPO));
 
     // Open the camera before talk, so a missing one fails in the startup log
     FaceTracker faceTracker(show_camera, use_camera);
@@ -323,6 +317,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         reap_recording();
         if (was_recording && !recording())
             take_camera_back(faceTracker);
+        close_playback();
         check_fan();
         check_battery();
         log_robot_health();
@@ -336,10 +331,8 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         take_menu_presses(camera_pressed, move_pressed, audio_pressed, record_pressed);
         if (camera_pressed)
             toggle_camera_preview(faceTracker);
-        if (move_pressed) {
-            g_menu_move_step = MENU_MOVE_STEP_LEFT;
-            g_menu_move_at = 0;
-        }
+        if (move_pressed)
+            start_servo_sweep();
         if (audio_pressed)
             start_audio_test();
         if (record_pressed)
@@ -389,9 +382,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Point eyes and head at the tracked face until talk goes ready after listening
         float faceX, faceY;
         bool hasFaceTracking = use_camera && listen_open() && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY);
-        if (g_menu_move_step != MENU_MOVE_STEP_NONE) {
-            step_menu_move();
-        } else if (hasFaceTracking) {
+        if (hasFaceTracking && !sweeping()) {
             face.lookTiltX = -faceX * FACE_LOOK_TILT_DEGREES;
             face.lookTiltY = faceY * FACE_LOOK_TILT_DEGREES;
 
@@ -428,8 +419,10 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (use_camera && faceTracker.isTracking())
             faceTracker.updateWindow();
         draw_recording_mark(face.font);
+        draw_video_list(face.font);
+        draw_wifi_list(face.font);
         set_camera_showing(show_camera);
-        draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
+        draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open() || video_list_open() || wifi_list_open());
         SDL_RenderPresent(renderer);
 
         // Count the frames the face loop is drawing
@@ -467,38 +460,24 @@ static void toggle_camera_preview(FaceTracker& faceTracker) {
     setStatus("Camera preview off");
 }
 
-// Step the Move look sequence
-static void step_menu_move() {
-    if (g_menu_move_step == MENU_MOVE_STEP_NONE)
+// Run the servo sweep in the background, the face keeps drawing while it goes
+static void start_servo_sweep() {
+    if (g_sweeping.load()) {
+        cout << "Already sweeping" << endl;
         return;
+    }
 
-    // Wait between looks so the head can finish each one
-    Uint32 now = SDL_GetTicks();
-    if (g_menu_move_at != 0 && now - g_menu_move_at < MENU_MOVE_STEP_MS)
-        return;
-    g_menu_move_at = now;
+    // Sweep off the main thread, it works each servo in turn and takes a while
+    g_sweeping = true;
+    thread([] {
+        sweep_servos();
+        g_sweeping = false;
+    }).detach();
+}
 
-    // Keep the hat where it is, only pan left, right, then center
-    int pan = 0;
-    int tilt = 0;
-    int hat = 0;
-    get_degrees(pan, tilt, hat);
-    if (g_menu_move_step == MENU_MOVE_STEP_LEFT) {
-        set_degrees(-MENU_MOVE_LOOK_DEGREES, 0, hat);
-        g_menu_move_step = MENU_MOVE_STEP_RIGHT;
-        return;
-    }
-    if (g_menu_move_step == MENU_MOVE_STEP_RIGHT) {
-        set_degrees(MENU_MOVE_LOOK_DEGREES, 0, hat);
-        g_menu_move_step = MENU_MOVE_STEP_CENTER;
-        return;
-    }
-    if (g_menu_move_step == MENU_MOVE_STEP_CENTER) {
-        set_degrees(0, 0, hat);
-        g_menu_move_step = MENU_MOVE_STEP_NONE;
-        return;
-    }
-    g_menu_move_step = MENU_MOVE_STEP_NONE;
+// True while the sweep has the servos, face tracking leaves them alone until it ends
+static bool sweeping() {
+    return g_sweeping.load();
 }
 
 // Point at the local display, its runtime directory, and its X authority
@@ -1038,6 +1017,7 @@ static void apply_call_handoff(FaceTracker& faceTracker) {
     if (command == CALL_HANDOFF_PAUSE) {
         if (!g_call_paused) {
             stop_recording();
+            stop_playback();
             faceTracker.stopCamera();
             g_call_had_talk = !g_no_talk && g_talk_pid > 0;
             if (g_call_had_talk)
@@ -1090,6 +1070,7 @@ static void stop_robot(FaceTracker& faceTracker) {
     g_quit = true;
     cout << "Quit" << endl;
     stop_recording();
+    stop_playback();
     stop_talk_process();
     stop_interface();
     stop_servo_position_log();

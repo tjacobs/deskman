@@ -6,6 +6,8 @@
 #include "battery.h"
 #include "screen.h"
 #include "recorder.h"
+#include "player.h"
+#include "wifi.h"
 
 // JSON
 #include "json.hpp"
@@ -54,15 +56,17 @@ static const int MENU_QUIET = 0;
 static const int MENU_LISTEN = 1;
 static const int MENU_MOVE = 2;
 static const int MENU_CAMERA = 3;
-static const int MENU_MODE = 4;
-static const int MENU_AUDIO = 5;
-static const int MENU_RECORD = 6;
-static const int MENU_CALL = 7;
-static const int MENU_EXIT = 8;
-static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Mode", "Audio", "Record", "Call", "Exit"};
+static const int MENU_RECORD = 4;
+static const int MENU_VIDEOS = 5;
+static const int MENU_MODE = 6;
+static const int MENU_AUDIO = 7;
+static const int MENU_WIFI = 8;
+static const int MENU_CALL = 9;
+static const int MENU_EXIT = 10;
+static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Record", "Videos", "Mode", "Audio", "WiFi", "Call", "Exit"};
 
 // Menu item size
-static const int MENU_ITEM_COUNT = 9;
+static const int MENU_ITEM_COUNT = 11;
 
 // The Record item says how to end the recording while one is running
 static const char* MENU_STOP_LABEL = "Stop";
@@ -80,11 +84,36 @@ static const int HAMBURGER_BUTTON_WIDTH = 72;
 static const int HAMBURGER_LINE_HEIGHT = 5;
 static const int HAMBURGER_LINE_GAP = 7;
 
+// The recordings list, rows of a file each with a delete button on the right
+static const int VIDEO_LIST_TOP = 120;
+static const int VIDEO_ROW_HEIGHT = 76;
+static const int VIDEO_ROW_GAP = 8;
+static const int VIDEO_LIST_PAD = 16;
+static const int VIDEO_DELETE_WIDTH = 120;
+static const int VIDEO_TEXT_PAD = 16;
+static const char* VIDEO_DELETE_LABEL = "Delete";
+static const char* VIDEO_CONFIRM_LABEL = "Sure?";
+static const char* VIDEO_OLDER_LABEL = "Older";
+static const char* VIDEO_NEWER_LABEL = "Newer";
+static const char* VIDEO_EMPTY_TEXT = "No recordings yet";
+static const char* VIDEO_PLAYING_TEXT = "Tap to stop";
+static const char* VIDEO_MEASURING_TEXT = "--:--";
+
+// The wireless list, a row for each network in range
+static const char* WIFI_LOOKING_TEXT = "Looking...";
+static const char* WIFI_SAVED_MARK = "saved";
+static const char* WIFI_CONNECTED_MARK = "connected";
+
 // Menu button colors
 static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
 static const SDL_Color EXIT_BUTTON_COLOR = {180, 40, 40, 255};
 static const SDL_Color RECORDING_BUTTON_COLOR = {220, 30, 30, 255};
 static const SDL_Color CAMERA_ON_COLOR = {30, 140, 70, 255};
+static const SDL_Color VIDEO_ROW_COLOR = {60, 60, 70, 255};
+static const SDL_Color VIDEO_DELETE_COLOR = {140, 50, 50, 255};
+static const SDL_Color VIDEO_CONFIRM_COLOR = {220, 30, 30, 255};
+static const SDL_Color VIDEO_BACKDROP_COLOR = {20, 20, 25, 235};
+static const SDL_Color WIFI_ACTIVE_COLOR = {30, 140, 70, 255};
 static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
 
@@ -112,6 +141,16 @@ static atomic<bool> g_camera_showing{false};
 static atomic<bool> g_move_request{false};
 static atomic<bool> g_audio_request{false};
 static atomic<bool> g_record_request{false};
+
+// The recordings list, where the files are and which row asked to be deleted
+static string g_recordings_path;
+static atomic<bool> g_video_list_open{false};
+static vector<Recording> g_recordings;
+static int g_video_first_row = 0;
+static string g_video_confirm_path;
+
+// The wireless list
+static atomic<bool> g_wifi_list_open{false};
 static atomic<bool> g_menu_open{false};
 static steady_clock::time_point g_last_menu_tap{};
 
@@ -145,6 +184,14 @@ static const char* menu_item_label(int index);
 static SDL_Color menu_item_color(int index);
 static SDL_Rect menu_button_rect();
 static SDL_Rect menu_item_rect(int index);
+static void open_video_list();
+static bool handle_video_tap(int x, int y);
+static SDL_Rect video_row_rect(int row);
+static SDL_Rect video_delete_rect(int row);
+static SDL_Rect video_page_rect(bool older);
+static int video_rows_that_fit();
+static bool handle_wifi_tap(int x, int y);
+static void draw_list_backdrop();
 static bool tap_in_rect(int x, int y, SDL_Rect rect);
 static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
 static void draw_hamburger_icon(SDL_Rect rect);
@@ -543,6 +590,217 @@ void draw_menu(TTF_Font* font) {
     draw_hamburger_icon(menu_rect);
 }
 
+// Draw the recordings list, or the video that is playing
+void draw_video_list(TTF_Font* font) {
+    // The video fills the space the list was using, with a hint on how to stop it
+    if (playing()) {
+        draw_playback_frame();
+        draw_text(VIDEO_PLAYING_TEXT, VIDEO_LIST_PAD, VIDEO_LIST_TOP - VIDEO_ROW_HEIGHT, font, BUTTON_LABEL_COLOR);
+        return;
+    }
+    if (!g_video_list_open.load())
+        return;
+
+    // Darken the face behind the list
+    draw_list_backdrop();
+
+    // Pick up the lengths once they have been measured
+    if (recording_lengths_updated())
+        g_recordings = list_recordings(g_recordings_path);
+
+    // Say so when nothing has been recorded
+    if (g_recordings.empty()) {
+        draw_text(VIDEO_EMPTY_TEXT, VIDEO_LIST_PAD, VIDEO_LIST_TOP, font, BUTTON_LABEL_COLOR);
+        return;
+    }
+
+    // A row for each recording on this page, date and length and size, delete on the right
+    int rows = video_rows_that_fit();
+    for (int row = 0; row < rows; row++) {
+        int index = g_video_first_row + row;
+        if (index >= (int)g_recordings.size())
+            break;
+        const Recording& recording = g_recordings[index];
+        SDL_Rect rowRect = video_row_rect(row);
+        draw_bar_button(rowRect, nullptr, VIDEO_ROW_COLOR, font);
+        string length = recording.seconds > 0 ? length_text(recording.seconds) : VIDEO_MEASURING_TEXT;
+        string text = recording.dateText + "   " + length + "   " + size_text(recording.bytes);
+        int textHeight = 0;
+        TTF_SizeUTF8(font, text.c_str(), nullptr, &textHeight);
+        draw_text(text.c_str(), rowRect.x + VIDEO_TEXT_PAD, rowRect.y + (rowRect.h - textHeight) / 2, font, BUTTON_LABEL_COLOR);
+
+        // The delete button asks once before it removes anything
+        bool confirming = recording.path == g_video_confirm_path;
+        const char* deleteLabel = confirming ? VIDEO_CONFIRM_LABEL : VIDEO_DELETE_LABEL;
+        SDL_Color deleteColor = confirming ? VIDEO_CONFIRM_COLOR : VIDEO_DELETE_COLOR;
+        draw_bar_button(video_delete_rect(row), deleteLabel, deleteColor, font);
+    }
+
+    // Page buttons, only when there is somewhere to page to
+    if (g_video_first_row > 0)
+        draw_bar_button(video_page_rect(false), VIDEO_NEWER_LABEL, MENU_BUTTON_COLOR, font);
+    if (g_video_first_row + rows < (int)g_recordings.size())
+        draw_bar_button(video_page_rect(true), VIDEO_OLDER_LABEL, MENU_BUTTON_COLOR, font);
+}
+
+// Say where the recordings are kept, so the list can find them
+void set_recordings_path(const string& path) {
+    g_recordings_path = path;
+}
+
+// Read the folder again and show the list
+static void open_video_list() {
+    g_recordings = list_recordings(g_recordings_path);
+    g_video_first_row = 0;
+    g_video_confirm_path.clear();
+    g_video_list_open = true;
+}
+
+// Play, delete, or page, and say whether the tap belonged to the list
+static bool handle_video_tap(int x, int y) {
+    // A tap anywhere stops the video that is playing
+    if (playing()) {
+        stop_playback();
+        return true;
+    }
+    if (!g_video_list_open.load())
+        return false;
+
+    // Page through the recordings
+    int rows = video_rows_that_fit();
+    if (g_video_first_row > 0 && tap_in_rect(x, y, video_page_rect(false))) {
+        g_video_first_row = max(0, g_video_first_row - rows);
+        g_video_confirm_path.clear();
+        return true;
+    }
+    if (g_video_first_row + rows < (int)g_recordings.size() && tap_in_rect(x, y, video_page_rect(true))) {
+        g_video_first_row += rows;
+        g_video_confirm_path.clear();
+        return true;
+    }
+
+    // Play the row that was tapped, or work the delete button on it
+    for (int row = 0; row < rows; row++) {
+        int index = g_video_first_row + row;
+        if (index >= (int)g_recordings.size())
+            break;
+        string path = g_recordings[index].path;
+        if (tap_in_rect(x, y, video_delete_rect(row))) {
+            // Ask first, then delete on the second tap
+            if (g_video_confirm_path != path) {
+                g_video_confirm_path = path;
+                return true;
+            }
+            delete_recording(path);
+            open_video_list();
+            return true;
+        }
+        if (tap_in_rect(x, y, video_row_rect(row))) {
+            g_video_confirm_path.clear();
+            start_playback(path);
+            g_video_list_open = false;
+            return true;
+        }
+    }
+
+    // A tap anywhere else closes the list
+    g_video_list_open = false;
+    g_video_confirm_path.clear();
+    return true;
+}
+
+// Place one row of the list
+static SDL_Rect video_row_rect(int row) {
+    int y = VIDEO_LIST_TOP + row * (VIDEO_ROW_HEIGHT + VIDEO_ROW_GAP);
+    return {VIDEO_LIST_PAD, y, screen_width - VIDEO_LIST_PAD * 2, VIDEO_ROW_HEIGHT};
+}
+
+// Place the delete button inside a row
+static SDL_Rect video_delete_rect(int row) {
+    SDL_Rect rowRect = video_row_rect(row);
+    return {rowRect.x + rowRect.w - VIDEO_DELETE_WIDTH, rowRect.y, VIDEO_DELETE_WIDTH, rowRect.h};
+}
+
+// Place a page button under the rows, older on the right and newer on the left
+static SDL_Rect video_page_rect(bool older) {
+    int y = VIDEO_LIST_TOP + video_rows_that_fit() * (VIDEO_ROW_HEIGHT + VIDEO_ROW_GAP);
+    int width = MENU_ITEM_WIDTH;
+    int x = older ? screen_width - VIDEO_LIST_PAD - width : VIDEO_LIST_PAD;
+    return {x, y, width, VIDEO_ROW_HEIGHT};
+}
+
+// How many rows there is room for above the status bar, leaving space for the page buttons
+static int video_rows_that_fit() {
+    int room = screen_height - status_bar_height() - VIDEO_LIST_TOP - VIDEO_ROW_HEIGHT - VIDEO_ROW_GAP;
+    return max(1, room / (VIDEO_ROW_HEIGHT + VIDEO_ROW_GAP));
+}
+
+// True while the recordings list or a video is up
+bool video_list_open() {
+    return g_video_list_open.load() || playing();
+}
+
+// Draw the wireless networks, the one joined at the top
+void draw_wifi_list(TTF_Font* font) {
+    if (!g_wifi_list_open.load())
+        return;
+
+    // Darken the face behind the list
+    draw_list_backdrop();
+
+    // Where the robot is connected, and on what address
+    string header = wifi_busy() ? WIFI_LOOKING_TEXT : wifi_status_text();
+    draw_text(header.c_str(), VIDEO_LIST_PAD + VIDEO_TEXT_PAD, VIDEO_LIST_TOP, font, BUTTON_LABEL_COLOR);
+
+    // A row for each network in range, name, strength, and whether it can be joined
+    vector<Network> networks = wifi_networks();
+    int rows = video_rows_that_fit() - 1;
+    for (int row = 0; row < rows && row < (int)networks.size(); row++) {
+        const Network& network = networks[row];
+        SDL_Rect rowRect = video_row_rect(row + 1);
+        draw_bar_button(rowRect, nullptr, network.active ? WIFI_ACTIVE_COLOR : VIDEO_ROW_COLOR, font);
+        string mark = network.active ? WIFI_CONNECTED_MARK : (network.saved ? WIFI_SAVED_MARK : "");
+        string text = network.name + "   " + to_string(network.signal) + "%   " + mark;
+        int textHeight = 0;
+        TTF_SizeUTF8(font, text.c_str(), nullptr, &textHeight);
+        draw_text(text.c_str(), rowRect.x + VIDEO_TEXT_PAD, rowRect.y + (rowRect.h - textHeight) / 2, font, BUTTON_LABEL_COLOR);
+    }
+}
+
+// Join the network that was tapped, and say whether the tap belonged to the list
+static bool handle_wifi_tap(int x, int y) {
+    if (!g_wifi_list_open.load())
+        return false;
+
+    // Tapping a network joins it, one without a saved password will not take
+    vector<Network> networks = wifi_networks();
+    int rows = video_rows_that_fit() - 1;
+    for (int row = 0; row < rows && row < (int)networks.size(); row++) {
+        if (!tap_in_rect(x, y, video_row_rect(row + 1)))
+            continue;
+        if (!networks[row].active)
+            connect_network(networks[row].name);
+        return true;
+    }
+
+    // A tap anywhere else closes the list
+    g_wifi_list_open = false;
+    return true;
+}
+
+// True while the wireless list is up
+bool wifi_list_open() {
+    return g_wifi_list_open.load();
+}
+
+// Dim the face so a list on top of it reads
+static void draw_list_backdrop() {
+    SDL_Rect backdrop = {0, 0, screen_width, screen_height};
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, VIDEO_BACKDROP_COLOR.r, VIDEO_BACKDROP_COLOR.g, VIDEO_BACKDROP_COLOR.b, VIDEO_BACKDROP_COLOR.a);
+    SDL_RenderFillRect(renderer, &backdrop);
+}
+
 // True when the popup list is showing
 bool menu_open() {
     return g_menu_open;
@@ -577,6 +835,12 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
     if (!tap)
+        return;
+
+    // The lists and a playing video take the tap before anything else
+    if (!menu_open() && handle_video_tap(x, y))
+        return;
+    if (!menu_open() && handle_wifi_tap(x, y))
         return;
 
     // Keep the bar reachable while the popup or a call overlay is up
@@ -635,6 +899,15 @@ void handle_call_event(const SDL_Event& event) {
     }
     if (item == MENU_RECORD) {
         g_record_request = true;
+        return;
+    }
+    if (item == MENU_VIDEOS) {
+        open_video_list();
+        return;
+    }
+    if (item == MENU_WIFI) {
+        refresh_networks();
+        g_wifi_list_open = true;
         return;
     }
     if (item == MENU_MODE) {
