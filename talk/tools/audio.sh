@@ -270,7 +270,7 @@ EOF
     # Name the card rather than number it, indexes shift when other cards come and go
     cat > "${output_path}" <<EOF
 # Written by speak tools/audio.sh, defaults ALSA to the USB soundcard
-# Playback goes through the dmix software mixer, so speech and a call can share the speaker
+# Playback goes through dmix and capture through dsnoop, so programs can share the card
 pcm.!default {
     type asym
     playback.pcm {
@@ -279,7 +279,7 @@ pcm.!default {
     }
     capture.pcm {
         type plug
-        slave.pcm "hw:CARD=${card_name},DEV=0"
+        slave.pcm "dsnoop:CARD=${card_name},DEV=0"
     }
 }
 

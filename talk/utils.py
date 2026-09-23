@@ -210,7 +210,11 @@ def linux_record_command():
     if card is None:
         print('No microphone found. Plug in a USB mic and try again.')
         sys.exit(1)
-    return [LINUX_RECORDER, '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+    return [LINUX_RECORDER, '-D', shared_capture_device(card), '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+
+# Name the shared capture device, dsnoop lets a recording read the mic at the same time
+def shared_capture_device(card):
+    return f'plug:"dsnoop:{card},0"'
 
 # Start the recorder streaming raw audio to stdout
 def start_recorder(command):

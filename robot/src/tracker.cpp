@@ -1,6 +1,7 @@
 // Local
 #include "tracker.h"
 #include "screen.h"
+#include "recorder.h"
 
 // System
 #include <chrono>
@@ -14,6 +15,9 @@ using namespace std;
 // Run the Haar detector well under the camera rate, it is the expensive part
 static const int FACE_DETECT_FPS = 3;
 static const int FACE_DETECT_SLEEP_MS = 1000 / FACE_DETECT_FPS;
+
+// How long to wait when the recording has not sent its next frame yet
+static const int FRAME_WAIT_MS = 30;
 
 // Preview spans the screen, sitting below the top edge
 static const int PREVIEW_TOP = 120;
@@ -73,8 +77,8 @@ void FaceTracker::startTracking() {
     if (trackingThread.joinable())
         trackingThread.join();
 
-    // Only start tracking if the camera already opened
-    if (!cameraAvailable)
+    // Only start tracking with a frame source, the camera or a running recording
+    if (!cameraAvailable && !recording())
         return;
 
     // Start tracking thread
@@ -87,9 +91,14 @@ void FaceTracker::startTracking() {
 void FaceTracker::trackingThreadFunction() {
     try {
         while (!shouldQuit) {
-            // Capture frame from camera
+            // Take a frame from the recording when one is running, otherwise from the camera
             cv::Mat frame;
-            if (!camera.captureFrame(frame)) {
+            if (recording()) {
+                if (!take_recording_frame(frame)) {
+                    this_thread::sleep_for(chrono::milliseconds(FRAME_WAIT_MS));
+                    continue;
+                }
+            } else if (!camera.captureFrame(frame)) {
                 cerr << "Error: Could not read frame from camera" << endl;
                 break;
             }
@@ -179,7 +188,7 @@ bool FaceTracker::getFacePosition(float& x, float& y) {
 
 // Draw the camera preview over the face
 void FaceTracker::updateWindow() {
-    if (!showWindow.load() || !cameraAvailable || !renderer)
+    if (!showWindow.load() || !renderer)
         return;
     try {
         // Pull a new camera frame into the preview buffer when one is ready

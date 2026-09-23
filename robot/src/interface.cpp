@@ -5,6 +5,7 @@
 #include "servos.h"
 #include "battery.h"
 #include "screen.h"
+#include "recorder.h"
 
 // JSON
 #include "json.hpp"
@@ -55,12 +56,16 @@ static const int MENU_MOVE = 2;
 static const int MENU_CAMERA = 3;
 static const int MENU_MODE = 4;
 static const int MENU_AUDIO = 5;
-static const int MENU_CALL = 6;
-static const int MENU_EXIT = 7;
-static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Mode", "Audio", "Call", "Exit"};
+static const int MENU_RECORD = 6;
+static const int MENU_CALL = 7;
+static const int MENU_EXIT = 8;
+static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Mode", "Audio", "Record", "Call", "Exit"};
 
 // Menu item size
-static const int MENU_ITEM_COUNT = 8;
+static const int MENU_ITEM_COUNT = 9;
+
+// The Record item says how to end the recording while one is running
+static const char* MENU_STOP_LABEL = "Stop";
 static const int MENU_ITEM_WIDTH = 160;
 
 // Which model talk runs, the Mode button steps through these in order
@@ -103,6 +108,7 @@ static atomic<bool> g_listen_open{false};
 static atomic<bool> g_camera_toggle{false};
 static atomic<bool> g_move_request{false};
 static atomic<bool> g_audio_request{false};
+static atomic<bool> g_record_request{false};
 static atomic<bool> g_menu_open{false};
 static steady_clock::time_point g_last_menu_tap{};
 
@@ -449,10 +455,12 @@ void complete_call_handoff(bool ok) {
     g_handoff_cv.notify_all();
 }
 
-// Name one popup item, Mode wears the model talk is set to
+// Name one popup item, Mode wears the model talk is set to and Record turns into Stop
 static const char* menu_item_label(int index) {
     if (index == MENU_MODE)
         return TALK_MODE_LABELS[g_talk_mode.load()];
+    if (index == MENU_RECORD && recording())
+        return MENU_STOP_LABEL;
     return MENU_ITEM_LABELS[index];
 }
 
@@ -611,6 +619,10 @@ void handle_call_event(const SDL_Event& event) {
         g_audio_request = true;
         return;
     }
+    if (item == MENU_RECORD) {
+        g_record_request = true;
+        return;
+    }
     if (item == MENU_MODE) {
         g_talk_mode = (g_talk_mode.load() + 1) % TALK_MODE_COUNT;
         g_talk_mode_pending = true;
@@ -653,14 +665,16 @@ bool call_overlay_open() {
     return g_overlay_open.load();
 }
 
-// Camera, Move, and Audio presses since the last check, then clear them
-void take_menu_presses(bool& camera, bool& move, bool& audio) {
+// Camera, Move, Audio, and Record presses since the last check, then clear them
+void take_menu_presses(bool& camera, bool& move, bool& audio, bool& record) {
     camera = g_camera_toggle.load();
     g_camera_toggle = false;
     move = g_move_request.load();
     g_move_request = false;
     audio = g_audio_request.load();
     g_audio_request = false;
+    record = g_record_request.load();
+    g_record_request = false;
 }
 
 // True while face tracking should follow, off in ready until talk hears the wake word

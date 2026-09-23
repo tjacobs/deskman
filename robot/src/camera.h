@@ -18,6 +18,9 @@ public:
     bool captureFrame(cv::Mat& frame);
     void release();
 
+    // Which /dev/videoN is open, so another program can be pointed at it
+    int index() const { return cameraIndex; }
+
     // Capture size and rate
     const int width = 640;
     const int height = 480;
