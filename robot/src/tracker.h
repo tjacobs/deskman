@@ -11,6 +11,7 @@
 
 // System
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -51,6 +52,11 @@ private:
     cv::CascadeClassifier face_cascade;
     cv::Rect currentFace;
     mutex faceMutex;
+
+    // Boxes from the last detection, drawn onto the frames in between
+    vector<cv::Rect> lastFaces;
+    size_t largestFace = 0;
+    chrono::steady_clock::time_point lastDetectAt{};
 
     // Worker thread, and the flags that start and stop it
     thread trackingThread;

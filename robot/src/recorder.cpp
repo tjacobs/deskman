@@ -51,7 +51,7 @@ static const int RECORD_STOP_POLL_MS = 100;
 static const int PREVIEW_WIDTH = 640;
 static const int PREVIEW_HEIGHT = 360;
 static const char* PREVIEW_SIZE = "640x360";
-static const char* PREVIEW_FRAMERATE = "10";
+static const char* PREVIEW_FRAMERATE = "15";
 static const char* PREVIEW_PIXEL_FORMAT = "bgr24";
 
 // Read the microphone through the software mixer, so talk can keep listening

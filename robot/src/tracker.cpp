@@ -14,10 +14,14 @@ using namespace std;
 
 // Run the Haar detector well under the camera rate, it is the expensive part
 static const int FACE_DETECT_FPS = 3;
-static const int FACE_DETECT_SLEEP_MS = 1000 / FACE_DETECT_FPS;
+static const int FACE_DETECT_GAP_MS = 1000 / FACE_DETECT_FPS;
 
 // How long to wait when the recording has not sent its next frame yet
-static const int FRAME_WAIT_MS = 30;
+static const int FRAME_WAIT_MS = 10;
+
+// Pace the preview, reading the camera flat out cooks the Pi for frames nobody sees
+static const int PREVIEW_FPS = 15;
+static const int PREVIEW_GAP_MS = 1000 / PREVIEW_FPS;
 
 // Preview spans the screen, sitting below the top edge
 static const int PREVIEW_TOP = 120;
@@ -92,6 +96,7 @@ void FaceTracker::trackingThreadFunction() {
     try {
         while (!shouldQuit) {
             // Take a frame from the recording when one is running, otherwise from the camera
+            auto frameStart = chrono::steady_clock::now();
             cv::Mat frame;
             if (recording()) {
                 if (!take_recording_frame(frame)) {
@@ -103,30 +108,37 @@ void FaceTracker::trackingThreadFunction() {
                 break;
             }
 
-            // Keep the largest face by area
-            auto faces = detectFaces(frame);
-            unique_lock<mutex> lock(faceMutex);
-            size_t largestFaceIndex = 0;
-            if (!faces.empty()) {
-                int maxArea = 0;
-                for (size_t i = 0; i < faces.size(); i++) {
-                    int area = faces[i].width * faces[i].height;
-                    if (area > maxArea) {
-                        maxArea = area;
-                        largestFaceIndex = i;
-                        currentFace = faces[largestFaceIndex];
-                    }
-                }
-            } else {
-                currentFace = cv::Rect();
-            }
-            lock.unlock();
+            // Detect on a timer rather than on every frame, so the preview is not held to the Haar rate
+            auto now = chrono::steady_clock::now();
+            bool detectNow = chrono::duration_cast<chrono::milliseconds>(now - lastDetectAt).count() >= FACE_DETECT_GAP_MS;
+            if (detectNow) {
+                lastDetectAt = now;
+                lastFaces = detectFaces(frame);
 
-            // Draw faces and update frame buffer if the preview is on
+                // Keep the largest face by area
+                unique_lock<mutex> lock(faceMutex);
+                largestFace = 0;
+                if (!lastFaces.empty()) {
+                    int maxArea = 0;
+                    for (size_t i = 0; i < lastFaces.size(); i++) {
+                        int area = lastFaces[i].width * lastFaces[i].height;
+                        if (area > maxArea) {
+                            maxArea = area;
+                            largestFace = i;
+                            currentFace = lastFaces[largestFace];
+                        }
+                    }
+                } else {
+                    currentFace = cv::Rect();
+                }
+                lock.unlock();
+            }
+
+            // Draw the boxes from the last detection and update frame buffer if the preview is on
             if (showWindow.load()) {
-                for (size_t i = 0; i < faces.size(); i++) {
-                    cv::Scalar color = i == largestFaceIndex ? TRACKED_FACE_COLOR : OTHER_FACE_COLOR;
-                    cv::rectangle(frame, faces[i], color, FACE_BOX_THICKNESS);
+                for (size_t i = 0; i < lastFaces.size(); i++) {
+                    cv::Scalar color = i == largestFace ? TRACKED_FACE_COLOR : OTHER_FACE_COLOR;
+                    cv::rectangle(frame, lastFaces[i], color, FACE_BOX_THICKNESS);
                 }
                 unique_lock<mutex> frameLock(frameMutex);
                 frame.copyTo(currentFrame);
@@ -134,8 +146,10 @@ void FaceTracker::trackingThreadFunction() {
                 frameLock.unlock();
             }
 
-            // Sleep for the Haar rate, not the camera rate
-            this_thread::sleep_for(chrono::milliseconds(FACE_DETECT_SLEEP_MS));
+            // Hold the loop to the preview rate
+            auto spent = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - frameStart).count();
+            if (spent < PREVIEW_GAP_MS)
+                this_thread::sleep_for(chrono::milliseconds(PREVIEW_GAP_MS - spent));
         }
     } catch (const exception& error) {
         cerr << "Face tracking error: " << error.what() << endl;
@@ -239,10 +253,7 @@ bool FaceTracker::initializeCamera() {
     if (cameraAvailable)
         return true;
     cameraAvailable = camera.initialize();
-    if (!cameraAvailable)
-        return false;
-    cout << "Camera initialized successfully" << endl;
-    return true;
+    return cameraAvailable;
 }
 
 // Hand the camera to another program

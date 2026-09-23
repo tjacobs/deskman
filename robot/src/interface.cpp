@@ -83,6 +83,7 @@ static const int HAMBURGER_LINE_GAP = 7;
 // Menu button colors
 static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
 static const SDL_Color EXIT_BUTTON_COLOR = {180, 40, 40, 255};
+static const SDL_Color RECORDING_BUTTON_COLOR = {220, 30, 30, 255};
 static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
 
@@ -139,6 +140,7 @@ static void send_menu();
 static bool debounce_tap();
 static void set_menu_open(bool open);
 static const char* menu_item_label(int index);
+static SDL_Color menu_item_color(int index);
 static SDL_Rect menu_button_rect();
 static SDL_Rect menu_item_rect(int index);
 static bool tap_in_rect(int x, int y, SDL_Rect rect);
@@ -464,6 +466,15 @@ static const char* menu_item_label(int index) {
     return MENU_ITEM_LABELS[index];
 }
 
+// Colour one popup item, Exit is red and Stop goes brighter red while recording
+static SDL_Color menu_item_color(int index) {
+    if (index == MENU_RECORD && recording())
+        return RECORDING_BUTTON_COLOR;
+    if (index == MENU_EXIT)
+        return EXIT_BUTTON_COLOR;
+    return MENU_BUTTON_COLOR;
+}
+
 // Place the menu toggle on the right of the status bar
 static SDL_Rect menu_button_rect() {
     int pad = status_bar_pad();
@@ -517,8 +528,7 @@ static void draw_hamburger_icon(SDL_Rect rect) {
 void draw_menu(TTF_Font* font) {
     if (g_menu_open) {
         for (int index = 0; index < MENU_ITEM_COUNT; index++) {
-            SDL_Color fill = index == MENU_EXIT ? EXIT_BUTTON_COLOR : MENU_BUTTON_COLOR;
-            draw_bar_button(menu_item_rect(index), menu_item_label(index), fill, font);
+            draw_bar_button(menu_item_rect(index), menu_item_label(index), menu_item_color(index), font);
         }
     }
 
