@@ -65,9 +65,6 @@ static const int SWEEP_ARRIVAL_AMOUNT = 15;
 static const int SWEEP_SPEED = 600;
 static const int SWEEP_ACCELERATION = 10;
 
-// Where the hat is left when the sweep finishes
-static const float SWEEP_HAT_UP_DEGREES = 90.0f;
-
 // How far the sweep scans for extra servos, and room for their labels
 static const int SERVO_SWEEP_SCAN_MAX = 20;
 static const int SWEEP_SCAN_NAME_SIZE = 8;
@@ -158,7 +155,7 @@ int open_servos() {
     // Park pan and tilt facing forward, and the hat all the way up
     servos[0].position = degrees_to_servo(servos[0], 0);
     servos[1].position = degrees_to_servo(servos[1], 0);
-    servos[2].position = degrees_to_servo(servos[2], servos[2].degrees_high);
+    servos[2].position = degrees_to_servo(servos[2], servos[2].degrees_min);
 
     // Try USB first, then the onboard UART, keep the first bus that answers
     servo_bus.IOTimeOut = SERVO_DETECT_TIMEOUT_MS;
@@ -251,8 +248,8 @@ static void load_servo_limits() {
         swap_inverted_limits(servo);
     }
 
-    // Reverse the hat count range so up still means up when the horn is flipped
-    if (config.hat_dir < 0) {
+    // The hat sits up at the high count, so reverse its range, hat_dir -1 is the robot with the servo on the other side
+    if (config.hat_dir > 0) {
         int high = servos[2].min_limit;
         servos[2].min_limit = servos[2].max_limit;
         servos[2].max_limit = high;
@@ -560,7 +557,7 @@ void sweep_servos(bool scan_bus) {
         if (servo.id != SERVO_ID_HAT)
             continue;
         snprintf(label, sizeof(label), "%s up", servo.name);
-        sweep_line(label, servo, degrees_to_servo(servo, SWEEP_HAT_UP_DEGREES));
+        sweep_line(label, servo, degrees_to_servo(servo, servo.degrees_min));
     }
     printf(g_quit ? "Sweep stopped\n" : "Sweep done\n");
 }
@@ -644,7 +641,7 @@ static void sweep_line(const char *label, Servo &servo, int position) {
 
     // Say what was asked for, lined up in a column
     string name = capitalized(label);
-    printf("%-*s command %d\n", SWEEP_COMMAND_COLUMN, name.c_str(), command);
+    printf("%-*s Position: %d\n", SWEEP_COMMAND_COLUMN, name.c_str(), command);
     fflush(stdout);
 
     // Wait until this motor is on the commanded count, or the step time runs out

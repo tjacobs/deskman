@@ -75,9 +75,8 @@ void move(const string& command, int value) {
     *lastValue = value;
     *lastMove = now;
 
-    // Web sends 1 or 100, both mean one step. Hat up is negative degrees
+    // Web sends 1 or 100, both mean one step, and the robot already reads hat up as negative
     int delta = value > 0 ? step : -step;
-    if (axis == "hat_delta") delta = -delta;
     string line = "{\"command\":\"move\",\"" + axis + "\":" + to_string(delta) + "}";
     if (!writeHeadLine(line)) {
         closeHead();

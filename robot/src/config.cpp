@@ -62,7 +62,7 @@ AppConfig loadConfig() {
         bool has_hat_max = read_travel_limit(settings, "hat_max", "max_hat", config.hat_max);
         config.has_servo_limits = has_pan_min && has_pan_max && has_tilt_min && has_tilt_max && has_hat_min && has_hat_max;
 
-        // Hat horn wired the other way, only -1 flips it, anything else stays 1
+        // Hat servo mounted on the other side, only -1 flips it, anything else stays 1
         if (settings.contains("hat_dir")) {
             config.hat_dir = settings["hat_dir"].get<int>();
             if (config.hat_dir != -1)
