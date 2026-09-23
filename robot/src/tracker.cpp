@@ -5,6 +5,7 @@
 
 // System
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -22,6 +23,10 @@ static const int FRAME_WAIT_MS = 10;
 // Pace the preview, reading the camera flat out cooks the Pi for frames nobody sees
 static const int PREVIEW_FPS = 30;
 static const int PREVIEW_GAP_MS = 1000 / PREVIEW_FPS;
+
+// Turn on to log how many camera frames a second actually reach the screen
+static const bool LOG_PREVIEW_FPS = false;
+static const int LOG_FPS_GAP_MS = 5000;
 
 // Preview spans the screen, sitting below the top edge
 static const int PREVIEW_TOP = 120;
@@ -43,6 +48,9 @@ static const char* CASCADE_PATHS[] = {
     "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
     "/opt/homebrew/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
 };
+
+// Forward declaration
+static void logPreviewRate();
 
 // Load the face cascade and open the camera
 FaceTracker::FaceTracker(bool show_window, bool use_camera): showWindow(show_window) {
@@ -268,6 +276,10 @@ void FaceTracker::updateWindow() {
             }
             if (previewTexture)
                 SDL_UpdateTexture(previewTexture, NULL, frameCopy.data, static_cast<int>(frameCopy.step));
+
+            // Count the camera frames that made it onto the screen
+            if (LOG_PREVIEW_FPS)
+                logPreviewRate();
         }
         if (!previewTexture)
             return;
@@ -279,6 +291,21 @@ void FaceTracker::updateWindow() {
     } catch (const exception& error) {
         cerr << "Error updating window: " << error.what() << endl;
     }
+}
+
+// Print how many camera frames a second the screen is showing
+static void logPreviewRate() {
+    static int frames = 0;
+    static auto since = chrono::steady_clock::now();
+    frames++;
+
+    // Report on the interval, then start counting again
+    auto spent = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - since).count();
+    if (spent < LOG_FPS_GAP_MS)
+        return;
+    printf("Preview FPS: %.1f\n", frames * 1000.0 / spent);
+    frames = 0;
+    since = chrono::steady_clock::now();
 }
 
 // Reopen the camera after a call handed it back

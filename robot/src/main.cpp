@@ -54,6 +54,10 @@ static const char* DEFAULT_DISPLAY = ":0";
 static const int MAX_FPS = 30;
 static const int FRAME_MS = 1000 / MAX_FPS;
 
+// Turn on to log how many frames a second the face loop is drawing
+static const bool LOG_SCREEN_FPS = false;
+static const int LOG_FPS_GAP_MS = 5000;
+
 // Wait for the panel to connect, and retry the rotate
 static const int SCREEN_WAIT_MS = 500;
 static const int SCREEN_ROTATE_TRIES = 2;
@@ -159,6 +163,7 @@ static int start_servos();
 static int sweep_servo_test(bool no_servos);
 static void toggle_recording(FaceTracker& faceTracker);
 static void take_camera_back(FaceTracker& faceTracker);
+static void log_screen_rate();
 static void draw_recording_mark(TTF_Font* font);
 static void start_audio_test();
 static void reap_audio_test();
@@ -426,6 +431,10 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         set_camera_showing(show_camera);
         draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
         SDL_RenderPresent(renderer);
+
+        // Count the frames the face loop is drawing
+        if (LOG_SCREEN_FPS)
+            log_screen_rate();
 
         // Hold the frame rate
         static Uint32 lastFrameTime = SDL_GetTicks();
@@ -750,6 +759,21 @@ static void take_camera_back(FaceTracker& faceTracker) {
         return;
     if (faceTracker.initializeCamera())
         faceTracker.startTracking();
+}
+
+// Print how many frames a second the face loop is drawing
+static void log_screen_rate() {
+    static int frames = 0;
+    static Uint32 since = SDL_GetTicks();
+    frames++;
+
+    // Report on the interval, then start counting again
+    Uint32 spent = SDL_GetTicks() - since;
+    if (spent < (Uint32)LOG_FPS_GAP_MS)
+        return;
+    printf("Screen FPS: %.1f\n", frames * 1000.0 / spent);
+    frames = 0;
+    since = SDL_GetTicks();
 }
 
 // Red dot and a running time, the menu is closed so this is the only sign it is recording
