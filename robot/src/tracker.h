@@ -34,6 +34,7 @@ public:
     bool initializeCamera();
     void stopCamera();
     bool isCameraAvailable() const { return cameraAvailable; }
+    int cameraIndex() const { return camera.index(); }
 
     // Where the tracked face sits, and the preview drawn over the face
     bool getFacePosition(float& x, float& y);

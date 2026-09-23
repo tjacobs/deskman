@@ -19,6 +19,7 @@ add_executable(${TARGET_NAME}
     src/camera.cpp
     src/config.cpp
     src/interface.cpp
+    src/recorder.cpp
     src/servos/SMS_STS.cpp
     src/servos/SCS.cpp
     src/servos/SCSerial.cpp

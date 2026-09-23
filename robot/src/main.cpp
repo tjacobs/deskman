@@ -9,6 +9,7 @@
 #include "tracker.h"
 #include "config.h"
 #include "interface.h"
+#include "recorder.h"
 #include "fan.h"
 #include "battery.h"
 
@@ -88,6 +89,7 @@ static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
 static const char* TALK_CONFIG_FROM_REPO = "talk/config.json";
 static const char* AUDIO_TEST_FROM_REPO = "talk/tools/test_audio.py";
+static const char* RECORDINGS_FROM_REPO = "robot/recordings";
 static const char* JETSON_OUTPUT = "DP-1";
 static const char* JETSON_TOUCH = "WaveShare WS170120";
 static const char* PI_OUTPUT = "DSI-2";
@@ -106,6 +108,11 @@ static const SDL_Color WARNING_COLOR = {200, 0, 0, 255};
 static const int WARNING_X = 10;
 static const int FAN_WARNING_Y = 10;
 static const int TEMPERATURE_WARNING_Y = 50;
+
+// Recording mark sits under the warnings, a square dot beside the elapsed time
+static const int RECORDING_MARK_Y = 90;
+static const int RECORDING_DOT_SIZE = 22;
+static const int RECORDING_MARK_GAP = 10;
 
 // Set from flags, read across the program
 bool show_window = true;
@@ -147,6 +154,9 @@ static void show_face();
 static void draw_face();
 static int start_servos();
 static int sweep_servo_test(bool no_servos);
+static void toggle_recording(FaceTracker& faceTracker);
+static void take_camera_back(FaceTracker& faceTracker);
+static void draw_recording_mark(TTF_Font* font);
 static void start_audio_test();
 static void reap_audio_test();
 static int load_talk_mode();
@@ -299,6 +309,12 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
     while (!quit && !g_quit) {
         reap_talk_process();
         reap_audio_test();
+
+        // Take the camera back when a recording stopped at the length cap on its own
+        bool was_recording = recording();
+        reap_recording();
+        if (was_recording && !recording())
+            take_camera_back(faceTracker);
         check_fan();
         check_battery();
         log_robot_health();
@@ -308,7 +324,8 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         bool camera_pressed = false;
         bool move_pressed = false;
         bool audio_pressed = false;
-        take_menu_presses(camera_pressed, move_pressed, audio_pressed);
+        bool record_pressed = false;
+        take_menu_presses(camera_pressed, move_pressed, audio_pressed, record_pressed);
         if (camera_pressed)
             toggle_camera_preview(faceTracker);
         if (move_pressed) {
@@ -317,6 +334,8 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         }
         if (audio_pressed)
             start_audio_test();
+        if (record_pressed)
+            toggle_recording(faceTracker);
 
         // Run talk on another model once the Mode button stops changing
         int talk_mode = take_talk_mode_request();
@@ -396,6 +415,9 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         string temperature_warning = temperature_warning_text();
         if (!temperature_warning.empty())
             draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
+
+        // Red dot while a recording is running
+        draw_recording_mark(face.font);
 
         // Last log line, pack voltage, and the menu button
         draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
@@ -685,6 +707,56 @@ static int sweep_servo_test(bool no_servos) {
     return 0;
 }
 
+// Start or stop a recording, ffmpeg needs the camera to itself while it runs
+static void toggle_recording(FaceTracker& faceTracker) {
+    // Stopping hands the camera back to face tracking
+    if (recording()) {
+        stop_recording();
+        take_camera_back(faceTracker);
+        return;
+    }
+
+    // There is nothing to record without a camera
+    if (!use_camera || !faceTracker.isCameraAvailable()) {
+        cout << "No camera to record from" << endl;
+        return;
+    }
+
+    // Free the camera, ffmpeg opens the same device
+    int cameraIndex = faceTracker.cameraIndex();
+    faceTracker.stopTracking();
+    faceTracker.stopCamera();
+
+    // Take the camera back when ffmpeg will not start, so tracking is not left off
+    if (!start_recording(repo_path(RECORDINGS_FROM_REPO), cameraIndex))
+        take_camera_back(faceTracker);
+}
+
+// Reopen the camera and follow faces again
+static void take_camera_back(FaceTracker& faceTracker) {
+    if (!use_camera)
+        return;
+    if (faceTracker.initializeCamera())
+        faceTracker.startTracking();
+}
+
+// Red dot and a running time, the menu is closed so this is the only sign it is recording
+static void draw_recording_mark(TTF_Font* font) {
+    if (!recording())
+        return;
+
+    // Dot first, then the time beside it
+    SDL_Rect dot = {WARNING_X, RECORDING_MARK_Y, RECORDING_DOT_SIZE, RECORDING_DOT_SIZE};
+    SDL_SetRenderDrawColor(renderer, WARNING_COLOR.r, WARNING_COLOR.g, WARNING_COLOR.b, WARNING_COLOR.a);
+    SDL_RenderFillRect(renderer, &dot);
+
+    // Minutes and seconds, so a long recording still reads at a glance
+    int seconds = static_cast<int>(recording_seconds());
+    char label[32];
+    snprintf(label, sizeof(label), "REC %d:%02d", seconds / 60, seconds % 60);
+    draw_text(label, WARNING_X + RECORDING_DOT_SIZE + RECORDING_MARK_GAP, RECORDING_MARK_Y, font, WARNING_COLOR);
+}
+
 // Chime, record, and play back, with talk out of the way so the mic and speaker are free
 static void start_audio_test() {
     if (g_audio_test_pid > 0) {
@@ -929,6 +1001,7 @@ static void apply_call_handoff(FaceTracker& faceTracker) {
     // Free the camera and the microphone for the call
     if (command == CALL_HANDOFF_PAUSE) {
         if (!g_call_paused) {
+            stop_recording();
             faceTracker.stopCamera();
             g_call_had_talk = !g_no_talk && g_talk_pid > 0;
             if (g_call_had_talk)
@@ -980,6 +1053,7 @@ static void reap_talk_process() {
 static void stop_robot(FaceTracker& faceTracker) {
     g_quit = true;
     cout << "Quit" << endl;
+    stop_recording();
     stop_talk_process();
     stop_interface();
     stop_servo_position_log();
