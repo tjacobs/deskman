@@ -9,7 +9,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 // Posix
@@ -45,6 +47,13 @@ static const long long RECORD_FREE_BYTES_NEEDED = 2LL * 1024 * 1024 * 1024;
 static const int RECORD_STOP_WAIT_MS = 5000;
 static const int RECORD_STOP_POLL_MS = 100;
 
+// Second output ffmpeg sends back down a pipe, small and slow enough to watch and track on
+static const int PREVIEW_WIDTH = 640;
+static const int PREVIEW_HEIGHT = 360;
+static const char* PREVIEW_SIZE = "640x360";
+static const char* PREVIEW_FRAMERATE = "10";
+static const char* PREVIEW_PIXEL_FORMAT = "bgr24";
+
 // Read the microphone through the software mixer, so talk can keep listening
 static const char* SHARED_CAPTURE_PREFIX = "plug:\"dsnoop:";
 static const char* SHARED_CAPTURE_SUFFIX = ",0\"";
@@ -58,8 +67,18 @@ static pid_t recorderPid = -1;
 static steady_clock::time_point recorderStart;
 static string recorderPath;
 
+// The frames coming back from ffmpeg, and the thread that reads them
+static thread previewThread;
+static int previewFd = -1;
+static mutex previewMutex;
+static cv::Mat previewFrame;
+static bool previewFrameIsNew = false;
+
 static string recordingFilePath(const string& directory);
 static string shortPath(const string& path);
+static void readPreviewFrames();
+static bool readExactly(int fd, unsigned char* buffer, size_t wanted);
+static void stopPreviewReader();
 static string microphoneDevice();
 static int microphoneCard();
 static bool cardCanCapture(int card);
@@ -90,9 +109,18 @@ bool start_recording(const string& directory, int cameraIndex) {
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
         "-f", "v4l2", "-input_format", RECORD_INPUT_FORMAT, "-video_size", RECORD_VIDEO_SIZE, "-framerate", RECORD_FRAMERATE, "-i", cameraDevice,
         "-f", "alsa", "-ac", "1", "-use_wallclock_as_timestamps", "1", "-i", microphone,
+        "-map", "0:v", "-map", "1:a",
         "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
-        "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path
+        "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path,
+        "-map", "0:v", "-s", PREVIEW_SIZE, "-r", PREVIEW_FRAMERATE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
     };
+
+    // Open the pipe those small frames come back on
+    int previewPipe[2];
+    if (pipe(previewPipe) != 0) {
+        perror("pipe preview");
+        return false;
+    }
 
     // Hand the strings to exec as a plain array
     vector<char*> commandLine;
@@ -104,19 +132,63 @@ bool start_recording(const string& directory, int cameraIndex) {
     pid_t pid = fork();
     if (pid < 0) {
         perror("fork ffmpeg");
+        close(previewPipe[0]);
+        close(previewPipe[1]);
         return false;
     }
     if (pid == 0) {
+        // Raw frames go out on stdout, so that end of the pipe becomes stdout
+        close(previewPipe[0]);
+        dup2(previewPipe[1], STDOUT_FILENO);
+        close(previewPipe[1]);
         execvp(commandLine[0], commandLine.data());
         cerr << "Error: ffmpeg: " << strerror(errno) << endl;
         _exit(1);
     }
 
     // Remember the child so the timer, the label, and the stop can find it
+    close(previewPipe[1]);
+    previewFd = previewPipe[0];
     recorderPid = pid;
     recorderStart = steady_clock::now();
     recorderPath = path;
+
+    // Keep the pipe drained, ffmpeg stalls on a full one
+    previewThread = thread(readPreviewFrames);
     cout << "Recording to " << shortPath(path) << endl;
+    return true;
+}
+
+// Pull frames off the pipe for as long as ffmpeg sends them
+static void readPreviewFrames() {
+    size_t frameBytes = static_cast<size_t>(PREVIEW_WIDTH) * PREVIEW_HEIGHT * 3;
+    cv::Mat frame(PREVIEW_HEIGHT, PREVIEW_WIDTH, CV_8UC3);
+    while (readExactly(previewFd, frame.data, frameBytes)) {
+        lock_guard<mutex> lock(previewMutex);
+        frame.copyTo(previewFrame);
+        previewFrameIsNew = true;
+    }
+}
+
+// Fill the buffer or say the pipe ended
+static bool readExactly(int fd, unsigned char* buffer, size_t wanted) {
+    size_t filled = 0;
+    while (filled < wanted) {
+        ssize_t piece = read(fd, buffer + filled, wanted - filled);
+        if (piece <= 0)
+            return false;
+        filled += static_cast<size_t>(piece);
+    }
+    return true;
+}
+
+// The newest frame ffmpeg sent, each one handed out once
+bool take_recording_frame(cv::Mat& frame) {
+    lock_guard<mutex> lock(previewMutex);
+    if (!previewFrameIsNew)
+        return false;
+    previewFrame.copyTo(frame);
+    previewFrameIsNew = false;
     return true;
 }
 
@@ -227,9 +299,26 @@ void stop_recording() {
         recorderPid = -1;
     }
 
+    // Let the reader finish, the pipe ends when ffmpeg closes it
+    stopPreviewReader();
+
     // Say what was written and how long it runs
     cout << "Recorded " << static_cast<int>(seconds) << " seconds to " << shortPath(recorderPath) << endl;
     recorderPath.clear();
+}
+
+// Wait for the reader to see the end of the pipe, then close it
+static void stopPreviewReader() {
+    if (previewThread.joinable())
+        previewThread.join();
+    if (previewFd >= 0) {
+        close(previewFd);
+        previewFd = -1;
+    }
+
+    // Drop the last frame, it belongs to the recording that just ended
+    lock_guard<mutex> lock(previewMutex);
+    previewFrameIsNew = false;
 }
 
 // True while ffmpeg is still going, the menu thread reads this for the button label
@@ -246,6 +335,7 @@ void reap_recording() {
         return;
 
     // Say where it landed, a recording that ran to the cap is still a good file
+    stopPreviewReader();
     cout << "Recording ended, saved " << shortPath(recorderPath) << endl;
     recorderPid = -1;
     recorderPath.clear();

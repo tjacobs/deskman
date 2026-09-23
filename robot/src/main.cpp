@@ -129,6 +129,9 @@ static bool g_call_had_talk = false;
 // Audio test child, and whether it took the microphone off talk
 static pid_t g_audio_test_pid = -1;
 static bool g_audio_test_had_talk = false;
+
+// Whether the preview was up before a recording turned it on
+static bool g_camera_before_record = false;
 static int g_menu_move_step = MENU_MOVE_STEP_NONE;
 static Uint32 g_menu_move_at = 0;
 
@@ -380,7 +383,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
 
         // Point eyes and head at the tracked face until talk goes ready after listening
         float faceX, faceY;
-        bool hasFaceTracking = use_camera && listen_open() && faceTracker.isCameraAvailable() && faceTracker.getFacePosition(faceX, faceY);
+        bool hasFaceTracking = use_camera && listen_open() && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY);
         if (g_menu_move_step != MENU_MOVE_STEP_NONE) {
             step_menu_move();
         } else if (hasFaceTracking) {
@@ -423,7 +426,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
 
         // Show the tracking preview over the face
-        if (use_camera && faceTracker.isCameraAvailable())
+        if (use_camera && faceTracker.isTracking())
             faceTracker.updateWindow();
         SDL_RenderPresent(renderer);
 
@@ -709,10 +712,12 @@ static int sweep_servo_test(bool no_servos) {
 
 // Start or stop a recording, ffmpeg needs the camera to itself while it runs
 static void toggle_recording(FaceTracker& faceTracker) {
-    // Stopping hands the camera back to face tracking
+    // Stopping hands the camera back to face tracking, and puts the preview back as it was
     if (recording()) {
         stop_recording();
         take_camera_back(faceTracker);
+        show_camera = g_camera_before_record;
+        faceTracker.showWindow = show_camera;
         return;
     }
 
@@ -724,16 +729,26 @@ static void toggle_recording(FaceTracker& faceTracker) {
 
     // Free the camera, ffmpeg opens the same device
     int cameraIndex = faceTracker.cameraIndex();
-    faceTracker.stopTracking();
     faceTracker.stopCamera();
 
     // Take the camera back when ffmpeg will not start, so tracking is not left off
-    if (!start_recording(repo_path(RECORDINGS_FROM_REPO), cameraIndex))
+    if (!start_recording(repo_path(RECORDINGS_FROM_REPO), cameraIndex)) {
         take_camera_back(faceTracker);
+        return;
+    }
+
+    // Show what is being recorded, and remember what the preview was doing before
+    g_camera_before_record = show_camera;
+    show_camera = true;
+    faceTracker.showWindow = true;
+
+    // Follow faces again on the frames ffmpeg sends back
+    faceTracker.startTracking();
 }
 
 // Reopen the camera and follow faces again
 static void take_camera_back(FaceTracker& faceTracker) {
+    faceTracker.stopTracking();
     if (!use_camera)
         return;
     if (faceTracker.initializeCamera())

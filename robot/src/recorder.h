@@ -1,5 +1,8 @@
 #pragma once
 
+// OpenCV
+#include <opencv2/opencv.hpp>
+
 // System
 #include <string>
 
@@ -12,3 +15,6 @@ void stop_recording();
 void reap_recording();
 bool recording();
 double recording_seconds();
+
+// Take the newest frame ffmpeg sent back, so the face can still be previewed and tracked
+bool take_recording_frame(cv::Mat& frame);
