@@ -101,7 +101,7 @@ struct Servo {
 static Servo servos[] = {
     {SERVO_ID_PAN,  "pan",  -90, 90},
     {SERVO_ID_TILT, "tilt", -10, 30},
-    {SERVO_ID_HAT,  "hat",  -35, 90},
+    {SERVO_ID_HAT,  "hat",  -40, 90},
 };
 
 // Extra IDs found while the sweep scans the low bus IDs

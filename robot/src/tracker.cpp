@@ -37,7 +37,7 @@ static const int FACE_BOX_THICKNESS = 2;
 static const int DETECT_BLUR_SIZE = 5;
 static const double DETECT_SCALE_FACTOR = 1.1;
 static const int DETECT_MIN_NEIGHBORS = 3;
-static const int DETECT_MIN_FACE = 20;
+static const int DETECT_MIN_FACE = 60;
 static const int DETECT_MAX_FACE = 300;
 
 // Where OpenCV keeps its Haar cascades, Linux first then Mac
@@ -144,10 +144,11 @@ void FaceTracker::trackingThreadFunction() {
                 frameLock.unlock();
             }
 
-            // Hold the loop to the preview rate
+            // Hold the loop to the preview rate, with nothing on screen only the detector needs frames
+            int gap = showWindow.load() ? PREVIEW_GAP_MS : FACE_DETECT_GAP_MS;
             auto spent = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - frameStart).count();
-            if (spent < PREVIEW_GAP_MS)
-                this_thread::sleep_for(chrono::milliseconds(PREVIEW_GAP_MS - spent));
+            if (spent < gap)
+                this_thread::sleep_for(chrono::milliseconds(gap - spent));
         }
     } catch (const exception& error) {
         cerr << "Face tracking error: " << error.what() << endl;
@@ -209,7 +210,7 @@ vector<cv::Rect> FaceTracker::detectFaces(const cv::Mat& frame) {
     cv::GaussianBlur(frame_gray, frame_gray, cv::Size(DETECT_BLUR_SIZE, DETECT_BLUR_SIZE), 0);
     cv::equalizeHist(frame_gray, frame_gray);
 
-    // Detect faces with a modest min size so distant faces still count
+    // Detect faces, the min size skips the tiny scales that cost the most and never hold a face
     cv::Size min_face = cv::Size(DETECT_MIN_FACE, DETECT_MIN_FACE);
     cv::Size max_face = cv::Size(DETECT_MAX_FACE, DETECT_MAX_FACE);
     face_cascade.detectMultiScale(frame_gray, faces, DETECT_SCALE_FACTOR, DETECT_MIN_NEIGHBORS, cv::CASCADE_SCALE_IMAGE, min_face, max_face);

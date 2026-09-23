@@ -55,9 +55,11 @@ static const char* DEFAULT_DISPLAY = ":0";
 static const bool SWEEP_SCAN_BUS = true;
 static const bool SWEEP_KNOWN_SERVOS = false;
 
-// Frame rate the face is drawn at
-static const int MAX_FPS = 30;
+// Frame rate the face is drawn at, and the faster one used while video is on screen
+static const int MAX_FPS = 20;
 static const int FRAME_MS = 1000 / MAX_FPS;
+static const int VIDEO_FPS = 30;
+static const int VIDEO_FRAME_MS = 1000 / VIDEO_FPS;
 
 // Turn on to log how many frames a second the face loop is drawing
 static const bool LOG_SCREEN_FPS = false;
@@ -162,6 +164,7 @@ static void apply_record_request(FaceTracker& faceTracker);
 static void play_last_recording();
 static void toggle_recording(FaceTracker& faceTracker);
 static void take_camera_back(FaceTracker& faceTracker);
+static int frame_gap_ms();
 static void log_screen_rate();
 static void draw_recording_mark(TTF_Font* font);
 static void start_audio_test();
@@ -404,7 +407,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
 
         // Sleep out the frame when there is nothing to draw
         if (!show_window || !renderer) {
-            sleep_for(milliseconds(FRAME_MS));
+            sleep_for(milliseconds(frame_gap_ms()));
             continue;
         }
 
@@ -439,8 +442,9 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Hold the frame rate
         static Uint32 lastFrameTime = SDL_GetTicks();
         Uint32 frameTime = SDL_GetTicks() - lastFrameTime;
-        if (frameTime < FRAME_MS)
-            SDL_Delay(FRAME_MS - frameTime);
+        int gap = frame_gap_ms();
+        if (frameTime < (Uint32)gap)
+            SDL_Delay(gap - frameTime);
         lastFrameTime = SDL_GetTicks();
     }
 }
@@ -769,6 +773,13 @@ static void take_camera_back(FaceTracker& faceTracker) {
         return;
     if (faceTracker.initializeCamera())
         faceTracker.startTracking();
+}
+
+// Hold the faster rate while video is on screen, the face alone needs fewer frames
+static int frame_gap_ms() {
+    if (show_camera || playing())
+        return VIDEO_FRAME_MS;
+    return FRAME_MS;
 }
 
 // Print how many frames a second the face loop is drawing
