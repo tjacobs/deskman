@@ -50,14 +50,14 @@ Touch needs no setup, Goodix GT9271 binds at I2C address 0x14 on bus 11.
 
 ## Screen backlight
 
-The kernel backlight device at `/sys/class/backlight/11-0045` is not wired to the hardware, writing `brightness` does nothing and the panel boots dark. Drive the panel MCU on I2C bus 11, address 0x45, directly instead. Register 0x95 enables the LCD rails and 0x96 sets backlight PWM.
+The kernel backlight device at `/sys/class/backlight/11-0045` is not wired to the hardware, writing `brightness` does nothing. Drive the panel MCU on I2C bus 11, address 0x45, directly instead. Register 0x95 enables the LCD rails and 0x96 sets backlight PWM.
 
 ```bash
 sudo i2cset -y -f 11 0x45 0x95 0x17
 sudo i2cset -y -f 11 0x45 0x96 0xff
 ```
 
-`install_system.sh` installs these as a boot service, so the panel lights on its own. If the screen is unplugged the service stays clean and prints that the panel is not plugged in.
+Run these by hand if a panel ever comes up dark.
 
 ## Servos
 

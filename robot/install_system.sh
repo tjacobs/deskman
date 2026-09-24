@@ -38,7 +38,6 @@ main() {
     configure_dsi_panel
     configure_servo_uart
     configure_i2c_arm
-    install_panel_backlight_service
     persist_display_rotation
     hide_mouse_pointer
     disable_screen_idle
@@ -112,18 +111,7 @@ SERVO_UART_COMMENT="GPIO 14/15 UART for the STS3215 servo bus"
 I2C_ARM_PARAM="i2c_arm=on"
 I2C_ARM_COMMENT="INA219 battery meter on GPIO 2 and 3"
 
-# Panel MCU on the DSI connector I2C bus, one register enables the LCD rails and another sets the backlight PWM
-PANEL_I2C_BUS="11"
-PANEL_MCU_ADDRESS="0x45"
-PANEL_LCD_REGISTER="0x95"
-PANEL_PWM_REGISTER="0x96"
-PANEL_LCD_ENABLE="0x17"
-PANEL_PWM_FULL="0xff"
-PANEL_BACKLIGHT_SERVICE="panel-backlight.service"
-PANEL_BACKLIGHT_UNIT="/etc/systemd/system/panel-backlight.service"
-PANEL_BACKLIGHT_SCRIPT="/usr/local/sbin/panel-backlight"
-PANEL_I2C_DEVICE="/dev/i2c-${PANEL_I2C_BUS}"
-I2C_SET="/usr/sbin/i2cset"
+# Panel output, mode, and rotation
 PANEL_OUTPUT="DSI-2"
 PANEL_MODE="1280x800"
 PANEL_TRANSFORM="270"
@@ -537,53 +525,6 @@ configure_i2c_arm() {
 
     # Otherwise append it
     printf '\n%s\n%s\n' "# ${I2C_ARM_COMMENT}" "dtparam=${I2C_ARM_PARAM}" >> "${BOOT_CONFIG}"
-}
-
-# Light the panel every boot, the kernel backlight device never reaches the hardware
-install_panel_backlight_service() {
-    # Only the Pi carries the panel MCU on I2C
-    if [[ "${MACHINE}" != "pi" ]]; then
-        return
-    fi
-
-    # Write a script that lights the panel, or exits clean when it is unplugged
-    echo "Installing ${PANEL_BACKLIGHT_SERVICE}"
-    cat > "${PANEL_BACKLIGHT_SCRIPT}" <<EOF
-#!/bin/bash
-# Light the Waveshare DSI panel, or skip cleanly when it is unplugged
-if [[ ! -e ${PANEL_I2C_DEVICE} ]]; then
-    echo "DSI panel I2C bus not present, backlight skipped."
-    exit 0
-fi
-if ! ${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_LCD_REGISTER} ${PANEL_LCD_ENABLE} 2>/dev/null; then
-    echo "DSI panel not plugged in, backlight skipped."
-    exit 0
-fi
-${I2C_SET} -y -f ${PANEL_I2C_BUS} ${PANEL_MCU_ADDRESS} ${PANEL_PWM_REGISTER} ${PANEL_PWM_FULL}
-echo "DSI panel backlight on."
-EOF
-    chmod 755 "${PANEL_BACKLIGHT_SCRIPT}"
-
-    # Write a unit that runs that script once at boot
-    cat > "${PANEL_BACKLIGHT_UNIT}" <<EOF
-[Unit]
-Description=Force Waveshare DSI panel backlight on
-After=multi-user.target
-
-[Service]
-Type=oneshot
-ExecStart=${PANEL_BACKLIGHT_SCRIPT}
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # Enable it for later boots and light the panel now, the script prints what happened
-    systemctl daemon-reload
-    systemctl enable "${PANEL_BACKLIGHT_SERVICE}"
-    "${PANEL_BACKLIGHT_SCRIPT}"
-    systemctl start "${PANEL_BACKLIGHT_SERVICE}"
 }
 
 # Start X already in portrait and keep GNOME from flipping it back
