@@ -39,6 +39,9 @@ static const char* RECORD_PRESET = "ultrafast";
 static const char* RECORD_QUALITY = "26";
 static const char* RECORD_PIXEL_FORMAT = "yuv420p";
 static const char* RECORD_AUDIO_CODEC = "aac";
+static const char* RECORD_AUDIO_RATE = "16000";
+static const char* RECORD_AUDIO_FILTER = "aresample=async=1:first_pts=0";
+static const char* RECORD_THREAD_QUEUE = "512";
 
 // Stop on its own after this long, so a recording left running cannot fill the card
 static const char* RECORD_MAX_SECONDS = "3600";
@@ -107,14 +110,16 @@ bool start_recording(const string& directory, int cameraIndex) {
     string microphone = microphoneDevice();
     string path = recordingFilePath(directory);
 
-    // Build the ffmpeg arguments, wallclock timestamps keep the shared microphone in step
+    // Build the ffmpeg arguments, both inputs use the wall clock so they stay lined up
     vector<string> arguments = {
-        "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-f", "v4l2", "-input_format", RECORD_INPUT_FORMAT, "-video_size", RECORD_VIDEO_SIZE, "-framerate", RECORD_FRAMERATE, "-i", cameraDevice,
-        "-f", "alsa", "-ac", "1", "-use_wallclock_as_timestamps", "1", "-i", microphone,
-        "-map", "0:v", "-map", "1:a", "-vf", RECORD_FLIP,
+        "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-fflags", "+genpts",
+        "-f", "v4l2", "-input_format", RECORD_INPUT_FORMAT, "-video_size", RECORD_VIDEO_SIZE, "-framerate", RECORD_FRAMERATE,
+        "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", cameraDevice,
+        "-f", "alsa", "-ac", "1", "-ar", RECORD_AUDIO_RATE,
+        "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", microphone,
+        "-map", "0:v", "-map", "1:a", "-vf", RECORD_FLIP, "-vsync", "vfr",
         "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
-        "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path,
+        "-af", RECORD_AUDIO_FILTER, "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path,
         "-map", "0:v", "-s", PREVIEW_SIZE, "-r", PREVIEW_FRAMERATE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
     };
 

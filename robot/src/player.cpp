@@ -216,7 +216,7 @@ bool start_playback(const string& path) {
     vector<string> arguments = {
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-re", "-i", path,
         "-map", "0:v", "-s", PLAY_SIZE, "-f", "rawvideo", "-pix_fmt", PLAY_PIXEL_FORMAT, "pipe:1",
-        "-map", "0:a?", "-f", "alsa", speakerDevice()
+        "-map", "0:a?", "-af", "aresample=async=1", "-f", "alsa", speakerDevice()
     };
 
     // Open the pipe the frames come back on

@@ -76,12 +76,12 @@ def play_raw_command(rate, channels):
     player = audio_player()
     command = [player]
 
-    # Name the USB speaker card, so a speaker-only card wins over the mic card
+    # Share the USB speaker through dmix, plughw locks the card and fails while the mic is open
     card = find_usb_card()
     if player == LINUX_PLAYER and card is not None:
-        command += ['-D', f'plughw:{card},0']
+        command += ['-D', shared_playback_device(card)]
 
-    # plughw converts, the card may only accept another rate or channel count
+    # plug converts, the card may only accept another rate or channel count
     command += ['-q', '-f', 'S16_LE', '-r', str(rate), '-c', str(channels), '-t', 'raw']
     return command
 
@@ -215,6 +215,10 @@ def linux_record_command():
 # Name the shared capture device, dsnoop lets a recording read the mic at the same time
 def shared_capture_device(card):
     return f'plug:"dsnoop:{card},0"'
+
+# Name the shared playback device, dmix lets talk speak while a recording holds the card
+def shared_playback_device(card):
+    return f'plug:"dmix:{card},0"'
 
 # Start the recorder streaming raw audio to stdout
 def start_recorder(command):
