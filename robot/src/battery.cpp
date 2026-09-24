@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fcntl.h>
+#include <fstream>
 #include <string>
 #include <unistd.h>
 
@@ -44,7 +45,14 @@ static const float BATTERY_FILTER = 0.99f;
 static const float BATTERY_CURRENT_FILTER = 0.7f;
 
 // Room for the face label text
-static const int BATTERY_LABEL_SIZE = 48;
+static const int BATTERY_LABEL_SIZE = 64;
+
+// Where the board names itself, and what the robot runs on
+static const char* BOARD_MODEL_FILE = "/proc/device-tree/model";
+static const char* BOARD_PI_MATCH = "Raspberry Pi";
+static const char* BOARD_ORIN_MATCH = "Orin";
+static const char* BOARD_PI_NAME = "Pi";
+static const char* BOARD_ORIN_NAME = "Orin";
 
 // Empty and full pack voltage for a 3S LiPo
 static const float BATTERY_VOLTAGE_EMPTY = 9.0f;
@@ -72,6 +80,7 @@ static bool last_battery_check_set = false;
 
 // Later in this file
 static void update_battery_reading();
+static string board_name();
 static bool open_INA219();
 static unsigned int read_INA219_register(int fileDescriptor, int registerAddress);
 static bool is_INA219_config(unsigned int config);
@@ -133,17 +142,31 @@ static void update_battery_reading() {
         battery_current_value = battery_current_value * BATTERY_CURRENT_FILTER + amps * (1.0f - BATTERY_CURRENT_FILTER);
     }
 
-    // Build the face label
+    // Build the face label, ending with the board the robot is running on
+    static string board = board_name();
+    string ending = board.empty() ? "" : ", " + board;
     char line[BATTERY_LABEL_SIZE];
-    snprintf(line, sizeof(line), "Battery: %d%%, %.2f V, %.2f A", battery_percent_value, battery_voltage_value, battery_current_value);
+    snprintf(line, sizeof(line), "Battery: %d%%, %.2f V, %.2f A%s", battery_percent_value, battery_voltage_value, battery_current_value, ending.c_str());
     battery_label = line;
 
     // Log the first good reading once
     if (!battery_logged) {
-        printf("Battery: %d%%, %.2f V, %.2f A\n", battery_percent_value, battery_voltage_value, battery_current_value);
+        printf("%s\n", battery_label.c_str());
         fflush(stdout);
         battery_logged = true;
     }
+}
+
+// Read the board name from the device tree, empty when it is neither one we know
+static string board_name() {
+    ifstream model(BOARD_MODEL_FILE);
+    string line;
+    getline(model, line);
+    if (line.find(BOARD_PI_MATCH) != string::npos)
+        return BOARD_PI_NAME;
+    if (line.find(BOARD_ORIN_MATCH) != string::npos)
+        return BOARD_ORIN_NAME;
+    return "";
 }
 
 // Prefer the 40-pin I2C1 header bus, then fall back to the older bus number

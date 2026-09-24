@@ -245,6 +245,9 @@ int main(int argc, char **argv) {
     // Listen so other programs can move the head and pause the camera
     start_interface(repo_path(RECORDINGS_FROM_REPO));
 
+    // Keep a way to log before the camera silences stderr, ffmpeg reports its errors on it
+    keep_recorder_errors();
+
     // Open the camera before talk, so a missing one fails in the startup log
     FaceTracker faceTracker(show_camera, use_camera);
     if (use_camera && faceTracker.isCameraAvailable())
@@ -738,6 +741,9 @@ static void toggle_recording(FaceTracker& faceTracker) {
         take_camera_back(faceTracker);
         show_camera = g_camera_before_record;
         faceTracker.showWindow = show_camera;
+
+        // Talk held the microphone through the recording, send it back to ready
+        send_quiet();
         return;
     }
 

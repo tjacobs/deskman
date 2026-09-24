@@ -9,6 +9,9 @@
 // Namespace
 using namespace std;
 
+// Keep the first stderr, the camera silences the real one and ffmpeg errors would be lost
+void keep_recorder_errors();
+
 // Record the camera and the microphone to an mp4, and say how it is going
 bool start_recording(const string& directory, int cameraIndex);
 void stop_recording();

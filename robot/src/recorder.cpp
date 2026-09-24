@@ -53,11 +53,10 @@ static const long long RECORD_FREE_BYTES_NEEDED = 2LL * 1024 * 1024 * 1024;
 static const int RECORD_STOP_WAIT_MS = 5000;
 static const int RECORD_STOP_POLL_MS = 100;
 
-// Second output ffmpeg sends back down a pipe, small and slow enough to watch and track on
+// Second output ffmpeg sends back down a pipe, small enough to watch and track on
 static const int PREVIEW_WIDTH = 640;
 static const int PREVIEW_HEIGHT = 360;
 static const char* PREVIEW_SIZE = "640x360";
-static const char* PREVIEW_FRAMERATE = "30";
 static const char* PREVIEW_PIXEL_FORMAT = "bgr24";
 
 // Read the microphone through the software mixer, so talk can keep listening
@@ -67,6 +66,9 @@ static const char* SHARED_CAPTURE_SUFFIX = ",0\"";
 // Where the sound cards are listed, and the name a USB card carries there
 static const char* SOUND_CARDS_PATH = "/proc/asound/cards";
 static const char* USB_CARD_MARKER = "USB-Audio";
+
+// The stderr the robot started with, before the camera sent it to /dev/null
+static int startupStderr = -1;
 
 // The ffmpeg child, and when it started
 static pid_t recorderPid = -1;
@@ -91,6 +93,12 @@ static bool cardCanCapture(int card);
 static bool cardCanPlay(int card);
 static string cardStreamInfo(int card);
 static bool enoughRoom(const string& directory);
+
+// Hold on to stderr while it still reaches the log, the camera silences it on a Pi
+void keep_recorder_errors() {
+    if (startupStderr < 0)
+        startupStderr = dup(STDERR_FILENO);
+}
 
 // Start ffmpeg on the camera and the microphone, the file grows until stop
 bool start_recording(const string& directory, int cameraIndex) {
@@ -120,7 +128,7 @@ bool start_recording(const string& directory, int cameraIndex) {
         "-map", "0:v", "-map", "1:a", "-vf", RECORD_FLIP, "-vsync", "vfr",
         "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
         "-af", RECORD_AUDIO_FILTER, "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path,
-        "-map", "0:v", "-s", PREVIEW_SIZE, "-r", PREVIEW_FRAMERATE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
+        "-map", "0:v", "-s", PREVIEW_SIZE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
     };
 
     // Open the pipe those small frames come back on
@@ -149,6 +157,10 @@ bool start_recording(const string& directory, int cameraIndex) {
         close(previewPipe[0]);
         dup2(previewPipe[1], STDOUT_FILENO);
         close(previewPipe[1]);
+
+        // Put errors back on the stderr that still reaches the log
+        if (startupStderr >= 0)
+            dup2(startupStderr, STDERR_FILENO);
         execvp(commandLine[0], commandLine.data());
         cerr << "Error: ffmpeg: " << strerror(errno) << endl;
         _exit(1);

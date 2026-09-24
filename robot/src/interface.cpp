@@ -898,7 +898,7 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
     if (item == MENU_QUIET) {
-        send_to_clients(json{{"command", "quiet"}}.dump(), NO_CLIENT);
+        send_quiet();
         return;
     }
     if (item == MENU_LISTEN) {
@@ -958,6 +958,11 @@ void handle_call_event(const SDL_Event& event) {
     if (g_overlay_open.load())
         return;
     set_status_bar_visible(!bar_showing);
+}
+
+// Tell talk to stop what it is doing and go back to ready
+void send_quiet() {
+    send_to_clients(json{{"command", "quiet"}}.dump(), NO_CLIENT);
 }
 
 // Seconds since the interface started, so taps during boot are easy to spot

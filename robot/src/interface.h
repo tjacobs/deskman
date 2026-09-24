@@ -60,6 +60,9 @@ bool take_play_request();
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
 
+// Send talk back to ready, the same as tapping Quiet
+void send_quiet();
+
 // Which model talk runs, and no request waiting on the Mode button
 const int TALK_MODE_LOCAL = 0;
 const int TALK_MODE_CLOUD = 1;
