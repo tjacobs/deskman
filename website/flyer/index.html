@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Deskman Flyer</title>
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #201d1a;
+      --ink-soft: #5f5a52;
+      --line: #e9e2d7;
+      --brand: #3b5bdb;
+      --brand-2: #12b3a6;
+      --accent: #ff7a4d;
+      --eye: #26324a;
+      --bg-soft: #f6f1e9;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    @page { size: 8.5in 11in; margin: 0; }
+    html, body { width: 8.5in; height: 11in; }
+    body {
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      background: #fffdf9;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .page {
+      width: 8.5in; height: 11in; padding: 0.5in 0.55in 0.45in;
+      display: flex; flex-direction: column;
+    }
+    h1, h2, h3, .brand-name, .price { font-family: "Baloo 2", "Inter", sans-serif; }
+
+    /* Header */
+    .head { display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-face {
+      width: 34px; height: 30px; border-radius: 10px 10px 8px 8px;
+      background: #fff; border: 2.5px solid var(--eye);
+      display: flex; align-items: center; justify-content: center; gap: 5px;
+    }
+    .brand-face i { width: 5px; height: 10px; border-radius: 50%; background: var(--eye); }
+    .brand-name { font-size: 26px; font-weight: 800; }
+    .head .kicker { font-family: "Baloo 2"; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.14em; font-size: 12px; }
+
+    /* Hero */
+    .hero { display: flex; gap: 24px; margin-top: 22px; }
+    .hero__photo {
+      width: 2.9in; flex: none; border-radius: 18px; overflow: hidden;
+      border: 1px solid var(--line); box-shadow: 0 12px 30px rgba(40,34,28,.14);
+    }
+    .hero__photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .hero__copy { flex: 1; display: flex; flex-direction: column; }
+    .hero__copy .eyebrow { color: var(--brand); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; font-size: 11px; margin-bottom: 6px; }
+    .hero__copy h1 { font-size: 58px; font-weight: 800; line-height: 0.95; letter-spacing: -0.015em; margin-top: 6px; }
+    .subtitle { font-family: "Baloo 2", sans-serif; font-weight: 700; font-size: 23px; color: var(--brand); margin-top: 4px; }
+    .lede { color: var(--ink-soft); font-size: 14.5px; white-space: nowrap; line-height: 1.45; margin-top: 12px; }
+
+    .feats { margin-top: 18px; display: grid; gap: 13px; }
+    .feat { display: flex; gap: 10px; align-items: flex-start; }
+    .feat .ic {
+      width: 26px; height: 26px; flex: none; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center; font-size: 14px;
+      background: rgba(59,91,219,.1);
+    }
+    .feat .ic.teal { background: rgba(18,179,166,.14); }
+    .feat .ic.coral { background: rgba(255,122,77,.15); }
+    .feat .ic--text { font-family: "JetBrains Mono", monospace; font-weight: 700; font-size: 11px; color: #d9542a; letter-spacing: -0.02em; }
+    .feat b { font-family: "Baloo 2"; font-weight: 700; font-size: 13.5px; }
+    .feat p { color: var(--ink-soft); font-size: 12px; line-height: 1.35; }
+
+    /* Specs strip */
+    .row { display: flex; gap: 14px; margin-top: 18px; }
+    .thumb {
+      width: 1.35in; height: 1.35in; flex: none; border-radius: 14px; overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center 35%; display: block; }
+    .specs {
+      flex: 1; align-content: center; background: var(--bg-soft); border: 1px solid var(--line);
+      border-radius: 14px; padding: 11px 16px;
+      display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+    }
+    .specs__title { flex-basis: 100%; font-family: "Baloo 2"; font-weight: 800; font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--ink); padding-bottom: 7px; margin-bottom: 1px; border-bottom: 1px solid var(--line); }
+    .specs span { font-size: 11.5px; color: var(--ink); }
+    .specs span::before { content: "▪"; color: var(--brand-2); margin-right: 5px; }
+
+    /* Pricing */
+    .pricing { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .plan {
+      border: 2px solid var(--brand); border-radius: 18px; padding: 16px 18px;
+      display: flex; flex-direction: column; background: #fff; position: relative;
+    }
+    .plan .tag { font-family: "Baloo 2"; font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: .1em; color: var(--brand); }
+    .plan--pro { border-color: #1a8f5a; }
+    .plan--pro .tag { color: #1a8f5a; }
+    .plan h3 { font-size: 18px; font-weight: 800; margin-top: 3px; }
+    .plan .price { font-size: 34px; font-weight: 800; margin-top: 8px; line-height: 1; }
+    .plan .price small { font-size: 15px; font-weight: 700; color: var(--ink-soft); }
+    .plan .desc { color: var(--ink-soft); font-size: 12px; line-height: 1.4; margin-top: 8px; }
+
+    /* Footer / CTA */
+    .cta {
+      margin-top: auto; background: linear-gradient(135deg, var(--brand), #2c3f9e);
+      color: #fff; border-radius: 16px; padding: 14px 20px;
+      display: flex; align-items: center; justify-content: center; gap: 28px;
+    }
+    .cta__text { text-align: center; }
+    .cta__side { width: 1in; flex: none; display: flex; justify-content: center; }
+    .qr { background: #fff; border-radius: 10px; padding: 6px; width: 0.8in; height: 0.8in; }
+    .qr img { width: 100%; height: 100%; display: block; }
+    .cta .big { font-family: "Baloo 2"; font-weight: 800; font-size: 17px; }
+    .cta .sub { font-size: 12px; color: rgba(255,255,255,.82); margin-top: 4px; display: flex; align-items: center; justify-content: center; }
+    .cta .url {
+      font-family: "JetBrains Mono", ui-monospace, monospace; font-weight: 700; font-size: 15px;
+      color: var(--ink); background: #ffd84d; padding: 2px 8px; border-radius: 6px; margin-left: 8px;
+    }
+    .cta .buy {
+      background: #fff; color: var(--ink); font-family: "Baloo 2"; font-weight: 800;
+      font-size: 14px; padding: 9px 18px; border-radius: 999px; white-space: nowrap;
+    }
+    .madein { text-align: center; color: var(--ink-soft); font-size: 10.5px; margin-top: 9px; }
+    a { color: inherit; text-decoration: none; }
+
+    /* On-screen viewing (print/PDF output is unaffected) */
+    .toolbar { display: none; }
+    @media screen {
+      html, body { width: auto; height: auto; }
+      body { background: #e8e2d8; padding: 0 12px 40px; }
+      .toolbar {
+        display: flex; justify-content: space-between; align-items: center; gap: 12px;
+        max-width: 8.5in; margin: 0 auto; padding: 16px 0;
+        font-family: "Baloo 2", sans-serif; font-weight: 700; font-size: 15px;
+      }
+      .toolbar a { color: var(--ink); }
+      .toolbar .dl { background: var(--brand); color: #fff; padding: 8px 18px; border-radius: 999px; }
+      .page {
+        margin: 0 auto; background: #fffdf9; border-radius: 8px;
+        box-shadow: 0 18px 50px rgba(40,34,28,.18); zoom: var(--fit, 1);
+      }
+    }
+    @media print { .toolbar { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <a href="https://teleportconnect.com/">← teleportconnect.com</a>
+    <a class="dl" href="deskman-flyer.pdf" download>Download PDF</a>
+  </div>
+  <div class="page">
+    <div class="head">
+      <div class="brand">
+        <span class="brand-face"><i></i><i></i></span>
+        <span class="brand-name">Deskman</span>
+      </div>
+      <span class="kicker">teleportconnect.com</span>
+    </div>
+
+    <div class="hero">
+      <div class="hero__photo"><img src="hero.webp" alt="Deskman" /></div>
+      <div class="hero__copy">
+        <h1>Deskman</h1>
+        <div class="subtitle">The smart home robot</div>
+        <p class="lede">A friendly robot that talks, looks, thinks, moves, and calls.</p>
+        <div class="feats">
+          <div class="feat"><div class="ic">🗣️</div><div><b>Talks</b><p>Real-time conversation, powered by cloud and local models.</p></div></div>
+          <div class="feat"><div class="ic teal">👀</div><div><b>Looks</b><p>A camera sees your face so he keeps looking your way.</p></div></div>
+          <div class="feat"><div class="ic coral ic--text">AI</div><div><b>Thinks</b><p>Answers questions, knows stuff, and sets reminders.</p></div></div>
+          <div class="feat"><div class="ic">🤖</div><div><b>Moves</b><p>Turns and tilts his head, and lifts his hat to see and talk.</p></div></div>
+          <div class="feat"><div class="ic teal">📹</div><div><b>Calls</b><p>Makes video calls to browsers and to other Deskman devices.</p></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="thumb"><img src="hero-front.webp" alt="Deskman, front view" /></div>
+      <div class="specs">
+        <div class="specs__title">Includes</div>
+        <span>7" touchscreen</span><span>1080p camera</span><span>5,800mAh, 5 hour battery</span>
+        <span>Speaker + mic</span><span>Servos</span><span>Wi-Fi</span><span>3D-printed body</span>
+      </div>
+      <div class="thumb"><img src="real.jpg" alt="Deskman on a desk" style="object-position: center 70%" /></div>
+    </div>
+
+    <div class="pricing">
+      <div class="plan">
+        <span class="tag">Standard</span>
+        <h3>Raspberry Pi edition</h3>
+        <div class="price">$499</div>
+        <p class="desc">The everyday Deskman. Cloud-connected voice and video calls, ready to go. Pi 5, 2GB RAM + 32GB SD.</p>
+      </div>
+      <div class="plan plan--pro">
+        <span class="tag">Pro</span>
+        <h3>Jetson Orin Nano edition</h3>
+        <div class="price">$999</div>
+        <p class="desc">More AI power for running more models on-device — for builders and researchers. 8GB RAM + 256GB SSD.</p>
+      </div>
+    </div>
+
+    <div class="cta">
+      <div class="cta__side"><a class="buy" href="https://www.tindie.com/products/teleport/deskman/">Buy →</a></div>
+      <div class="cta__text">
+        <div class="big">Put a friendly robot on your desk.</div>
+        <div class="sub">Buy now at <a class="url" href="https://teleportconnect.com/">teleportconnect.com</a></div>
+      </div>
+      <div class="cta__side"><div class="qr"><img src="qr.svg" alt="QR code for teleportconnect.com" /></div></div>
+    </div>
+    <div class="madein">Built in the USA by Teleport Devices</div>
+  </div>
+  <script>
+    // Scale the letter-size page down to fit narrow screens.
+    function fit() {
+      var s = Math.min(1, (document.documentElement.clientWidth - 24) / 816);
+      document.documentElement.style.setProperty('--fit', s);
+    }
+    fit();
+    window.addEventListener('resize', fit);
+  </script>
+</body>
+</html>
