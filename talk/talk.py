@@ -111,6 +111,11 @@ TEXT_SERVER_LOG = os.path.join(utils.SCRIPT_DIR, 'text_server.log')
 TEXT_SERVER_PROGRESS_WIDTH = 120
 TEXT_SERVER_RESTART_TRIES = 3
 
+# Script that opens the key page and saves what gets pasted, and the reason that calls for it
+KEY_SCRIPT_NAME = 'install_openai_key.sh'
+KEY_SCRIPT = os.path.join(utils.SCRIPT_DIR, KEY_SCRIPT_NAME)
+NO_KEY_REASON = 'no OpenAI key.'
+
 # Expected RAM use in gigabytes
 TEXT_SERVER_EXPECTED_GB = 2.0
 WHISPER_EXPECTED_GB = 0.4
@@ -130,6 +135,7 @@ CLOUD_MODE = False
 REALTIME_MODE = False
 ACCENT_MODE = False
 LOCAL_REASON_SHOWN = False
+KEY_SETUP_OFFERED = False
 LAST_ASK_AT = 0.0
 LAST_BATTERY_CHECK_AT = 0.0
 LAST_BATTERY_VOLTAGE = 0.0
@@ -198,6 +204,10 @@ def main():
         if reason:
             print(f'Warning: {reason} Using local.', flush=True)
             REALTIME_MODE = False
+
+            # Realtime was asked for, so a missing key is worth opening the setup over
+            if reason == NO_KEY_REASON:
+                offer_key_setup(True)
         else:
             print('Realtime: True', flush=True)
 
@@ -334,6 +344,7 @@ def try_cloud_text(model_name, forced):
         return use_local_text()
     if not text_client.cloud_api_key():
         warn_using_local('no OpenAI key')
+        offer_key_setup(forced)
         return use_local_text()
 
     # Cloud setup can still fail after the key check
@@ -358,9 +369,22 @@ def warn_using_local(reason):
     LOCAL_REASON_SHOWN = True
     print(f'Warning: {reason}, using local model.', flush=True)
 
-    # A missing key is the one cause the user can fix right now
-    if reason == 'no OpenAI key':
-        print('Run ./setkey.py to add one.', flush=True)
+# Open the key setup when cloud was asked for, only say how when it was just the auto pick
+def offer_key_setup(asked_for_cloud):
+    global KEY_SETUP_OFFERED
+    if KEY_SETUP_OFFERED:
+        return
+    KEY_SETUP_OFFERED = True
+
+    # Nothing to open without the script, or without a screen to put the browser on
+    has_display = os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')
+    if not asked_for_cloud or not has_display or not os.path.isfile(KEY_SCRIPT):
+        print(f'Run ./{KEY_SCRIPT_NAME} to add one.', flush=True)
+        return
+
+    # Leave it to run on its own, talk keeps answering from the local model meanwhile
+    print('Opening the OpenAI key page, paste your key in the box.', flush=True)
+    subprocess.Popen([KEY_SCRIPT], cwd=utils.SCRIPT_DIR, start_new_session=True)
 
 # Leave the cloud path and keep Hugging Face offline when the net is down
 def use_local_text():
@@ -384,7 +408,7 @@ def realtime_unavailable_reason():
     text_client.load_openai_env_file()
     if not text_client.cloud_api_key():
         LOCAL_REASON_SHOWN = True
-        return 'no OpenAI key.'
+        return NO_KEY_REASON
     return ''
 
 # Leave cloud and realtime after a live failure, and start the local text server

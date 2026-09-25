@@ -1,5 +1,7 @@
 #!.venv/bin/python
 
+# Installs the API key for OpenAI.
+
 # Imports
 import os
 import sys
@@ -90,7 +92,7 @@ def parse_args():
 
 # Print usage help
 def print_usage():
-    print('Usage: ./setkey.py [--run] [--terminal]', flush=True)
+    print('Usage: ./install_openai_key.sh [--run] [--terminal]', flush=True)
     print('  --run       start talk.py once the key is saved', flush=True)
     print('  --terminal  skip the browser and paste box, prompt on the terminal', flush=True)
     print('  (no arg)    open the key page, paste the key in a window, save it', flush=True)
