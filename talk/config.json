@@ -1,8 +1,8 @@
 {
-  "cloud": true,
   "local": false,
+  "cloud": true,
   "realtime": true,
-  "realtime_accent": "You are a British man from London. Speak with a natural British accent.",
+  "realtime_accent": "Speak with a British accent.",
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo"
 }
