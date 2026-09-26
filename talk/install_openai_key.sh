@@ -24,6 +24,9 @@ KEY_PREFIX = 'sk-'
 # Browsers tried in order, the first one installed wins
 BROWSERS = ('chromium', 'chromium-browser', 'firefox')
 
+# Clipboard readers tried in order, Wayland first then X11
+CLIPBOARD_COMMANDS = (('wl-paste', '--no-newline'), ('xsel', '--clipboard', '--output'))
+
 # Window size for the browser, kept inside the panel width so nothing runs off screen
 BROWSER_WINDOW = '1000,460'
 
@@ -180,19 +183,20 @@ def ask_in_window():
 
 # Clipboard contents when they look like a key, empty otherwise
 def clipboard_key():
-    paste = shutil.which('wl-paste')
-    if not paste:
-        return ''
+    for command in CLIPBOARD_COMMANDS:
+        reader = shutil.which(command[0])
+        if not reader:
+            continue
 
-    # A failed read just means an empty clipboard
-    result = subprocess.run([paste, '--no-newline'], capture_output=True, text=True)
-    if result.returncode != 0:
-        return ''
+        # A failed read means an empty clipboard or the wrong display server, so try the next one
+        result = subprocess.run([reader, *command[1:]], capture_output=True, text=True)
+        if result.returncode != 0:
+            continue
 
-    # Ignore whatever else was copied
-    text = result.stdout.strip()
-    if text.startswith(KEY_PREFIX):
-        return text
+        # Ignore whatever else was copied
+        text = result.stdout.strip()
+        if text.startswith(KEY_PREFIX):
+            return text
     return ''
 
 # Ask OpenAI whether the key works

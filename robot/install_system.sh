@@ -116,6 +116,12 @@ PANEL_OUTPUT="DSI-2"
 PANEL_MODE="1280x800"
 PANEL_TRANSFORM="270"
 
+# Touch keyboard paths, matchbox sets no window class so openbox matches it on the title
+MATCHBOX_LAYOUT_DIR="/usr/share/matchbox-keyboard"
+OPENBOX_CONFIG_NAME="lxde-pi-rc.xml"
+OPENBOX_KEYBOARD_RULE='<application title="Keyboard"><decor>no</decor><layer>above</layer><position force="yes"><x>0</x><y>-0</y></position><focus>no</focus><skip_taskbar>yes</skip_taskbar><skip_pager>yes</skip_pager></application>'
+KEYBOARD_LAUNCHER_NAME="deskman-keyboard.desktop"
+
 # Cursor theme holding one transparent pixel, so the compositor never draws a pointer
 CURSOR_THEME_NAME="blank"
 CURSOR_POINTER_NAMES="left_ptr pointer arrow top_left_arrow xterm text hand hand1 hand2 grab grabbing watch wait progress crosshair help question_arrow move fleur all-scroll not-allowed no-drop dnd-move dnd-copy col-resize row-resize e-resize n-resize s-resize w-resize ne-resize nw-resize se-resize sw-resize ew-resize ns-resize nesw-resize nwse-resize left_side right_side top_side bottom_side sb_h_double_arrow sb_v_double_arrow"
@@ -787,8 +793,8 @@ enable_service_shortcuts() {
     # Add the launchers when they are missing
     mkdir -p "${RUN_HOME}/Desktop"
     install_robot_eyes_icon
-    write_service_shortcut "Start Robot" robot "${RUN_HOME}/.local/share/icons/deskman-robot.svg"
-    write_service_shortcut "Start Teleport" teleport camera-web
+    write_service_shortcut "Start Robot" robot "${RUN_HOME}/.local/share/icons/deskman-robot.svg" "${script_dir}/start_robot.sh"
+    write_service_shortcut "Start Teleport" teleport camera-web "sudo -n /usr/bin/systemctl start teleport.service"
 }
 
 # White face with two black eyes, same look as the robot window
@@ -819,20 +825,16 @@ write_service_shortcut() {
     launcher_name="$1"
     service_name="$2"
     icon_name="$3"
+    exec_command="$4"
     desktop_file="${RUN_HOME}/Desktop/${service_name}.desktop"
 
-    # Leave an existing launcher as it is
-    if [[ -e "${desktop_file}" ]]; then
-        return
-    fi
-
-    # Write a trusted launcher the desktop will run on tap
+    # Write a trusted launcher the desktop will run on tap, replacing an older one
     cat > "${desktop_file}" <<EOF
 [Desktop Entry]
 Type=Application
 Name=${launcher_name}
 Comment=Start ${service_name}.service
-Exec=sudo -n /usr/bin/systemctl start ${service_name}.service
+Exec=${exec_command}
 Icon=${icon_name}
 Terminal=false
 Categories=Utility;
@@ -842,12 +844,16 @@ EOF
     run_as_user gio set "${desktop_file}" metadata::trusted true || true
 }
 
-# Let the GNOME and onboard keyboards show again
+# Give the panel a touch keyboard, GNOME uses onboard and the Pi uses matchbox
 enable_screen_keyboard() {
-    if [[ "${MACHINE}" != "jetson" ]]; then
+    echo "Enabling the on-screen keyboard"
+
+    # LXDE has no keyboard of its own, so install one with a taskbar button
+    if [[ "${MACHINE}" == "pi" ]]; then
+        install_touch_keyboard
+        install_clipboard_keeper
         return
     fi
-    echo "Enabling the on-screen keyboard"
 
     # Turn on the GNOME accessibility keyboard
     run_as_user gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
@@ -860,6 +866,102 @@ enable_screen_keyboard() {
 
     # Drop the hidden autostart override so the system entry runs
     rm -f "${RUN_HOME}/.config/autostart/onboard-autostart.desktop"
+}
+
+# Matchbox keyboard with our layout, docked along the bottom, shown from a taskbar button
+install_touch_keyboard() {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y matchbox-keyboard
+
+    # Our layout, digits and web punctuation over the stock letters
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    install -m 0644 "${script_dir}/keyboard/keyboard-deskman.xml" "${MATCHBOX_LAYOUT_DIR}/keyboard-deskman.xml"
+
+    # Dock it, keep it above the browser, and leave typing focus with the text field
+    add_openbox_keyboard_rule
+
+    # Taskbar button that shows and hides it
+    write_keyboard_launcher
+    add_panel_keyboard_button
+}
+
+# Openbox rule that places the keyboard window, matched on its title as it sets no class
+add_openbox_keyboard_rule() {
+    openbox_config="${RUN_HOME}/.config/openbox/${OPENBOX_CONFIG_NAME}"
+
+    # Start from the session defaults when the user has no file of their own
+    if [[ ! -f "${openbox_config}" ]]; then
+        mkdir -p "$(dirname "${openbox_config}")"
+        cp "/etc/xdg/openbox/${OPENBOX_CONFIG_NAME}" "${openbox_config}"
+    fi
+
+    # Leave it alone once the rule is in
+    if grep -q 'title="Keyboard"' "${openbox_config}"; then
+        return
+    fi
+
+    # Openbox keeps one applications section, so join it or add one
+    if grep -q '<applications>' "${openbox_config}"; then
+        sed -i "s|<applications>|<applications>${OPENBOX_KEYBOARD_RULE}|" "${openbox_config}"
+    else
+        sed -i "s|</openbox_config>|<applications>${OPENBOX_KEYBOARD_RULE}</applications></openbox_config>|" "${openbox_config}"
+    fi
+    chown "${RUN_USER}:${RUN_USER}" "${openbox_config}"
+}
+
+# Launcher the taskbar button runs, it shows the keyboard or takes it away
+write_keyboard_launcher() {
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    launcher_dir="${RUN_HOME}/.local/share/applications"
+    mkdir -p "${launcher_dir}"
+
+    # Write it every time so a moved repo still gets a working button
+    cat > "${launcher_dir}/${KEYBOARD_LAUNCHER_NAME}" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Keyboard
+Comment=Show or hide the touch keyboard
+Exec=${script_dir}/toggle_keyboard.sh
+Icon=input-keyboard
+Terminal=false
+Categories=Utility;
+EOF
+    chown -R "${RUN_USER}:${RUN_USER}" "${launcher_dir}"
+}
+
+# Put the keyboard button in the taskbar launch bar, next to the browser and terminal
+add_panel_keyboard_button() {
+    panel_config="${RUN_HOME}/.config/lxpanel/LXDE-pi/panels/panel"
+
+    # Nothing to edit without a panel config, and nothing to do once the button is there
+    if [[ ! -f "${panel_config}" ]] || grep -q "${KEYBOARD_LAUNCHER_NAME}" "${panel_config}"; then
+        return
+    fi
+
+    # Add the button as the first one in the launch bar
+    awk -v launcher="${KEYBOARD_LAUNCHER_NAME}" '{ print } /type=launchbar/ { getline config_line; print config_line; print "    Button {"; print "      id=" launcher; print "    }" }' "${panel_config}" > "${panel_config}.new"
+    mv "${panel_config}.new" "${panel_config}"
+    chown "${RUN_USER}:${RUN_USER}" "${panel_config}"
+
+    # Reload the panel so the button appears without a logout
+    run_as_user lxpanelctl restart || true
+}
+
+# Hold on to what was copied, X11 loses the clipboard as soon as the browser closes
+install_clipboard_keeper() {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y parcellite
+
+    # Parcellite starts itself at login, so only its own settings are left to write
+    clipboard_config="${RUN_HOME}/.config/parcellite/parcelliterc"
+    if [[ -f "${clipboard_config}" ]]; then
+        return
+    fi
+
+    # Keep the history in memory only, copied API keys have no business on disk
+    mkdir -p "$(dirname "${clipboard_config}")"
+    printf '%s\n' '[rc]' 'save_history=false' > "${clipboard_config}"
+    chown -R "${RUN_USER}:${RUN_USER}" "$(dirname "${clipboard_config}")"
 }
 
 # Keep the display on and skip the lock screen
