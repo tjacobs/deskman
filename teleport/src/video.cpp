@@ -190,6 +190,7 @@ void applyRemoteVideoOffer(const char* sdpText);
 void sendVideoDescription(GstWebRTCSessionDescription* description);
 void sendVideoAddress(GstElement* element, guint mediaLineIndex, gchar* candidate, gpointer userData);
 void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData);
+void dropRemotePad(GstPad* pad);
 void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData);
 bool remoteSinkKeepsAspect(GstElement* sink);
 void applyRemoteVideoLetterbox();
@@ -1370,15 +1371,38 @@ void onIncomingStream(GstElement* element, GstPad* pad, gpointer userData) {
         cout << "Failed to create decodebin for remote stream." << endl;
         return;
     }
-    gst_bin_add(GST_BIN(videoPipeline), decodebin);
+    if (!gst_bin_add(GST_BIN(videoPipeline), decodebin)) {
+        cout << "Failed to add decodebin for remote stream." << endl;
+        gst_object_unref(decodebin);
+        return;
+    }
     g_signal_connect(decodebin, "pad-added", G_CALLBACK(onDecodedStream), NULL);
     gst_element_sync_state_with_parent(decodebin);
 
-    // Link webrtcbin pad into decodebin
+    // Link webrtcbin pad into decodebin, GStreamer 1.20 refuses a second pad on its format check alone, so retry and let decodebin read the real caps
     GstPad* sinkPad = gst_element_get_static_pad(decodebin, "sink");
     GstPadLinkReturn linkResult = gst_pad_link(pad, sinkPad);
+    if (linkResult == GST_PAD_LINK_NOFORMAT) linkResult = gst_pad_link_full(pad, sinkPad, GST_PAD_LINK_CHECK_NOTHING);
     gst_object_unref(sinkPad);
-    if (linkResult != GST_PAD_LINK_OK) cout << "Failed to link remote WebRTC pad." << endl;
+    if (linkResult == GST_PAD_LINK_OK) return;
+
+    // Drop a stream that still will not link, an unlinked pad stops the shared transport and takes the other stream with it
+    cout << "Failed to link remote WebRTC pad: " << gst_pad_link_get_name(linkResult) << ", dropping that stream." << endl;
+    dropRemotePad(pad);
+}
+
+// Sink a remote stream nothing could decode, so the rest of the call keeps flowing
+void dropRemotePad(GstPad* pad) {
+    GstElement* sink = gst_element_factory_make("fakesink", NULL);
+    if (!sink) return;
+    g_object_set(sink, "sync", FALSE, "async", FALSE, NULL);
+    gst_bin_add(GST_BIN(videoPipeline), sink);
+    gst_element_sync_state_with_parent(sink);
+
+    // Link it, the pad is still free after the failed decodebin link
+    GstPad* sinkPad = gst_element_get_static_pad(sink, "sink");
+    gst_pad_link_full(pad, sinkPad, GST_PAD_LINK_CHECK_NOTHING);
+    gst_object_unref(sinkPad);
 }
 
 // Handle decoded remote audio or video
