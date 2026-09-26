@@ -26,9 +26,10 @@ import utils
 # Config voice
 SPEECH_SPEED = 1.2
 
-# Config wake word and phrases
-WAKE_WORD = 'robot'
+# Config wake words and phrases, desk man is how whisper often writes deskman
+WAKE_WORDS = ('robot', 'deskman', 'desk man')
 NEAR_WAKE_WORDS = ('rob', 'rub')
+WAKE_WORD_PATTERN = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in WAKE_WORDS) + r')\b', re.IGNORECASE)
 GREETING = 'Hi!'
 SAY_HI = True
 TALK_READY = 'Robot ready.'
@@ -449,7 +450,7 @@ def print_usage():
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
-    print(f'  (no arg)           say "{WAKE_WORD}" then a command, uses OpenAI when online, else local Gemma')
+    print('  (no arg)           say "robot" or "deskman" then a command, uses OpenAI when online, else local Gemma')
 
 # Run the talk loop with models already loaded
 def run_talk(record, whisper_model, vad_model, kokoro_pipeline):
@@ -914,7 +915,7 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
     # Show when it nearly heard its name
     near_miss = near_wake_word(text)
     if near_miss:
-        print(f'Nearly "{WAKE_WORD}"', flush=True)
+        print('Nearly robot or deskman', flush=True)
 
     # Play back the recording, then say the words back
     if near_miss or REPLAY_MODE:
@@ -930,10 +931,7 @@ def near_wake_word(text):
         return False
     return any(re.search(rf'\b{re.escape(word)}\b', lowered) for word in NEAR_WAKE_WORDS)
 
-# Compile the wake word pattern once
-WAKE_WORD_PATTERN = re.compile(rf'\b{re.escape(WAKE_WORD)}\b', re.IGNORECASE)
-
-# Return true when the wake word appears as its own word
+# Return true when a wake word appears as its own word
 def has_wake_word(text):
     return bool(WAKE_WORD_PATTERN.search(text))
 
