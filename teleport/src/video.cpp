@@ -716,11 +716,22 @@ string getCameraDevice() {
     return activeCameraPath.find("/") == string::npos ? "/dev/video" + activeCameraPath : activeCameraPath;
 }
 
-// True when V4L2 already gives JPEG or YUYV, USB webcams do, CSI Bayer nodes do not
+// True when a USB device already gives JPEG or YUYV, the Pi 5 CSI receiver lists YUYV too but only carries raw sensor data
 bool isUSBCamera(string path) {
 #ifdef __linux__
     int fileDescriptor = open(path.c_str(), O_RDONLY | O_NONBLOCK);
     if (fileDescriptor < 0) return false;
+
+    // Skip anything not on the USB bus, those need libcamera or Argus to turn sensor data into frames
+    v4l2_capability capability;
+    memset(&capability, 0, sizeof(capability));
+    bool onUSB = ioctl(fileDescriptor, VIDIOC_QUERYCAP, &capability) == 0 && strncmp((const char*)capability.bus_info, "usb-", 4) == 0;
+    if (!onUSB) {
+        close(fileDescriptor);
+        return false;
+    }
+
+    // Look for a format the pipeline can use without an ISP
     v4l2_fmtdesc pixelFormat;
     memset(&pixelFormat, 0, sizeof(pixelFormat));
     pixelFormat.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
