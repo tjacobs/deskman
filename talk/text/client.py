@@ -42,6 +42,17 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GROW_REQUEST_PATH = os.path.join(SCRIPT_DIR, "cache", "grow_to")
 OPENAI_ENV_FILE = os.path.join(os.path.dirname(SCRIPT_DIR), "openai.env")
 
+# Config the short names shown on the face for OpenAI failures, checked in order since quota errors also say 429
+OPENAI_OUT_OF_CREDITS = "OpenAI out of credits"
+OPENAI_KEY_REJECTED = "OpenAI key rejected"
+OPENAI_ERROR_NAMES = (
+    (("insufficient_quota", "no credits", "exceeded your current quota"), OPENAI_OUT_OF_CREDITS),
+    (("invalid_api_key", "incorrect api key", "http 401", "401 unauthorized"), OPENAI_KEY_REJECTED),
+    (("rate_limit", "http 429", "429 too many"), "OpenAI rate limited"),
+    (("http 5", "status 5", "timed out", "timeout", "name resolution", "connection refused", "unreachable", "connection reset"), "OpenAI unreachable"))
+OPENAI_ERROR_NAME = "OpenAI error"
+OPENAI_FATAL_ERRORS = (OPENAI_OUT_OF_CREDITS, OPENAI_KEY_REJECTED)
+
 # Cloud path state, TALK_LLM and flags fill these in
 cloud_enabled = False
 cloud_model = DEFAULT_CLOUD_MODEL
@@ -132,6 +143,18 @@ def cloud_provider_name():
     if "openai.com" in cloud_base:
         return "OpenAI"
     return cloud_base
+
+# Name an OpenAI failure in a few words for the face, the full message stays in the log
+def describe_openai_error(message):
+    lowered = str(message).lower()
+    for phrases, name in OPENAI_ERROR_NAMES:
+        if any(phrase in lowered for phrase in phrases):
+            return name
+    return OPENAI_ERROR_NAME
+
+# True when retrying will not help until someone fixes the account
+def openai_error_is_fatal(name):
+    return name in OPENAI_FATAL_ERRORS
 
 # Apply TALK_LLM from the environment at import
 load_cloud_env()

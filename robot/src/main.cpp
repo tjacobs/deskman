@@ -117,6 +117,9 @@ static const int RECORDING_MARK_Y = 90;
 static const int RECORDING_DOT_SIZE = 22;
 static const int RECORDING_MARK_GAP = 10;
 
+// Other warnings sit under the recording mark
+static const int WARNING_Y = 130;
+
 // Set from flags, read across the program
 bool show_window = true;
 bool use_camera = true;
@@ -420,13 +423,16 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         SDL_RenderClear(renderer);
         vectorRenderer.render(renderer);
 
-        // Warn about a slow fan or a hot CPU
+        // Warn about a slow fan, a hot CPU, or anything else sent to the face
         string fan_warning = fan_warning_text();
         if (!fan_warning.empty())
             draw_text(fan_warning.c_str(), WARNING_X, FAN_WARNING_Y, face.font, WARNING_COLOR);
         string temperature_warning = temperature_warning_text();
         if (!temperature_warning.empty())
             draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
+        string warning = warning_text();
+        if (!warning.empty())
+            draw_text(warning.c_str(), WARNING_X, WARNING_Y, face.font, WARNING_COLOR);
 
         // Preview first, then the record mark and menu so they stay on top, a video takes that space
         if (use_camera && faceTracker.isTracking() && !playing())

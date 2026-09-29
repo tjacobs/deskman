@@ -60,6 +60,9 @@ bool take_play_request();
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
 
+// Return the warning to show on the face, empty when there is none
+string warning_text();
+
 // Send talk back to ready, the same as tapping Quiet
 void send_quiet();
 

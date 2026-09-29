@@ -23,6 +23,9 @@ pending_requests = {'wake': False, 'quiet': False}
 pending_lock = threading.Lock()
 push_listener_started = False
 
+# Warning last put on the face, so a good reply only clears one that is up
+shown_warning = ''
+
 # Map spoken names onto socket directions
 DIRECTION_ALIASES = {
     "left": "left",
@@ -147,6 +150,25 @@ def play_last_recording():
     reply = send_command({"command": "play"})
     if not reply.get("ok"):
         raise RuntimeError(reply.get("error", "unknown error"))
+
+# Print a warning last so the status bar shows it, and hold it on the face
+def print_warning(text):
+    print(f"Warning: {text}.", flush=True)
+    show_warning(text)
+
+# Take the warning off the face, when one is up
+def clear_warning():
+    if shown_warning:
+        show_warning('')
+
+# Put a warning on the face, empty text clears it, a robot that is down just misses it
+def show_warning(text):
+    global shown_warning
+    shown_warning = text
+    try:
+        send_command({"command": "warning", "text": text})
+    except Exception:
+        pass
 
 # Hold a socket so Listen and Quiet arrive as pushes, not polls
 def start_push_listener():

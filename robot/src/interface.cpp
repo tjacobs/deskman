@@ -133,6 +133,10 @@ static string g_socket_path;
 static mutex g_clients_mutex;
 static vector<int> g_client_fds;
 
+// Warning to show on the face, empty when there is none
+static mutex g_warning_mutex;
+static string g_warning;
+
 // Overlay and listen state the face and tracker read
 static atomic<bool> g_overlay_open{false};
 static atomic<bool> g_listen_open{false};
@@ -427,6 +431,12 @@ static string handle_request(const string& line, int from_fd) {
             reply = {{"ok", true}};
         } else if (command == "overlay") {
             g_overlay_open = request.value("open", false);
+            reply = {{"ok", true}};
+
+        // Show a warning on the face, empty text clears it
+        } else if (command == "warning") {
+            lock_guard<mutex> lock(g_warning_mutex);
+            g_warning = request.value("text", "");
             reply = {{"ok", true}};
         } else {
             reply = {{"ok", false}, {"error", "unknown command"}};
@@ -1000,6 +1010,12 @@ bool take_play_request() {
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open() {
     return g_listen_open.load();
+}
+
+// Return the warning to show on the face, empty when there is none
+string warning_text() {
+    lock_guard<mutex> lock(g_warning_mutex);
+    return g_warning;
 }
 
 // Show whether the preview is up, so the Camera button can say so

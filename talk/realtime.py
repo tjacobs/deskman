@@ -513,6 +513,9 @@ def handle_event(session, microphone, speaker, event):
         if not streamed:
             print(f'Reply: {reply}', flush=True)
 
+        # The reply got through, so a warning on the face is stale
+        robot_move.clear_warning()
+
         # Call the callback when this reply was to something heard, skip the greeting
         if session.heard:
             session.on_turn(session.heard, reply)
@@ -529,6 +532,12 @@ def handle_event(session, microphone, speaker, event):
 
     # Ask for the spoken answer once the turn that called the tools has finished
     if kind == 'response.done':
+        # Show why the turn failed, some failures only come back on the finished response
+        failure = response_failure(event)
+        if failure:
+            report_error(session, {'error': failure})
+            return False
+
         # Stay quiet when a voice was chosen, this session can only answer in the old one
         if session.voice_request:
             session.tool_pending = False
@@ -552,9 +561,26 @@ def handle_event(session, microphone, speaker, event):
     # Show why the server gave up
     if kind == 'error':
         close_stream_lines(session)
-        print(f'Realtime error: {event.get("error", {}).get("message", "")}', flush=True)
+        report_error(session, event)
         return False
     return False
+
+# Log the server error, put its short name on the face, and hang up when retrying cannot help
+def report_error(session, event):
+    error = event.get('error', {})
+    message = error.get('message', '')
+    print(f'Realtime error: {message}', flush=True)
+    name = client.describe_openai_error(f'{error.get("code", "")} {message}')
+    robot_move.print_warning(name)
+    if client.openai_error_is_fatal(name):
+        session.running = False
+
+# Return the error on a failed response, empty when it finished fine
+def response_failure(event):
+    response = event.get('response', {})
+    if response.get('status') != 'failed':
+        return {}
+    return response.get('status_details', {}).get('error') or {'message': 'response failed'}
 
 # End an open streamed line, so the next print does not land on top of the words
 def close_stream_lines(session):
@@ -774,11 +800,16 @@ def play_reply(session, speaker):
 
         # Wait for the whole turn, the transcript can land after the audio
         elif kind == 'response.done':
+            failure = response_failure(event)
+            if failure:
+                report_error(session, {'error': failure})
+            elif said:
+                robot_move.clear_warning()
             return said
 
         # Show why the server gave up
         elif kind == 'error':
-            print(f'Realtime error: {event.get("error", {}).get("message", "")}', flush=True)
+            report_error(session, event)
             return said
     return said
 
