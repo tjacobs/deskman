@@ -35,8 +35,6 @@ Starts the face window, servos, camera tracking, and `talk/talk.py`.
 | `--help`       | List the flags                                    |
 
 
-
-
 ## Config
 
 `The config.json` file is read from the working directory, and written with defaults when missing. It holds `useCamera`, `faceTracking`, and the servo travel limits `pan_min`, `pan_max`, `tilt_min`, `tilt_max`, `hat_min`, `hat_max`, plus `hat_dir`. Servos only move once all six travel limits are present.
@@ -83,8 +81,6 @@ To read servo positions safely without moving anything:
 cd build
 ./robot --no-servos
 ```
-
-
 
 ## Battery
 
