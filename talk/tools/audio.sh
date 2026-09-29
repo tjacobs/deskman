@@ -15,8 +15,8 @@ BLACKLIST_PATH="/etc/modprobe.d/blacklist-speak-internal-audio.conf"
 PULSE_SINK_NAME="speak_usb"
 PULSE_DEFAULT_PA_NAME="default.pa"
 
-# Config the account to set up when sudo does not name one, udev runs with no sudo user
-LOGIN_USER_ID=1000
+# Config the seat whose logged in user is set up when sudo does not name one, udev runs with no sudo user
+LOGIN_SEAT="seat0"
 
 # Config the raspberry pi boot settings that create the HDMI sound cards
 BOOT_CONFIG_PATHS=(/boot/firmware/config.txt /boot/config.txt)
@@ -84,12 +84,12 @@ find_target_user() {
     # Prefer the user who called sudo
     TARGET_USER="${SUDO_USER:-}"
 
-    # Fall back to the owner of this repo, then the configured login id
+    # Fall back to the owner of this repo, then whoever is logged in
     if [[ -z "${TARGET_USER}" || "${TARGET_USER}" == "root" ]]; then
         TARGET_USER="$(stat -c '%U' "${SCRIPT_DIR}" 2>/dev/null || true)"
     fi
     if [[ -z "${TARGET_USER}" || "${TARGET_USER}" == "root" ]]; then
-        TARGET_USER="$(getent passwd "${LOGIN_USER_ID}" | cut -d: -f1)"
+        TARGET_USER="$(find_logged_in_user)"
     fi
 
     # Quit when there is no login account
@@ -101,6 +101,19 @@ find_target_user() {
     # Read the home directory and id for later steps
     TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
     TARGET_USER_ID="$(id -u "${TARGET_USER}")"
+}
+
+# Return the user on the screen, or else anyone logged in who is not root
+find_logged_in_user() {
+    local sessions user
+    sessions="$(loginctl list-sessions --no-legend 2>/dev/null || true)"
+
+    # Prefer the desktop seat, that is who hears the speaker
+    user="$(awk -v seat="${LOGIN_SEAT}" '$3 != "root" && $4 == seat {print $3; exit}' <<< "${sessions}")"
+    if [[ -z "${user}" ]]; then
+        user="$(awk '$3 != "root" {print $3; exit}' <<< "${sessions}")"
+    fi
+    echo "${user}"
 }
 
 # Drop dummy USB audio that cameras expose, they have no speaker or mic
