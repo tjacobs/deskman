@@ -36,6 +36,7 @@ main() {
     disable_software_updater
     configure_session
     configure_dsi_panel
+    remove_panel_backlight_service
     configure_servo_uart
     configure_i2c_arm
     persist_display_rotation
@@ -113,6 +114,11 @@ SERVO_UART_COMMENT="GPIO 14/15 UART for the STS3215 servo bus"
 I2C_ARM_PARAM="i2c_arm=on"
 I2C_ARM_COMMENT="INA219 battery meter on GPIO 2 and 3"
 
+# Old panel backlight unit and script, the panel lights without them
+PANEL_BACKLIGHT_SERVICE="panel-backlight.service"
+PANEL_BACKLIGHT_UNIT="/etc/systemd/system/panel-backlight.service"
+PANEL_BACKLIGHT_SCRIPT="/usr/local/sbin/panel-backlight"
+
 # Panel output, mode, and rotation
 PANEL_OUTPUT="DSI-2"
 PANEL_MODE="1280x800"
@@ -134,7 +140,7 @@ JETSON_SNAPD_REVISION="24724"
 FAN_CONFIG="/etc/nvfancontrol.conf"
 FAN_STATUS="/var/lib/nvfancontrol/status"
 FAN_PROFILE_NAME="deskman"
-FAN_OFF_BELOW_C=70
+FAN_OFF_BELOW_C=35
 
 # Cursor theme holding one transparent pixel, so the compositor never draws a pointer
 CURSOR_THEME_NAME="blank"
@@ -503,6 +509,20 @@ configure_dsi_panel() {
 
     # Otherwise start a new all section, it applies the overlay on every Pi model
     printf '\n%s\n%s\n%s\n' '[all]' "# ${PANEL_COMMENT}" "dtoverlay=${PANEL_OVERLAY}" >> "${BOOT_CONFIG}"
+}
+
+# Remove the panel backlight service older installs left behind
+remove_panel_backlight_service() {
+    # Skip machines that never had it
+    if [[ ! -f "${PANEL_BACKLIGHT_UNIT}" && ! -f "${PANEL_BACKLIGHT_SCRIPT}" ]]; then
+        return
+    fi
+
+    # Stop and disable the unit, then delete it and its script
+    echo "Removing ${PANEL_BACKLIGHT_SERVICE}"
+    systemctl disable --now "${PANEL_BACKLIGHT_SERVICE}" 2>/dev/null || true
+    rm -f "${PANEL_BACKLIGHT_UNIT}" "${PANEL_BACKLIGHT_SCRIPT}"
+    systemctl daemon-reload
 }
 
 # Enable GPIO 14/15 UART so the STS3215 servo bus has a port on Pi 5
