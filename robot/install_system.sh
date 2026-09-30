@@ -44,6 +44,7 @@ main() {
     enable_service_shortcuts
     enable_screen_keyboard
     install_browser
+    quiet_fan_when_cool
     keep_wifi_awake
     fix_mdns_name
     echo "Done."
@@ -128,6 +129,12 @@ PI_BROWSER_DESKTOP="chromium.desktop"
 JETSON_BROWSER_DESKTOP="chromium_chromium.desktop"
 BROWSER_LINK_TYPES="x-scheme-handler/https x-scheme-handler/http text/html"
 JETSON_SNAPD_REVISION="24724"
+
+# Jetson fan config, its saved state, and the profile that keeps the fan off while the board is cool
+FAN_CONFIG="/etc/nvfancontrol.conf"
+FAN_STATUS="/var/lib/nvfancontrol/status"
+FAN_PROFILE_NAME="deskman"
+FAN_OFF_BELOW_C=65
 
 # Cursor theme holding one transparent pixel, so the compositor never draws a pointer
 CURSOR_THEME_NAME="blank"
@@ -1038,6 +1045,35 @@ install_browser() {
 
     # Stock Ubuntu points links at Firefox, which is not installed
     run_as_user xdg-mime default "${JETSON_BROWSER_DESKTOP}" ${BROWSER_LINK_TYPES}
+}
+
+# Keep the Jetson fan stopped while the board is cool, then ramp it up as the stock quiet profile does
+quiet_fan_when_cool() {
+    # The Pi has no nvfancontrol
+    if [[ "${MACHINE}" != "jetson" || ! -e "${FAN_CONFIG}" ]]; then
+        return
+    fi
+    echo "Keeping the fan off below ${FAN_OFF_BELOW_C}C"
+
+    # Swap the package symlink for a copy we own, so edits do not touch the stock file
+    if [[ -L "${FAN_CONFIG}" ]]; then
+        cp --remove-destination "$(readlink -f "${FAN_CONFIG}")" "${FAN_CONFIG}"
+    fi
+
+    # Profiles count degrees under the group maximum, so turn the off point into that margin
+    max_temperature="$(awk '/GROUP_MAX_TEMP/ {print $2; exit}' "${FAN_CONFIG}")"
+    off_margin=$(( max_temperature - FAN_OFF_BELOW_C ))
+
+    # Replace our profile, full speed near the limit, easing down to off at the off point
+    sed -i "/FAN_PROFILE ${FAN_PROFILE_NAME} {/,/}/d" "${FAN_CONFIG}"
+    profile="\tFAN_PROFILE ${FAN_PROFILE_NAME} {\n\t\t0\t0\t255\t6000\n\t\t10\t0\t255\t6000\n\t\t11\t0\t187\t4000\n\t\t31\t0\t187\t4000\n\t\t${off_margin}\t0\t0\t0\n\t\t${max_temperature}\t0\t0\t0\n\t}"
+    sed -i "0,/^\s*THERMAL_GROUP/s//${profile}\n&/" "${FAN_CONFIG}"
+
+    # Make it the default, and drop the saved state so the service does not keep the old profile
+    sed -i "s/^\(\s*FAN_DEFAULT_PROFILE\s\+\).*/\1${FAN_PROFILE_NAME}/" "${FAN_CONFIG}"
+    systemctl stop nvfancontrol
+    rm -f "${FAN_STATUS}"
+    systemctl start nvfancontrol
 }
 
 # Put snapd on the revision that runs on Jetson, and stop it updating past it
