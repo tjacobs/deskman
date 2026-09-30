@@ -927,8 +927,10 @@ class Speaker:
     def __init__(self):
         self.player = None
 
-    # Start a player on the first chunk, then keep feeding the same one
+    # Start a player on the first chunk, then keep feeding the same one, nothing plays at bedtime
     def play(self, chunk):
+        if utils.is_bedtime():
+            return
         if self.player is None:
             self.player = subprocess.Popen(utils.play_raw_command(REALTIME_RATE, REALTIME_CHANNELS), stdin=subprocess.PIPE)
         try:

@@ -36,6 +36,7 @@ TALK_READY = 'Idle.'
 TALK_LISTENING = 'Listening...'
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
+BEDTIME_MESSAGE = 'Bedtime, staying quiet until morning.'
 RESTART_WORD = 'restart'
 RESTART_MESSAGE = 'Restarting!'
 RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
@@ -522,6 +523,12 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 speak_muted(listener, kokoro_pipeline, GOODBYE)
                 quit_robot()
                 break
+
+            # Stay quiet at bedtime rather than answer, an answer would have to be spoken
+            if utils.is_bedtime():
+                print(BEDTIME_MESSAGE, flush=True)
+                close_conversation()
+                continue
 
             # Hand the whole conversation to OpenAI when streaming audio both ways
             if REALTIME_MODE:
@@ -1082,6 +1089,11 @@ def speak_muted(listener, kokoro_pipeline, text):
 
 # Generate speech and play it on the usb speaker
 def speak(kokoro_pipeline, text):
+    # Say nothing at bedtime, and skip loading a voice that will not be used
+    if utils.is_bedtime():
+        print(f'Bedtime, not saying: {text}', flush=True)
+        return
+
     # Load kokoro the first time something local needs a voice, realtime skips it at startup
     if kokoro_model is None:
         load_kokoro_pipeline()
@@ -1139,6 +1151,11 @@ def speak_low_battery(listener, kokoro_pipeline):
     if previous - voltage < LOW_BATTERY_DROP_VOLTS:
         if voltage >= previous:
             print(f'Low battery {percent}%, {voltage:.2f} V up from {previous:.2f} V, charging', flush=True)
+        return
+
+    # Log it without asking at bedtime, a line nobody hears is not worth an OpenAI call each minute
+    if utils.is_bedtime():
+        print(f'Low battery {percent}%, {voltage:.2f} V down from {previous:.2f} V, bedtime so not asking', flush=True)
         return
 
     # Still draining, so ask
@@ -1225,8 +1242,10 @@ def ensure_wake_tone():
     soundfile.write(wav_path, np.concatenate(parts), WAKE_TONE_RATE)
     return wav_path
 
-# Play one wav file on the speaker
+# Play one wav file on the speaker, nothing plays at bedtime
 def play_wav(wav_path):
+    if utils.is_bedtime():
+        return
     subprocess.run(utils.play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 # Keep the microphone open and hand out one utterance at a time

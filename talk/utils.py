@@ -40,6 +40,10 @@ VIDEO_DIR = '/sys/class/video4linux'
 CPU_SCALING_DIR = '/sys/devices/system/cpu'
 CPU_INDEX_MAX = 64
 
+# Config quiet hours on the 24 hour clock, the robot makes no sound from bedtime until wake up
+BEDTIME = 22
+WAKE_UP = 7
+
 # Config huggingface cache
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
@@ -61,6 +65,11 @@ def load_config(defaults):
 
     # Return the settings
     return config
+
+# True from bedtime until wake up, when the robot must stay silent
+def is_bedtime():
+    hour = time.localtime().tm_hour
+    return hour >= BEDTIME or hour < WAKE_UP
 
 # Return audio player command for this platform
 def audio_player():
