@@ -47,6 +47,11 @@ extern volatile bool g_quit;
 const int CALL_HANDOFF_WAIT_SECONDS = 8;
 const int CALL_MENU_TAP_DEBOUNCE_MS = 300;
 
+// Start teleport when Call is tapped without it, then open its list once it connects
+static const char* TELEPORT_RUNNING_COMMAND = "pgrep -x teleport >/dev/null 2>&1";
+static const char* TELEPORT_START_COMMAND = "sudo -n /usr/bin/systemctl start teleport.service >/dev/null 2>&1 &";
+static const int TELEPORT_START_WAIT_SECONDS = 30;
+
 // Turn on to print where each screen tap lands, off so the face status bar stays quiet
 static const bool LOG_TAPS = false;
 
@@ -142,6 +147,10 @@ static string g_socket_path;
 static mutex g_clients_mutex;
 static vector<int> g_client_fds;
 
+// A Call tap waiting for teleport to start and connect
+static atomic<bool> g_call_waiting_for_teleport{false};
+static steady_clock::time_point g_call_tap_time{};
+
 // Warning to show on the face and the link a tap opens, empty when there is none
 static mutex g_warning_mutex;
 static string g_warning;
@@ -197,7 +206,10 @@ static json position_reply();
 static int request_int(const json& request, const char* key, int fallback);
 static bool wait_call_handoff(int command);
 static void send_menu();
+static void send_waiting_call(int client_fd);
 static bool debounce_tap();
+static bool teleport_running();
+static void start_teleport_for_call();
 static void set_menu_open(bool open);
 static const char* menu_item_label(int index);
 static SDL_Color menu_item_color(int index);
@@ -328,10 +340,12 @@ static void serve_client_thread(int client_fd) {
     remove_client(client_fd);
 }
 
-// Add a client to the broadcast list
+// Add a client to the broadcast list, and hand it a Call tap that was waiting for teleport
 static void add_client(int client_fd) {
-    lock_guard<mutex> lock(g_clients_mutex);
+    unique_lock<mutex> lock(g_clients_mutex);
     g_client_fds.push_back(client_fd);
+    lock.unlock();
+    send_waiting_call(client_fd);
 }
 
 // Read newline separated JSON requests and write a reply to each
@@ -514,6 +528,20 @@ static void send_menu() {
     send_to_clients(json{{"command", "menu"}}.dump(), NO_CLIENT);
 }
 
+// Open the call list on a client that connected after Call started teleport, dropping a stale tap
+static void send_waiting_call(int client_fd) {
+    if (!g_call_waiting_for_teleport.exchange(false))
+        return;
+    if (duration_cast<seconds>(steady_clock::now() - g_call_tap_time).count() > TELEPORT_START_WAIT_SECONDS)
+        return;
+
+    // Open the list on this client only
+    g_overlay_open = true;
+    string line = json{{"command", "menu"}}.dump() + "\n";
+    ssize_t written = write(client_fd, line.data(), line.size());
+    (void)written;
+}
+
 // True when this tap is far enough from the last one
 static bool debounce_tap() {
     auto now = steady_clock::now();
@@ -521,6 +549,20 @@ static bool debounce_tap() {
         return false;
     g_last_menu_tap = now;
     return true;
+}
+
+// True when a teleport process is running, as the service or started by hand
+static bool teleport_running() {
+    return system(TELEPORT_RUNNING_COMMAND) == 0;
+}
+
+// Start the teleport service in the background, and remember the tap for when it connects
+static void start_teleport_for_call() {
+    cout << "Starting teleport for Call" << endl;
+    g_call_tap_time = steady_clock::now();
+    g_call_waiting_for_teleport = true;
+    int started = system(TELEPORT_START_COMMAND);
+    (void)started;
 }
 
 // Send one line to every connected client, apart from one waiting for a reply
@@ -973,6 +1015,11 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
     if (item == MENU_CALL) {
+        // Start teleport first when it is not running, its list opens once it connects
+        if (!teleport_running()) {
+            start_teleport_for_call();
+            return;
+        }
         g_overlay_open = !g_overlay_open.load();
         send_to_clients(json{{"command", "menu"}}.dump(), NO_CLIENT);
         return;
