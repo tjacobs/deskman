@@ -49,7 +49,7 @@ const char* LOCAL_SERVER_URL = "ws://127.0.0.1:8080";
 const char* DEFAULT_CAMERA_PATH = "0";
 
 // Configure device ID
-const char* DEVICE_NAME_PREFIX = "teleport";
+const char* DEVICE_NAME_PREFIX = "deskman";
 const char* BINARY_NAME = "teleport";
 
 // Configure connection settings
@@ -217,13 +217,13 @@ void parseArgs(int argumentCount, char** argumentValues) {
             #endif
         }
 
-        // Call another robot after login, e.g. --call teleport2
+        // Call another robot after login, e.g. --call deskman2
         else if (argument == "--call" && index + 1 < argumentCount) {
             callPeer = argumentValues[++index];
         }
 
         // Set ALSA audio device for robot calls
-        else if (argument == "--audio-device" && index + 1 < argumentCount) {
+        else if (argument == "--audio" && index + 1 < argumentCount) {
             audioDevice = argumentValues[++index];
         }
 
@@ -326,14 +326,14 @@ void printHelp() {
     cout << endl;
     cout << "Options:" << endl;
     cout << "  -h, --help              Show this help" << endl;
-    cout << "  --device <n>            Device number, login as teleport<n>" << endl;
-    cout << "  --call <peer>           Call peer after login, e.g. teleport2" << endl;
+    cout << "  --device <n>            Device number, login as deskman<n>" << endl;
+    cout << "  --call <peer>           Call peer after login, e.g. deskman2" << endl;
     cout << "  --mute, --mute-mic      Start with the call mic muted, this is the default" << endl;
     cout << "  --no-mute               Start with the call mic on" << endl;
     cout << "  --server <url>          WebSocket server URL" << endl;
     cout << "  --local                 Use local server ws://127.0.0.1:8080" << endl;
     cout << "  --camera <path|n>       Camera path or index" << endl;
-    cout << "  --audio-device <name>   ALSA device for robot calls" << endl;
+    cout << "  --audio <name>          ALSA device for robot calls" << endl;
 }
 
 // Run main loop

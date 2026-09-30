@@ -499,11 +499,10 @@ static int incomingStripHeight() {
     return height;
 }
 
-// Tom's robots are teleport1 and teleport3, browsers log in as webNNNNNN
+// Name the caller, browsers log in as webNNNNNN
 static string incomingCallTitle(const string& peer) {
     string lower;
     for (unsigned char character : peer) lower.push_back((char)tolower(character));
-    if (lower == "teleport1" || lower == "teleport3") return "Tom calling...";
     if (lower.find(WEB_PEER_PREFIX) == 0) return "Web calling...";
     if (peer.empty()) return "Incoming call";
     return peer + " calling...";
