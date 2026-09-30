@@ -134,7 +134,7 @@ JETSON_SNAPD_REVISION="24724"
 FAN_CONFIG="/etc/nvfancontrol.conf"
 FAN_STATUS="/var/lib/nvfancontrol/status"
 FAN_PROFILE_NAME="deskman"
-FAN_OFF_BELOW_C=65
+FAN_OFF_BELOW_C=70
 
 # Cursor theme holding one transparent pixel, so the compositor never draws a pointer
 CURSOR_THEME_NAME="blank"
