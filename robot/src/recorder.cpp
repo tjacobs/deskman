@@ -1,6 +1,7 @@
 // Record the camera and the microphone to an mp4 file, ffmpeg does the capture and the muxing.
 
 // Local
+#include "camera.h"
 #include "recorder.h"
 
 // System
@@ -25,9 +26,10 @@
 using namespace std;
 using namespace std::chrono;
 
-// What the camera is asked for, the file lands at this size and rate
-static const char* RECORD_VIDEO_SIZE = "1920x1080";
-static const char* RECORD_FRAMERATE = "30";
+// What the camera is asked for when it lists it, otherwise ffmpeg takes the camera's own mode
+static const int RECORD_WIDTH = 1920;
+static const int RECORD_HEIGHT = 1080;
+static const int RECORD_FRAMERATE = 30;
 static const char* RECORD_INPUT_FORMAT = "mjpeg";
 
 // Mirror the file as it is written, so a playback matches the preview it was watched on
@@ -118,10 +120,15 @@ bool start_recording(const string& directory, int cameraIndex) {
     string microphone = microphoneDevice();
     string path = recordingFilePath(directory);
 
+    // Ask for the recording mode only when the camera lists it
+    vector<string> cameraMode;
+    if (camera_offers_MJPEG(cameraIndex, RECORD_WIDTH, RECORD_HEIGHT, RECORD_FRAMERATE))
+        cameraMode = {"-input_format", RECORD_INPUT_FORMAT, "-video_size", to_string(RECORD_WIDTH) + "x" + to_string(RECORD_HEIGHT), "-framerate", to_string(RECORD_FRAMERATE)};
+
     // Build the ffmpeg arguments, both inputs use the wall clock so they stay lined up
-    vector<string> arguments = {
-        "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-fflags", "+genpts",
-        "-f", "v4l2", "-input_format", RECORD_INPUT_FORMAT, "-video_size", RECORD_VIDEO_SIZE, "-framerate", RECORD_FRAMERATE,
+    vector<string> arguments = {"ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-fflags", "+genpts", "-f", "v4l2"};
+    arguments.insert(arguments.end(), cameraMode.begin(), cameraMode.end());
+    arguments.insert(arguments.end(), {
         "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", cameraDevice,
         "-f", "alsa", "-ac", "1", "-ar", RECORD_AUDIO_RATE,
         "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", microphone,
@@ -129,7 +136,7 @@ bool start_recording(const string& directory, int cameraIndex) {
         "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
         "-af", RECORD_AUDIO_FILTER, "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path,
         "-map", "0:v", "-s", PREVIEW_SIZE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
-    };
+    });
 
     // Open the pipe those small frames come back on
     int previewPipe[2];

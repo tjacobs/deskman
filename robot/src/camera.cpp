@@ -5,12 +5,22 @@
 #include <opencv2/core/utils/logger.hpp>
 
 // System
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <vector>
+
+// Linux V4L2
+#ifdef __linux__
+#include <fcntl.h>
+#include <linux/videodev2.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
 
 // Namespace
 using namespace std;
@@ -28,11 +38,40 @@ static const int PIPELINE_RETRY_WAIT_SECONDS = 1;
 // Ask rpicam whether a CSI camera is attached
 static const char *LIBCAMERA_LIST_COMMAND = "rpicam-hello --list-cameras 2>&1";
 
+#ifdef __linux__
+
+// One control and the value to give it
+struct CameraControl {
+    unsigned int id;
+    int value;
+};
+
+// Settings for one camera model, matched on the name the driver reports
+struct CameraModel {
+    const char* nameMatch;
+    vector<CameraControl> controls;
+};
+
+// Picture settings for each known camera model
+static const vector<CameraModel> CAMERA_MODELS = {
+    {"Arducam 1080P Low Light", {
+        {V4L2_CID_BACKLIGHT_COMPENSATION, 0},
+        {V4L2_CID_CONTRAST, 64},
+        {V4L2_CID_GAMMA, 72},
+        {V4L2_CID_SATURATION, 90},
+    }},
+};
+
+#endif
+
 // Later in this file
 static bool video_device_present();
 static bool libcamera_camera_present();
 static int count_video_devices();
 static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int width, int height, int framerate);
+#ifdef __linux__
+static bool set_control(int fd, unsigned int id, int value);
+#endif
 
 // Detect Raspberry Pi for the libcamera path
 Camera::Camera() {
@@ -243,6 +282,7 @@ static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int wi
         if (capture.read(test_frame) && !test_frame.empty()) {
             camera_index = index;
             cv::utils::logging::setLogLevel(log_level);
+            set_camera_settings(index);
             return true;
         }
 
@@ -255,3 +295,75 @@ static bool open_USB_camera(cv::VideoCapture& capture, int& camera_index, int wi
     cerr << "Failed to open camera, continuing without camera" << endl;
     return false;
 }
+
+// Set the picture settings listed for this camera model
+void set_camera_settings(int camera_index) {
+#ifdef __linux__
+    // Open the node alongside whoever is capturing from it
+    string device = "/dev/video" + to_string(camera_index);
+    int fd = open(device.c_str(), O_RDWR);
+    if (fd < 0)
+        return;
+
+    // Read the name the driver gives this camera
+    v4l2_capability capability = {};
+    string name;
+    if (ioctl(fd, VIDIOC_QUERYCAP, &capability) == 0)
+        name = reinterpret_cast<const char*>(capability.card);
+
+    // Set each control listed for a matching model, the settings stay on the camera for teleport and recordings too
+    for (const CameraModel& cameraModel : CAMERA_MODELS) {
+        if (name.find(cameraModel.nameMatch) == string::npos)
+            continue;
+        for (const CameraControl& control : cameraModel.controls)
+            set_control(fd, control.id, control.value);
+        cout << "Camera: " << cameraModel.nameMatch << endl;
+    }
+    close(fd);
+#endif
+}
+
+// True when the camera lists MJPEG at this size and rate
+bool camera_offers_MJPEG(int camera_index, int width, int height, int framerate) {
+#ifdef __linux__
+    // Open the node to read its format list
+    string device = "/dev/video" + to_string(camera_index);
+    int fd = open(device.c_str(), O_RDWR);
+    if (fd < 0)
+        return false;
+
+    // Walk the rates listed for this size, a size it lacks lists none
+    bool offered = false;
+    v4l2_frmivalenum interval = {};
+    interval.pixel_format = V4L2_PIX_FMT_MJPEG;
+    interval.width = width;
+    interval.height = height;
+    for (interval.index = 0; ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &interval) == 0; interval.index++) {
+        if (interval.type == V4L2_FRMIVAL_TYPE_DISCRETE && interval.discrete.numerator * framerate == interval.discrete.denominator)
+            offered = true;
+    }
+    close(fd);
+    return offered;
+#else
+    return false;
+#endif
+}
+
+#ifdef __linux__
+
+// Set one control when the camera has it, kept inside the range it allows
+static bool set_control(int fd, unsigned int id, int value) {
+    // Skip controls this camera does not have
+    v4l2_queryctrl query = {};
+    query.id = id;
+    if (ioctl(fd, VIDIOC_QUERYCTRL, &query) != 0 || (query.flags & V4L2_CTRL_FLAG_DISABLED))
+        return false;
+
+    // Clamp to the camera's own range, then set it
+    v4l2_control control = {};
+    control.id = id;
+    control.value = max(query.minimum, min(query.maximum, value));
+    return ioctl(fd, VIDIOC_S_CTRL, &control) == 0;
+}
+
+#endif

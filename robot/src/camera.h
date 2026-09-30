@@ -3,8 +3,17 @@
 // OpenCV
 #include <opencv2/opencv.hpp>
 
+// System
+#include <string>
+
 // Namespace
 using namespace std;
+
+// Set the picture settings listed for this camera model
+void set_camera_settings(int camera_index);
+
+// True when the camera lists MJPEG at this size and rate
+bool camera_offers_MJPEG(int camera_index, int width, int height, int framerate);
 
 // Open a USB or Raspberry Pi camera and hand out frames
 class Camera {
