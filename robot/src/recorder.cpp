@@ -175,7 +175,7 @@ bool start_recording(const string& directory, int cameraIndex) {
 
     // Keep the pipe drained, ffmpeg stalls on a full one
     previewThread = thread(readPreviewFrames);
-    cout << "Recording to " << shortPath(path) << endl;
+    cout << "Recording " << shortPath(path) << endl;
     return true;
 }
 

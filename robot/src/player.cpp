@@ -343,7 +343,7 @@ void stop_playback() {
 
     // Let the reader see the end of the pipe
     stopPlaybackReader();
-    cout << "Stopped playing " << recording_name(playerPath) << endl;
+    cout << "Stopped " << recording_name(playerPath) << endl;
     playerPath.clear();
 }
 
