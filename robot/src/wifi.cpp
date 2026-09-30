@@ -29,9 +29,10 @@ static const char* ADDRESS_COMMAND = "hostname -I 2>/dev/null";
 // Only wireless connections carry a network name
 static const char* WIRELESS_TYPE = "802-11-wireless";
 
-// What the header says while there is nothing to report yet
+// What the header says while there is nothing to report yet, and before the joined network
 static const char* STATUS_LOOKING = "Looking...";
 static const char* STATUS_OFFLINE = "Not connected";
+static const char* STATUS_CONNECTED = "Connected: ";
 
 // Longest line nmcli is expected to answer with
 static const int COMMAND_LINE_SIZE = 512;
@@ -131,7 +132,7 @@ static string describeConnection(const vector<Network>& networks) {
     vector<string> address = runCommand(ADDRESS_COMMAND);
     string where = address.empty() ? "" : address[0];
     where = where.substr(0, where.find(' '));
-    return active->name + "   " + to_string(active->signal) + "%   " + where;
+    return STATUS_CONNECTED + active->name + " " + to_string(active->signal) + "%   " + where;
 }
 
 // Join a network, nmcli reuses the saved password when there is one

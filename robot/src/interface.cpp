@@ -109,7 +109,7 @@ static const char* VIDEO_MEASURING_TEXT = "--:--";
 // The wireless list, a row for each network in range
 static const char* WIFI_LOOKING_TEXT = "Looking...";
 static const char* WIFI_SAVED_MARK = "saved";
-static const char* WIFI_CONNECTED_MARK = "connected";
+static const char* WIFI_CONNECTED_MARK = "Connected";
 
 // Menu button colors
 static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
