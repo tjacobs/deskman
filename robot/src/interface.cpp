@@ -29,6 +29,7 @@
 
 // Sockets and processes
 #include <fcntl.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -204,6 +205,7 @@ static void serve_client(int client_fd);
 static string handle_request(const string& line, int from_fd);
 static json position_reply();
 static int request_int(const json& request, const char* key, int fallback);
+static int talk_mode_from_name(const string& name);
 static bool wait_call_handoff(int command);
 static void send_menu();
 static void send_waiting_call(int client_fd);
@@ -474,6 +476,17 @@ static string handle_request(const string& line, int from_fd) {
             g_warning = request.value("text", "");
             g_warning_url = request.value("url", "");
             reply = {{"ok", true}};
+
+        // Show the mode talk started in, it can fall back from the saved one, which stays for the next start
+        } else if (command == "talk_mode") {
+            int mode = talk_mode_from_name(request.value("mode", ""));
+            if (mode == TALK_MODE_NONE) {
+                reply = {{"ok", false}, {"error", "unknown talk mode"}};
+            } else {
+                if (!g_talk_mode_pending.load())
+                    g_talk_mode = mode;
+                reply = {{"ok", true}};
+            }
         } else {
             reply = {{"ok", false}, {"error", "unknown command"}};
         }
@@ -503,6 +516,15 @@ static int request_int(const json& request, const char* key, int fallback) {
     if (request[key].is_number())
         return static_cast<int>(request[key].get<double>());
     return fallback;
+}
+
+// Match a talk mode name to its button mode, any case, or no mode when it is not one
+static int talk_mode_from_name(const string& name) {
+    for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
+        if (strcasecmp(name.c_str(), TALK_MODE_LABELS[mode]) == 0)
+            return mode;
+    }
+    return TALK_MODE_NONE;
 }
 
 // Post a pause or resume, then wait for the main loop to answer

@@ -176,6 +176,13 @@ def show_warning(text, url):
     except Exception:
         pass
 
+# Put the mode talk started in on the Mode button
+def show_talk_mode(mode):
+    try:
+        send_command({"command": "talk_mode", "mode": mode})
+    except Exception:
+        pass
+
 # Hold a socket so Listen and Quiet arrive as pushes, not polls
 def start_push_listener():
     global push_listener_started

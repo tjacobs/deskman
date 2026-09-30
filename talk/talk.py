@@ -44,12 +44,14 @@ RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
 # Config phrases whisper invents from silence, longest first so the short ones do not eat them
 WHISPER_ARTIFACTS = ('thanks for watching', 'thank you very much', 'thank you', 'thanks', 'you', 'bye')
 
-# Config wake tone
-WAKE_TONE_RATE = 24000
+# Config wake, error, and chime tones
+TONE_RATE = 24000
+TONE_GAP_SECONDS = 0.04
+TONE_FADE_SECONDS = 0.015
+TONE_AMPLITUDE = 0.0625
 WAKE_TONE_NOTES = ((880.0, 0.12), (1174.7, 0.18))
-WAKE_TONE_GAP_SECONDS = 0.04
-WAKE_TONE_FADE_SECONDS = 0.015
-WAKE_TONE_AMPLITUDE = 0.0625
+ERROR_TONE_NOTES = ((659.3, 0.16), (440.0, 0.28))
+CHIME_TONE_NOTES = ((1046.5, 0.12), (1318.5, 0.12), (1568.0, 0.2))
 
 # Config follow-up window
 FOLLOW_UP_SECONDS = 20.0
@@ -103,10 +105,14 @@ HISTORY_DIR = os.path.join(utils.SCRIPT_DIR, 'history')
 SPOKEN_WAV = 'talk.wav'
 HEARD_WAV = 'heard.wav'
 WAKE_WAV = 'wake.wav'
+ERROR_WAV = 'error.wav'
+CHIME_WAV = 'chime.wav'
 TEXT_DIR = os.path.join(utils.SCRIPT_DIR, 'text')
 TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
 TEXT_CUDA_LIBRARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'libggml-cuda.so')
 TEXT_UNAVAILABLE = 'The language model is not running.'
+CLOUD_UNAVAILABLE = "Sorry, I can't reach OpenAI right now."
+LOW_BATTERY_UNSAID = 'Please plug me in.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
 TEXT_SERVER_LOG = os.path.join(utils.SCRIPT_DIR, 'text_server.log')
@@ -215,6 +221,9 @@ def main():
 
     # Realtime streams to OpenAI, so it forces the cloud backend and never starts llama-server
     CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
+
+    # Update the mode button on screen
+    robot_move.show_talk_mode(running_mode_name())
 
     # Make sure only one running
     check_already_running()
@@ -408,6 +417,14 @@ def use_local_text():
         utils.use_hub_offline()
     return False
 
+# Name the mode talk is running in, the same names as the robot Mode button
+def running_mode_name():
+    if REALTIME_MODE:
+        return 'realtime'
+    if CLOUD_MODE:
+        return 'cloud'
+    return 'local'
+
 # Why realtime cannot start, empty when it can
 def realtime_unavailable_reason():
     global LOCAL_REASON_SHOWN
@@ -425,16 +442,6 @@ def realtime_unavailable_reason():
         LOCAL_REASON_SHOWN = True
         return NO_KEY_REASON
     return ''
-
-# Leave cloud and realtime after a live failure, and start the local text server
-def switch_to_local_text():
-    global CLOUD_MODE, REALTIME_MODE, text_server_process
-    REALTIME_MODE = False
-    CLOUD_MODE = False
-    use_local_text()
-    if text_server_process is None:
-        text_server_process = start_text_server(False)
-    return ensure_text_server_alive()
 
 # Say the accent phrase once, it packs the sounds that split British from American
 def say_accent_phrase():
@@ -520,7 +527,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 print(f'Reply: {GOODBYE}', flush=True)
                 text_ask.last_tool_log.clear()
                 log_talk(command, GOODBYE)
-                speak_muted(listener, kokoro_pipeline, GOODBYE)
+                say_out_loud(listener, kokoro_pipeline, GOODBYE)
                 quit_robot()
                 break
 
@@ -532,10 +539,10 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
             # Hand the whole conversation to OpenAI when streaming audio both ways
             if REALTIME_MODE:
-                silenced = run_realtime_turn(listener, command)
+                finished = run_realtime_turn(listener, command)
                 if move.quit_pending():
                     break
-                if silenced:
+                if finished:
                     close_conversation()
                     continue
                 LAST_ASK_AT = time.time()
@@ -567,19 +574,36 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
 # Say hello, realtime speaks it over its own session so kokoro stays unloaded
 def greet(listener, kokoro_pipeline):
-    if REALTIME_MODE:
+    say_out_loud(listener, kokoro_pipeline, GREETING)
+
+# Say a fixed line, realtime says it through OpenAI and chimes with the words on screen when it cannot
+def say_out_loud(listener, kokoro_pipeline, text):
+    # Kokoro is the voice for local and cloud
+    if not REALTIME_MODE:
+        speak_muted(listener, kokoro_pipeline, text)
+        return
+
+    # Stay quiet at bedtime without opening a session
+    if utils.is_bedtime():
+        print(f'Bedtime, not saying: {text}', flush=True)
+        return
+
+    # Say it through OpenAI, the mic muted so it does not hear itself
+    said = ''
+    with speak_lock:
         listener.mute()
         try:
-            realtime.speak_line(GREETING)
-            return
+            said = realtime.speak_line(text)
         except Exception as error:
-            print_error('realtime greeting failed', error)
+            print_error('realtime line failed', error)
             robot_move.print_warning(*text_client.openai_warning(error))
-            print('Warning: cloud failed, using local.', flush=True)
-            switch_to_local_text()
         finally:
             listener.unmute()
-    speak_muted(listener, kokoro_pipeline, GREETING)
+
+    # Chime and show the words when OpenAI said nothing, rather than switch voices
+    if not said:
+        play_tone(listener, ensure_tone(CHIME_WAV, CHIME_TONE_NOTES))
+        print(f'Could not say: {text}', flush=True)
 
 # Print how to talk, test mode skips the wake word
 def print_talk_help():
@@ -596,7 +620,7 @@ def print_talk_status():
         return
     print(TALK_READY, flush=True)
 
-# Hold one spoken conversation with OpenAI, audio up and audio down
+# Hold one spoken conversation with OpenAI, true when it ended by being silenced or failing
 def run_realtime_turn(listener, command):
     # Drop leftover capture from loading and connecting, it would go up as speech
     listener.mute()
@@ -608,35 +632,30 @@ def run_realtime_turn(listener, command):
     try:
         session = realtime.open_session(config)
     except Exception as error:
-        print_error('realtime session failed', error)
-        robot_move.print_warning(*text_client.openai_warning(error))
-        reply_after_cloud_failure(listener, command)
-        return False
+        report_realtime_failure(listener, 'realtime session failed', error)
+        return True
 
     # Share the microphone this loop already owns, so nothing fights for the device
     try:
         silenced = realtime.run_conversation(session, listener, command, log_talk, '')
     except Exception as error:
-        print_error('realtime conversation failed', error)
-        robot_move.print_warning(*text_client.openai_warning(error))
-        reply_after_cloud_failure(listener, command)
-        return False
+        report_realtime_failure(listener, 'realtime conversation failed', error)
+        return True
     finally:
         realtime.close_session(session)
         listener.unmute()
+
+    # Tone when OpenAI turned the turn down, like running out of credits, the warning is already up
+    if realtime.turn_failed():
+        play_tone(listener, ensure_tone(ERROR_WAV, ERROR_TONE_NOTES))
+        return True
     return silenced
 
-# Answer with the local model after a live cloud or realtime failure
-def reply_after_cloud_failure(listener, command):
-    print('Warning: cloud failed, using local.', flush=True)
-    if not switch_to_local_text():
-        print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-        return
-    reply = make_reply(command)
-    if reply != TEXT_UNAVAILABLE:
-        print(f'Reply: {reply}', flush=True)
-    log_talk(command, reply)
-    speak_muted(listener, None, reply)
+# Show why realtime failed and play the error tone, the next wake word tries realtime again
+def report_realtime_failure(listener, label, error):
+    print_error(label, error)
+    robot_move.print_warning(*text_client.openai_warning(error))
+    play_tone(listener, ensure_tone(ERROR_WAV, ERROR_TONE_NOTES))
 
 # Ask the local text model for a spoken reply
 def make_reply(command):
@@ -651,7 +670,7 @@ def make_reply(command):
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         return TEXT_UNAVAILABLE
 
-    # Ask the LLM, fall back to a local restart only when not using the cloud
+    # Ask the LLM, a cloud failure says sorry rather than leaving OpenAI, a local one restarts the server
     try:
         # Show the full request when --prompt is set
         if PROMPT_MODE:
@@ -667,25 +686,21 @@ def make_reply(command):
         print(f'Error: {format_llm_error(error)}', flush=True)
         if text_client.use_cloud():
             robot_move.print_warning(*text_client.openai_warning(format_llm_error(error)))
+            return CLOUD_UNAVAILABLE
         return retry_ask_locally(command)
     except Exception as error:
         text_ask.last_tool_log.clear()
         print_error('ask failed', error)
         if text_client.use_cloud():
             robot_move.print_warning(*text_client.openai_warning(error))
-            return retry_ask_locally(command)
+            return CLOUD_UNAVAILABLE
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print_memory('ask failed')
         return TEXT_UNAVAILABLE
 
-# After a cloud ask fails, start Gemma and ask again
+# After a local ask fails, restart Gemma when it died and ask again
 def retry_ask_locally(command):
-    if text_client.use_cloud():
-        print('Warning: cloud failed, using local model.', flush=True)
-        if not switch_to_local_text():
-            print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
-            return TEXT_UNAVAILABLE
-    elif not ensure_text_server_alive():
+    if not ensure_text_server_alive():
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print_memory('ask failed')
         return TEXT_UNAVAILABLE
@@ -888,7 +903,7 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
 
 # Beep and show listening after the wake word
 def acknowledge_wake(listener):
-    play_wake_tone(listener)
+    play_tone(listener, ensure_tone(WAKE_WAV, WAKE_TONE_NOTES))
     set_robot_listening(True)
     print(TALK_LISTENING, flush=True)
 
@@ -948,10 +963,11 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
     if near_miss:
         print('Nearly robot or deskman', flush=True)
 
-    # Play back the recording, then say the words back
-    if near_miss or REPLAY_MODE:
+    # Play back the recording, then say the words back, realtime only logs a near miss as kokoro stays unloaded
+    local_voice = not REALTIME_MODE
+    if REPLAY_MODE or (near_miss and local_voice):
         replay(listener, audio)
-    if near_miss or (REPEAT_MODE and text):
+    if local_voice and (near_miss or (REPEAT_MODE and text)):
         speak_muted(listener, kokoro_pipeline, text)
     return text
 
@@ -1166,18 +1182,25 @@ def speak_low_battery(listener, kokoro_pipeline):
 def ask_to_be_plugged_in(listener, kokoro_pipeline):
     # Realtime writes the line as it says it, in the voice that answers questions, so kokoro stays unloaded
     if REALTIME_MODE:
-        listener.mute()
-        try:
-            line = realtime.speak_answer(LOW_BATTERY_ASK)
-        finally:
-            listener.unmute()
-        if line:
-            return line
+        return ask_realtime_to_be_plugged_in(listener)
 
     # Otherwise the text model writes the line and kokoro says it
     line = low_battery_line()
     speak_muted(listener, kokoro_pipeline, line)
     return line
+
+# Ask through OpenAI, when it says nothing the line only reaches the screen, the next minute asks again
+def ask_realtime_to_be_plugged_in(listener):
+    line = ''
+    with speak_lock:
+        listener.mute()
+        try:
+            line = realtime.speak_answer(LOW_BATTERY_ASK)
+        except Exception as error:
+            print(f'Low battery line failed: {error}', flush=True)
+        finally:
+            listener.unmute()
+    return line or LOW_BATTERY_UNSAID
 
 # Ask the LLM for a short variation, or use a fallback phrase
 def low_battery_line():
@@ -1198,7 +1221,7 @@ def fire_due_reminders(listener, kokoro_pipeline):
     for reminder in due:
         message = reminder.get('message') or "Reminder"
         print(f'Reminder: {message}', flush=True)
-        speak_muted(listener, kokoro_pipeline, message)
+        say_out_loud(listener, kokoro_pipeline, message)
 
 # Play back the recording, mic muted so it does not hear it
 def replay(listener, audio):
@@ -1212,34 +1235,34 @@ def replay(listener, audio):
     play_wav(wav_path)
     listener.unmute()
 
-# Play the wake acknowledgment tone, mic muted so it does not hear it
-def play_wake_tone(listener):
+# Play a tone, mic muted so it does not hear it
+def play_tone(listener, wav_path):
     listener.mute()
-    play_wav(ensure_wake_tone())
+    play_wav(wav_path)
     listener.unmute()
 
-# Build audio/wake.wav once, a soft two-note blip
-def ensure_wake_tone():
+# Build a soft tone from its notes once, wake, error, and chime each keep their own file in audio
+def ensure_tone(file_name, notes):
     import soundfile
-    wav_path = os.path.join(utils.AUDIO_DIR, WAKE_WAV)
+    wav_path = os.path.join(utils.AUDIO_DIR, file_name)
     if os.path.isfile(wav_path):
         return wav_path
 
     # Build each note with a short fade, then a small gap
     os.makedirs(utils.AUDIO_DIR, exist_ok=True)
     parts = []
-    fade = int(WAKE_TONE_RATE * WAKE_TONE_FADE_SECONDS)
-    gap = np.zeros(int(WAKE_TONE_RATE * WAKE_TONE_GAP_SECONDS), dtype=np.float32)
-    for frequency, duration in WAKE_TONE_NOTES:
-        samples = int(WAKE_TONE_RATE * duration)
-        times = np.arange(samples, dtype=np.float32) / WAKE_TONE_RATE
-        wave = (WAKE_TONE_AMPLITUDE * np.sin(2.0 * np.pi * frequency * times)).astype(np.float32)
+    fade = int(TONE_RATE * TONE_FADE_SECONDS)
+    gap = np.zeros(int(TONE_RATE * TONE_GAP_SECONDS), dtype=np.float32)
+    for frequency, duration in notes:
+        samples = int(TONE_RATE * duration)
+        times = np.arange(samples, dtype=np.float32) / TONE_RATE
+        wave = (TONE_AMPLITUDE * np.sin(2.0 * np.pi * frequency * times)).astype(np.float32)
         if fade > 0 and samples > 2 * fade:
             wave[:fade] *= np.linspace(0.0, 1.0, fade, dtype=np.float32)
             wave[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
         parts.append(wave)
         parts.append(gap)
-    soundfile.write(wav_path, np.concatenate(parts), WAKE_TONE_RATE)
+    soundfile.write(wav_path, np.concatenate(parts), TONE_RATE)
     return wav_path
 
 # Play one wav file on the speaker, nothing plays at bedtime
@@ -1416,7 +1439,7 @@ def start_text_server(require_success=True):
 
     # Quit when the install is incomplete
     if not os.access(TEXT_SERVER_SCRIPT, os.X_OK):
-        print(f'Text server missing. Run ./install.sh --talk first.')
+        print('Text server missing. Run ./install.sh --talk first.')
         if require_success:
             sys.exit(1)
         return None

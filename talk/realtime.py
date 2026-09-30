@@ -88,6 +88,9 @@ REALTIME_CHANNELS = 1
 # State, the voice a set_voice call picked, it holds for the rest of the run but not past a restart
 CHOSEN_VOICE = ''
 
+# State, set when OpenAI turned the conversation down for a reason retrying cannot fix, like no credits
+TURN_FAILED = False
+
 # Hold one realtime conversation from the microphone
 def main():
     # Parse arguments
@@ -218,8 +221,11 @@ def session_realtime_tools():
 
 # Stream microphone audio up and play replies back until the room goes quiet
 def run_conversation(session, microphone, first_question, on_turn, greet_text):
-    # Keep the session handed in, the caller closes that one itself
+    global TURN_FAILED
+
+    # Keep the session handed in, the caller closes that one itself, and start with no failure
     opened = session
+    TURN_FAILED = False
 
     # Talk until the room goes quiet, a voice change carries the conversation into a new session
     expect_audio = bool(first_question or greet_text)
@@ -567,6 +573,7 @@ def handle_event(session, microphone, speaker, event):
 
 # Log the server error, put its short name on the face, and hang up when retrying cannot help
 def report_error(session, event):
+    global TURN_FAILED
     error = event.get('error', {})
     message = error.get('message', '')
     print(f'Realtime error: {message}', flush=True)
@@ -574,6 +581,11 @@ def report_error(session, event):
     robot_move.print_warning(name, page)
     if client.openai_error_is_fatal(name):
         session.running = False
+        TURN_FAILED = True
+
+# True when the last conversation ended because OpenAI turned it down
+def turn_failed():
+    return TURN_FAILED
 
 # Return the error on a failed response, empty when it finished fine
 def response_failure(event):

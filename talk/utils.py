@@ -77,8 +77,15 @@ def audio_player():
 
 # Build playback command for one wav file
 def play_wav_command(wav_path):
-    # Play through the default device, tools/audio.sh points that at the USB soundcard
-    return [audio_player(), wav_path]
+    player = audio_player()
+    command = [player]
+
+    # Share the USB speaker through dmix too, the default device is PulseAudio, which locks the card and silences the realtime voice
+    card = find_usb_card()
+    if player == LINUX_PLAYER and card is not None:
+        command += ['-D', shared_playback_device(card)]
+    command.append(wav_path)
+    return command
 
 # Build playback command for a raw stream arriving on stdin
 def play_raw_command(rate, channels):

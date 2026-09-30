@@ -902,12 +902,12 @@ static int load_talk_mode() {
 
 // Save the mode for the next run, then bring talk back up on it
 static void switch_talk_mode(int mode) {
-    // Keep the rest of the file, only the three model keys move
+    // Keep the rest of the file in its order, only the three model values change
     string path = repo_path(TALK_CONFIG_FROM_REPO);
-    nlohmann::json config = nlohmann::json::object();
+    nlohmann::ordered_json config = nlohmann::ordered_json::object();
     ifstream file(path);
     if (file) {
-        nlohmann::json loaded = nlohmann::json::parse(file, nullptr, false);
+        nlohmann::ordered_json loaded = nlohmann::ordered_json::parse(file, nullptr, false);
         if (!loaded.is_discarded() && loaded.is_object())
             config = loaded;
     }
