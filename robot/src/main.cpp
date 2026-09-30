@@ -430,9 +430,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         string temperature_warning = temperature_warning_text();
         if (!temperature_warning.empty())
             draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
-        string warning = warning_text();
-        if (!warning.empty())
-            draw_text(warning.c_str(), WARNING_X, WARNING_Y, face.font, WARNING_COLOR);
+        draw_warning(face.font, WARNING_X, WARNING_Y, WARNING_COLOR);
 
         // Preview first, then the record mark and menu so they stay on top, a video takes that space
         if (use_camera && faceTracker.isTracking() && !playing())
@@ -958,6 +956,9 @@ static bool start_talk_process() {
 
         // Stop Python buffering its output down the pipe, so the face log keeps up
         setenv("PYTHONUNBUFFERED", "1", 1);
+
+        // Let the browser talk opens for the key setup show the touch keyboard
+        allow_screen_keyboard();
 
         // Exec talk.py, and report it when the exec itself fails
         execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), static_cast<char*>(nullptr));

@@ -53,6 +53,9 @@ OPENAI_ERROR_NAMES = (
 OPENAI_ERROR_NAME = "OpenAI error"
 OPENAI_FATAL_ERRORS = (OPENAI_OUT_OF_CREDITS, OPENAI_KEY_REJECTED)
 
+# Config the pages that fix a failure, tapping the warning on the face opens these
+OPENAI_ERROR_PAGES = {OPENAI_OUT_OF_CREDITS: "https://platform.openai.com/settings/organization/billing/overview"}
+
 # Cloud path state, TALK_LLM and flags fill these in
 cloud_enabled = False
 cloud_model = DEFAULT_CLOUD_MODEL
@@ -143,6 +146,11 @@ def cloud_provider_name():
     if "openai.com" in cloud_base:
         return "OpenAI"
     return cloud_base
+
+# Name an OpenAI failure for the face, with the page that fixes it, empty when there is none
+def openai_warning(message):
+    name = describe_openai_error(message)
+    return name, OPENAI_ERROR_PAGES.get(name, "")
 
 # Name an OpenAI failure in a few words for the face, the full message stays in the log
 def describe_openai_error(message):

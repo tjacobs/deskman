@@ -225,7 +225,7 @@ def main():
     robot_move.start_push_listener()
 
     # Clear a warning a past run left on the face, this run has not failed yet
-    robot_move.show_warning('')
+    robot_move.show_warning('', '')
 
     # Speak the accent phrase and stop, this is for judging the voice, no models needed beyond the voice
     if ACCENT_MODE:
@@ -557,7 +557,7 @@ def greet(listener, kokoro_pipeline):
             return
         except Exception as error:
             print_error('realtime greeting failed', error)
-            robot_move.print_warning(text_client.describe_openai_error(error))
+            robot_move.print_warning(*text_client.openai_warning(error))
             print('Warning: cloud failed, using local.', flush=True)
             switch_to_local_text()
         finally:
@@ -592,7 +592,7 @@ def run_realtime_turn(listener, command):
         session = realtime.open_session(config)
     except Exception as error:
         print_error('realtime session failed', error)
-        robot_move.print_warning(text_client.describe_openai_error(error))
+        robot_move.print_warning(*text_client.openai_warning(error))
         reply_after_cloud_failure(listener, command)
         return False
 
@@ -601,7 +601,7 @@ def run_realtime_turn(listener, command):
         silenced = realtime.run_conversation(session, listener, command, log_talk, '')
     except Exception as error:
         print_error('realtime conversation failed', error)
-        robot_move.print_warning(text_client.describe_openai_error(error))
+        robot_move.print_warning(*text_client.openai_warning(error))
         reply_after_cloud_failure(listener, command)
         return False
     finally:
@@ -649,13 +649,13 @@ def make_reply(command):
         text_ask.last_tool_log.clear()
         print(f'Error: {format_llm_error(error)}', flush=True)
         if text_client.use_cloud():
-            robot_move.print_warning(text_client.describe_openai_error(format_llm_error(error)))
+            robot_move.print_warning(*text_client.openai_warning(format_llm_error(error)))
         return retry_ask_locally(command)
     except Exception as error:
         text_ask.last_tool_log.clear()
         print_error('ask failed', error)
         if text_client.use_cloud():
-            robot_move.print_warning(text_client.describe_openai_error(error))
+            robot_move.print_warning(*text_client.openai_warning(error))
             return retry_ask_locally(command)
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print_memory('ask failed')

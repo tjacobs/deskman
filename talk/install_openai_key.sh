@@ -21,8 +21,8 @@ KEY_CHECK_TIMEOUT_SECONDS = 20
 # Keys start with this, used to spot a clipboard that holds something else
 KEY_PREFIX = 'sk-'
 
-# Browsers tried in order, the first one installed wins
-BROWSERS = ('chromium', 'chromium-browser', 'firefox')
+# Browsers tried in order, the first one installed wins, the snap path is listed as services leave /snap/bin off PATH
+BROWSERS = ('chromium', '/snap/bin/chromium', 'chromium-browser', 'firefox')
 
 # Clipboard readers tried in order, Wayland first then X11
 CLIPBOARD_COMMANDS = (('wl-paste', '--no-newline'), ('xsel', '--clipboard', '--output'))

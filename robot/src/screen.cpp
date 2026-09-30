@@ -70,6 +70,7 @@ static const int TM_YEAR_BASE = 1900;
 static const int HOURS_PER_HALF_DAY = 12;
 
 // A dead IBus socket, GNOME pops its touch keyboard when SDL takes input method focus
+static const char* IBUS_ADDRESS_VARIABLE = "IBUS_ADDRESS";
 static const char* DEAD_IBUS_ADDRESS = "unix:path=/nonexistent";
 
 // Screen globals
@@ -254,6 +255,11 @@ static void write_log_chunk(int descriptor, const char* buffer, ssize_t count) {
     (void)written;
 }
 
+// Give a child process the input method back, so GNOME shows its touch keyboard for the child's text fields
+void allow_screen_keyboard() {
+    unsetenv(IBUS_ADDRESS_VARIABLE);
+}
+
 // Hide the pointer, and replace it with an empty cursor
 void hide_cursor() {
     SDL_ShowCursor(SDL_DISABLE);
@@ -295,7 +301,7 @@ bool create_window() {
     }
 
     // Keep the on-screen keyboard away, SDL connects to IBus while it initializes
-    setenv("IBUS_ADDRESS", DEAD_IBUS_ADDRESS, 1);
+    setenv(IBUS_ADDRESS_VARIABLE, DEAD_IBUS_ADDRESS, 1);
 
     // Initialize SDL
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {

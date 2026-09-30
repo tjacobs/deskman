@@ -570,8 +570,8 @@ def report_error(session, event):
     error = event.get('error', {})
     message = error.get('message', '')
     print(f'Realtime error: {message}', flush=True)
-    name = client.describe_openai_error(f'{error.get("code", "")} {message}')
-    robot_move.print_warning(name)
+    name, page = client.openai_warning(f'{error.get("code", "")} {message}')
+    robot_move.print_warning(name, page)
     if client.openai_error_is_fatal(name):
         session.running = False
 

@@ -174,7 +174,7 @@ int open_servos() {
             continue;
         }
         opened = true;
-        printf("Servo bus %d baud on %s\n", SERVO_BAUD_RATE, port_name.c_str());
+        printf("Servo bus: %s\n", port_name.c_str());
         fflush(stdout);
         probe_known_servos();
         int answered = 0;

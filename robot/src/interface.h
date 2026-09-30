@@ -60,8 +60,8 @@ bool take_play_request();
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
 
-// Return the warning to show on the face, empty when there is none
-string warning_text();
+// Draw the warning sent over the socket, a tap on it opens its link when it has one
+void draw_warning(TTF_Font* font, int x, int y, SDL_Color color);
 
 // Send talk back to ready, the same as tapping Quiet
 void send_quiet();

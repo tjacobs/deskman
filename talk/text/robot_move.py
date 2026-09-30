@@ -152,21 +152,21 @@ def play_last_recording():
         raise RuntimeError(reply.get("error", "unknown error"))
 
 # Print a warning last so the status bar shows it, and hold it on the face
-def print_warning(text):
+def print_warning(text, url):
     print(f"Warning: {text}.", flush=True)
-    show_warning(text)
+    show_warning(text, url)
 
 # Take the warning off the face, when one is up
 def clear_warning():
     if shown_warning:
-        show_warning('')
+        show_warning('', '')
 
-# Put a warning on the face, empty text clears it, a robot that is down just misses it
-def show_warning(text):
+# Put a warning on the face, a tap opens the url when there is one, empty text clears it, a robot that is down just misses it
+def show_warning(text, url):
     global shown_warning
     shown_warning = text
     try:
-        send_command({"command": "warning", "text": text})
+        send_command({"command": "warning", "text": text, "url": url})
     except Exception:
         pass
 

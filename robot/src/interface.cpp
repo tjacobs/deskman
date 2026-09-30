@@ -27,10 +27,12 @@
 #include <thread>
 #include <vector>
 
-// Sockets
+// Sockets and processes
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 // Namespace
@@ -117,6 +119,13 @@ static const SDL_Color WIFI_ACTIVE_COLOR = {30, 140, 70, 255};
 static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
 
+// A warning with a link says it can be tapped, and a tap near it opens the link in the browser
+static const char* WARNING_LINK_HINT = ", tap to fix";
+static const int WARNING_TAP_MARGIN = 20;
+static const char* OPEN_LINK_COMMANDS[] = {"/snap/bin/chromium", "chromium", "chromium-browser", "firefox", "xdg-open"};
+static const int OPEN_LINK_MAX_DESCRIPTORS = 1024;
+static const int OPEN_LINK_EXEC_FAILED = 127;
+
 // Socket file name, backlog, owner-only mode, and the read buffer size
 static const char* ROBOT_INTERFACE_NAME = "robot.interface";
 static const int INTERFACE_BACKLOG = 4;
@@ -133,9 +142,13 @@ static string g_socket_path;
 static mutex g_clients_mutex;
 static vector<int> g_client_fds;
 
-// Warning to show on the face, empty when there is none
+// Warning to show on the face and the link a tap opens, empty when there is none
 static mutex g_warning_mutex;
 static string g_warning;
+static string g_warning_url;
+
+// Where the warning was last drawn, so a tap can find it
+static SDL_Rect g_warning_rect = {0, 0, 0, 0};
 
 // Overlay and listen state the face and tracker read
 static atomic<bool> g_overlay_open{false};
@@ -196,6 +209,8 @@ static SDL_Rect video_delete_rect(int row);
 static SDL_Rect video_page_rect(bool older);
 static int video_rows_that_fit();
 static bool handle_wifi_tap(int x, int y);
+static bool handle_warning_tap(int x, int y);
+static void open_link(const string& url);
 static void draw_list_backdrop();
 static bool tap_in_rect(int x, int y, SDL_Rect rect);
 static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
@@ -433,10 +448,11 @@ static string handle_request(const string& line, int from_fd) {
             g_overlay_open = request.value("open", false);
             reply = {{"ok", true}};
 
-        // Show a warning on the face, empty text clears it
+        // Show a warning on the face with an optional link to fix it, empty text clears it
         } else if (command == "warning") {
             lock_guard<mutex> lock(g_warning_mutex);
             g_warning = request.value("text", "");
+            g_warning_url = request.value("url", "");
             reply = {{"ok", true}};
         } else {
             reply = {{"ok", false}, {"error", "unknown command"}};
@@ -873,6 +889,10 @@ void handle_call_event(const SDL_Event& event) {
     if (!menu_open() && handle_wifi_tap(x, y))
         return;
 
+    // A warning with a link opens it, so the problem can be fixed from the screen
+    if (!menu_open() && handle_warning_tap(x, y))
+        return;
+
     // Keep the bar reachable while the popup or a call overlay is up
     bool bar_showing = status_bar_visible() || menu_open() || g_overlay_open.load();
     int item = -1;
@@ -1012,10 +1032,81 @@ bool listen_open() {
     return g_listen_open.load();
 }
 
-// Return the warning to show on the face, empty when there is none
-string warning_text() {
-    lock_guard<mutex> lock(g_warning_mutex);
-    return g_warning;
+// Draw the warning, saying it can be tapped when it has a link, and keep where it landed
+void draw_warning(TTF_Font* font, int x, int y, SDL_Color color) {
+    // Copy the warning out, the socket thread may be setting a new one
+    string text;
+    string url;
+    {
+        lock_guard<mutex> lock(g_warning_mutex);
+        text = g_warning;
+        url = g_warning_url;
+    }
+
+    // Leave nothing to tap when there is nothing to show
+    g_warning_rect = {0, 0, 0, 0};
+    if (text.empty())
+        return;
+
+    // Say it can be tapped, then draw it and remember its size
+    if (!url.empty())
+        text += WARNING_LINK_HINT;
+    int width = 0;
+    int height = 0;
+    TTF_SizeUTF8(font, text.c_str(), &width, &height);
+    draw_text(text.c_str(), x, y, font, color);
+    g_warning_rect = {x, y, width, height};
+}
+
+// Open the warning's link when the tap lands near it, false when the tap is elsewhere or there is no link
+static bool handle_warning_tap(int x, int y) {
+    // Grow the target, a line of text is thin under a finger
+    if (g_warning_rect.w == 0)
+        return false;
+    SDL_Rect target = {g_warning_rect.x - WARNING_TAP_MARGIN, g_warning_rect.y - WARNING_TAP_MARGIN, g_warning_rect.w + 2 * WARNING_TAP_MARGIN, g_warning_rect.h + 2 * WARNING_TAP_MARGIN};
+    if (!tap_in_rect(x, y, target))
+        return false;
+
+    // Only a warning with a link does anything
+    string url;
+    {
+        lock_guard<mutex> lock(g_warning_mutex);
+        url = g_warning_url;
+    }
+    if (url.empty())
+        return false;
+    open_link(url);
+    return true;
+}
+
+// Open a link in a browser, detached so the robot has no child to reap later
+static void open_link(const string& url) {
+    cout << "Opening " << url << endl;
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork open link");
+        return;
+    }
+
+    // Fork again and let the middle child exit, the browser then belongs to init
+    if (pid == 0) {
+        if (fork() == 0) {
+            // Drop the robot's sockets, keep the browser chatter out of the robot log, and let it show the touch keyboard
+            setsid();
+            allow_screen_keyboard();
+            for (int descriptor = STDERR_FILENO + 1; descriptor < OPEN_LINK_MAX_DESCRIPTORS; descriptor++)
+                close(descriptor);
+            int null_descriptor = open("/dev/null", O_RDWR);
+            dup2(null_descriptor, STDOUT_FILENO);
+            dup2(null_descriptor, STDERR_FILENO);
+            // Try each browser in turn, an exec only returns when that one is missing, xdg-open is last as it can pick an editor
+            for (const char* command : OPEN_LINK_COMMANDS)
+                execlp(command, command, url.c_str(), static_cast<char*>(nullptr));
+            _exit(OPEN_LINK_EXEC_FAILED);
+        }
+        _exit(0);
+    }
+    waitpid(pid, nullptr, 0);
 }
 
 // Show whether the preview is up, so the Camera button can say so
