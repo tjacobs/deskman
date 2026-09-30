@@ -6,7 +6,7 @@ Dragging your finger (on the deskman screen) or mouse (on web) steers the remote
 
 ## Compile
 
-Needs CMake, a C++ compiler, GStreamer WebRTC, json-glib, libnice, SDL2, SDL2_ttf, and X11 with Xext on Linux. The `./install.sh` script installs the requirements including the NVIDIA GStreamer packages on a Jetson. SDL2 comes from `../robot/install.sh`.
+Needs CMake, a C++ compiler, GStreamer WebRTC, json-glib, libnice, SDL2, SDL2_ttf, and X11 with Xext on Linux. The `./install.sh` script installs the requirements including the NVIDIA GStreamer packages on a Jetson.
 
 ```bash
 ./install.sh
