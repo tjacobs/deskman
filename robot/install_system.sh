@@ -43,6 +43,7 @@ main() {
     disable_screen_idle
     enable_service_shortcuts
     enable_screen_keyboard
+    install_browser
     keep_wifi_awake
     fix_mdns_name
     echo "Done."
@@ -121,6 +122,12 @@ MATCHBOX_LAYOUT_DIR="/usr/share/matchbox-keyboard"
 OPENBOX_CONFIG_NAME="lxde-pi-rc.xml"
 OPENBOX_KEYBOARD_RULE='<application title="Keyboard"><decor>no</decor><layer>above</layer><position force="yes"><x>0</x><y>-0</y></position><focus>no</focus><skip_taskbar>yes</skip_taskbar><skip_pager>yes</skip_pager></application>'
 KEYBOARD_LAUNCHER_NAME="deskman-keyboard.desktop"
+
+# Browser that opens web links, and the snapd revision that still starts snap apps on Jetson kernels
+PI_BROWSER_DESKTOP="chromium.desktop"
+JETSON_BROWSER_DESKTOP="chromium_chromium.desktop"
+BROWSER_LINK_TYPES="x-scheme-handler/https x-scheme-handler/http text/html"
+JETSON_SNAPD_REVISION="24724"
 
 # Cursor theme holding one transparent pixel, so the compositor never draws a pointer
 CURSOR_THEME_NAME="blank"
@@ -1007,6 +1014,45 @@ disable_gnome_screen_idle() {
     run_as_user gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type 'nothing' || true
     run_as_user gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 || true
     run_as_user gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 0 || true
+}
+
+# Install Chromium and make it open web links, tapping a warning on the face and the key setup both need a browser
+install_browser() {
+    echo "Installing the browser"
+
+    # Pi OS packages Chromium as a plain deb
+    if [[ "${MACHINE}" == "pi" ]]; then
+        apt-get install -y chromium
+        run_as_user xdg-mime default "${PI_BROWSER_DESKTOP}" ${BROWSER_LINK_TYPES}
+        return
+    fi
+
+    # Jetson kernels lack what newer snapd needs to start apps, so pin the last snapd that works
+    hold_working_snapd
+
+    # Ubuntu only ships Chromium as a snap, it wants its data folder and matchpathcon ready before first run
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y selinux-utils
+    snap list chromium >/dev/null 2>&1 || snap install chromium
+    sudo -u "${RUN_USER}" mkdir -p "${RUN_HOME}/snap"
+
+    # Stock Ubuntu points links at Firefox, which is not installed
+    run_as_user xdg-mime default "${JETSON_BROWSER_DESKTOP}" ${BROWSER_LINK_TYPES}
+}
+
+# Put snapd on the revision that runs on Jetson, and stop it updating past it
+hold_working_snapd() {
+    # Leave it alone when it is already there
+    if [[ "$(snap list snapd 2>/dev/null | awk 'NR == 2 {print $3}')" != "${JETSON_SNAPD_REVISION}" ]]; then
+        download_dir="$(mktemp -d)"
+        (cd "${download_dir}" && snap download snapd --revision="${JETSON_SNAPD_REVISION}")
+        snap ack "${download_dir}/snapd_${JETSON_SNAPD_REVISION}.assert"
+        snap install "${download_dir}/snapd_${JETSON_SNAPD_REVISION}.snap"
+        rm -rf "${download_dir}"
+    fi
+
+    # Hold it, a refresh would bring back the snapd that cannot start apps
+    snap refresh --hold snapd
 }
 
 # Publish this machine as hostname.local, Avahi renames itself when IPv6 addresses come and go
