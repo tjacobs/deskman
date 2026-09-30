@@ -23,7 +23,6 @@ cd build
 
 Starts the face window, servos, camera tracking, and `talk/talk.py`. 
 
-
 | Flag           | Does                                              |
 | -------------- | ------------------------------------------------- |
 | `--no-talk`    | Skip starting `talk.py`                           |
@@ -34,18 +33,17 @@ Starts the face window, servos, camera tracking, and `talk/talk.py`.
 | `--no-camera`  | Open no camera, face tracking off                 |
 | `--help`       | List the flags                                    |
 
-
 ## Config
 
 The `config.json` file is read from the working directory, and written with defaults when missing. It holds `useCamera`, `faceTracking`, and the servo travel limits `pan_min`, `pan_max`, `tilt_min`, `tilt_max`, `hat_min`, `hat_max`, plus `hat_dir`. Servos only move once all six travel limits are present.
 
 ## Camera
 
-When the robot opens a USB camera it sets any picture settings listed for that camera model in `CAMERA_MODELS` in `src/camera.cpp`, matched on the name `v4l2-ctl --info` reports. The settings stay on the camera, so teleport calls and recordings get them too. Controls a camera lacks are skipped, and values are clamped to its range.
+When the robot opens a USB camera it sets any picture settings listed for that camera model in `CAMERA_MODELS` in `src/camera.cpp`, matched on the name `v4l2-ctl --info` reports. The settings stay on the camera, so calls and recordings get them too.
 
-The Arducam 1080P Low Light looks through the round head opening, and the dark ring makes auto exposure wash out the middle, so it gets no backlight compensation, more contrast, lower gamma, and more saturation. To tune a new camera, try values live with `v4l2-ctl -d /dev/video0 -c contrast=64`, then add a row for it.
+The Arducam 1080P Low Light gets anti-flicker off, lowest brightness, no backlight compensation, more contrast, lower gamma, and more saturation.
 
-Recordings ask for MJPEG 1920x1080 at 30 fps when the camera lists it, otherwise ffmpeg takes the camera's own mode.
+Recordings ask for 1920x1080 at 30 fps when the camera lists it, otherwise ffmpeg takes the camera's own mode.
 
 ## Menu
 
