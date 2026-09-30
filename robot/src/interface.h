@@ -57,6 +57,9 @@ const int RECORD_REQUEST_STOP = 3;
 int take_record_request();
 bool take_play_request();
 
+// True once after a client asked for talk to restart, like the key setup after saving a key
+bool take_talk_restart_request();
+
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
 

@@ -359,6 +359,13 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (talk_mode != TALK_MODE_NONE)
             switch_talk_mode(talk_mode);
 
+        // Restart talk when a client asks, a new key only loads at startup
+        if (take_talk_restart_request() && !g_no_talk) {
+            cout << "Restarting talk.py..." << endl;
+            stop_talk_process();
+            start_talk_process();
+        }
+
         // Process keyboard input on the main thread when a window exists
         while (show_window && SDL_PollEvent(&event) != 0) {
             if (event.type == SDL_QUIT ||

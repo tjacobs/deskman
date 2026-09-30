@@ -151,6 +151,12 @@ def play_last_recording():
     if not reply.get("ok"):
         raise RuntimeError(reply.get("error", "unknown error"))
 
+# Ask the robot to restart talk, so a newly saved key or setting takes effect
+def restart_talk():
+    reply = send_command({"command": "restart_talk"})
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "unknown error"))
+
 # Print a warning last so the status bar shows it, and hold it on the face
 def print_warning(text, url):
     print(f"Warning: {text}.", flush=True)

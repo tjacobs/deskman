@@ -38,17 +38,21 @@ WAYLAND_FLAG = '--ozone-platform=wayland'
 
 # Title, prompt, and width of the paste box
 DIALOG_TITLE = 'OpenAI key'
-DIALOG_TEXT = 'Log in, create a key, copy it, then paste it here'
+DIALOG_TEXT = 'Log in, create a key, and copy it, it is saved as soon as it is copied'
 DIALOG_WIDTH = '600'
+
+# How often to look at the clipboard while the box is up, a copied key closes the box so nothing needs pasting
+CLIPBOARD_POLL_SECONDS = 0.5
 
 # Import the text model helper so the key lands where talk already looks for it
 sys.path.insert(0, os.path.join(utils.SCRIPT_DIR, 'text'))
 import client as text_client
+import robot_move
 
 # Main
 def main():
     # Parse args
-    run_talk, force_terminal = parse_args()
+    run_talk, restart_talk, force_terminal = parse_args()
 
     # Say when a key is already saved, replacing it is still allowed
     report_existing_key()
@@ -69,6 +73,11 @@ def main():
     # Save it where load_openai_env_file reads it from
     save_key(key)
 
+    # Have the robot restart the talk that opened this, it only reads the key at startup
+    if restart_talk:
+        restart_robot_talk()
+        return
+
     # Start talk when asked, otherwise say how to
     if run_talk:
         start_talk()
@@ -78,10 +87,13 @@ def main():
 # Parse command line arguments
 def parse_args():
     run_talk = False
+    restart_talk = False
     force_terminal = False
     for argument in sys.argv[1:]:
         if argument == '--run':
             run_talk = True
+        elif argument == '--restart-talk':
+            restart_talk = True
         elif argument == '--terminal':
             force_terminal = True
         elif argument in ('-h', '--help'):
@@ -91,14 +103,15 @@ def parse_args():
             print(f'Unknown argument: {argument}', flush=True)
             print_usage()
             sys.exit(1)
-    return run_talk, force_terminal
+    return run_talk, restart_talk, force_terminal
 
 # Print usage help
 def print_usage():
-    print('Usage: ./install_openai_key.sh [--run] [--terminal]', flush=True)
-    print('  --run       start talk.py once the key is saved', flush=True)
-    print('  --terminal  skip the browser and paste box, prompt on the terminal', flush=True)
-    print('  (no arg)    open the key page, paste the key in a window, save it', flush=True)
+    print('Usage: ./install_openai_key.sh [--run] [--restart-talk] [--terminal]', flush=True)
+    print('  --run           start talk.py once the key is saved', flush=True)
+    print('  --restart-talk  have the robot restart its talk.py once the key is saved', flush=True)
+    print('  --terminal      skip the browser and paste box, prompt on the terminal', flush=True)
+    print('  (no arg)        open the key page, copy or type the key, save it', flush=True)
 
 # Print whether a key is already in place
 def report_existing_key():
@@ -171,15 +184,32 @@ def ask_in_window():
     if not zenity:
         return ask_on_terminal()
 
-    # Say how to get back to the box, clicking the browser raises it over the box
-    print(f'Paste the key in the {DIALOG_TITLE} box, tap it in the taskbar if the browser covers it.', flush=True)
+    # Say a copied key is enough, the box is only there for typing one in
+    print(f'Copy the key and it is saved, or type it in the {DIALOG_TITLE} box.', flush=True)
 
-    # Ask, a cancel returns nothing
+    # Show the box, and keep it open while watching the clipboard
     command = [zenity, '--entry', '--title', DIALOG_TITLE, '--text', DIALOG_TEXT, '--width', DIALOG_WIDTH, '--entry-text', prefill]
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
+    dialog = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return wait_for_key(dialog)
+
+# Take a key from the box or the clipboard, whichever comes first
+def wait_for_key(dialog):
+    # Close the box as soon as a new key is copied, touch keyboards have no paste key
+    initial = clipboard_key()
+    while dialog.poll() is None:
+        key = clipboard_key()
+        if key and key != initial:
+            print('Key copied.', flush=True)
+            dialog.terminate()
+            dialog.wait()
+            return key
+        time.sleep(CLIPBOARD_POLL_SECONDS)
+
+    # Take what was typed, a cancel returns nothing
+    typed = dialog.stdout.read().strip()
+    if dialog.returncode != 0:
         return ''
-    return result.stdout.strip()
+    return typed
 
 # Clipboard contents when they look like a key, empty otherwise
 def clipboard_key():
@@ -233,6 +263,14 @@ def save_key(key):
         env_file.write(f'{text_client.OPENAI_KEY_ENV_NAME}={key}\n')
     os.chmod(path, 0o600)
     print(f'Saved to {path}', flush=True)
+
+# Ask the robot to restart talk on the new key, or say how when the robot is not running
+def restart_robot_talk():
+    try:
+        robot_move.restart_talk()
+        print('Restarting talk with the new key.', flush=True)
+    except Exception as error:
+        print(f'Could not restart talk, {error}, restart the robot to use the key.', flush=True)
 
 # Hand over to talk in this terminal
 def start_talk():

@@ -159,6 +159,7 @@ static atomic<bool> g_move_request{false};
 static atomic<bool> g_audio_request{false};
 static atomic<int> g_record_request{RECORD_REQUEST_NONE};
 static atomic<bool> g_play_request{false};
+static atomic<bool> g_talk_restart_request{false};
 
 // The recordings list, where the files are and which row asked to be deleted
 static string g_recordings_path;
@@ -446,6 +447,11 @@ static string handle_request(const string& line, int from_fd) {
             reply = {{"ok", true}};
         } else if (command == "overlay") {
             g_overlay_open = request.value("open", false);
+            reply = {{"ok", true}};
+
+        // Restart talk from the main loop, so it picks up a newly saved key or setting
+        } else if (command == "restart_talk") {
+            g_talk_restart_request = true;
             reply = {{"ok", true}};
 
         // Show a warning on the face with an optional link to fix it, empty text clears it
@@ -1025,6 +1031,11 @@ int take_record_request() {
 // True when something asked to play the newest recording, then clear it
 bool take_play_request() {
     return g_play_request.exchange(false);
+}
+
+// True once after a client asked for talk to restart
+bool take_talk_restart_request() {
+    return g_talk_restart_request.exchange(false);
 }
 
 // True while face tracking should follow, off in ready until talk hears the wake word

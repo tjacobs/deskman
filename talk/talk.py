@@ -386,9 +386,19 @@ def offer_key_setup(asked_for_cloud):
         print(f'Run ./{KEY_SCRIPT_NAME} to add one.', flush=True)
         return
 
-    # Leave it to run on its own, talk keeps answering from the local model meanwhile
-    print('Opening the OpenAI key page, paste your key in the box.', flush=True)
-    subprocess.Popen([KEY_SCRIPT], cwd=utils.SCRIPT_DIR, start_new_session=True)
+    # Leave a setup that is already open alone, it outlives a talk restart from the Mode button
+    if key_setup_running():
+        print('The OpenAI key setup is already open, copy your key and it is saved.', flush=True)
+        return
+
+    # Leave it to run on its own, talk answers from the local model until the robot restarts it on the saved key
+    print('Opening the OpenAI key page, copy your key and it is saved.', flush=True)
+    subprocess.Popen([KEY_SCRIPT, '--restart-talk'], cwd=utils.SCRIPT_DIR, start_new_session=True)
+
+# True when a key setup from an earlier talk is still waiting for a key
+def key_setup_running():
+    result = subprocess.run(['pgrep', '-f', KEY_SCRIPT], capture_output=True)
+    return result.returncode == 0
 
 # Leave the cloud path and keep Hugging Face offline when the net is down
 def use_local_text():
