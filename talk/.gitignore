@@ -8,7 +8,7 @@ log.txt
 monitor.log
 text_server.log
 tools/memory.log
-tools/plot_fan_output.png
+tools/fan_plot_output.png
 tools/fan_samples.csv
 memory.json
 reminders.json

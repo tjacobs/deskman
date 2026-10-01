@@ -19,7 +19,7 @@ SAMPLE_INTERVAL_SECONDS = 2
 # Config where samples and the plot go, beside this script
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 SAMPLES_PATH = os.path.join(TOOLS_DIR, 'fan_samples.csv')
-PLOT_PATH = os.path.join(TOOLS_DIR, 'plot_fan_output.png')
+PLOT_PATH = os.path.join(TOOLS_DIR, 'fan_plot_output.png')
 
 # Config the sysfs devices, matched by name as the numbers move between boots
 HWMON_ROOT = '/sys/class/hwmon'
