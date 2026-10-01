@@ -913,9 +913,9 @@ static void switch_talk_mode(int mode) {
     }
     file.close();
 
-    // Realtime streams to OpenAI, so it asks for the cloud backend as well
+    // Save only the chosen mode as true, the three are one choice
     config["local"] = mode == TALK_MODE_LOCAL;
-    config["cloud"] = mode != TALK_MODE_LOCAL;
+    config["cloud"] = mode == TALK_MODE_CLOUD;
     config["realtime"] = mode == TALK_MODE_REALTIME;
 
     // Write the file, and say so when it cannot be saved

@@ -173,18 +173,19 @@ Realtime settings live in `config.json`, next to `talk.py`. Anything missing fal
 
 ```json
 {
-  "cloud": true,
-  "realtime": true,
   "local": false,
+  "cloud": false,
+  "realtime": true,
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo",
   "realtime_accent": "You are a British man from London. Speak with a natural British accent."
 }
 ```
 
-- `cloud` — force OpenAI for text, the same as passing `--cloud`
-- `realtime` — answer with speech to speech, the same as passing `--realtime`
-- `local` — force the local Gemma server, the same as passing `--local`
+- `local`, `cloud`, `realtime` — the saved mode, set exactly one true, the robot mode buttons write these
+- `local` — the local Gemma server, the same as passing `--local`
+- `cloud` — OpenAI for text with the kokoro voice, the same as passing `--cloud`
+- `realtime` — OpenAI speech to speech, the same as passing `--realtime`
 - `realtime_model` — the realtime model, the mini one is cheaper and quick enough to hold a conversation
 - `realtime_voice` — the OpenAI voice, separate from the kokoro `VOICES` the local path uses
 - `realtime_accent` — appended to the system prompt, the voices are American by default and this is what makes one sound British
@@ -207,7 +208,7 @@ journalctl -u robot -f
 tail -f log.txt
 ```
 
-The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Set `"realtime": true` in `config.json` and restart to run the service on speech to speech. Set `"cloud": true` to force OpenAI, or `"local": true` to force Gemma. `--cloud`, `--realtime`, and `--local` on the command line still win.
+The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Tap Local, Cloud, or Realtime in the robot menu, or set exactly one of `"local"`, `"cloud"`, or `"realtime"` true in `config.json` and restart. With none true, talk uses OpenAI when online with a key, otherwise Gemma. `--cloud`, `--realtime`, and `--local` on the command line still win.
 
 ## Testing
 

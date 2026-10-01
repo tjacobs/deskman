@@ -132,6 +132,9 @@ SPEECH_MODELS_EXPECTED_GB = WHISPER_EXPECTED_GB + KOKORO_EXPECTED_GB
 SPEECH_STACK_EXPECTED_GB = TEXT_SERVER_EXPECTED_GB + SPEECH_MODELS_EXPECTED_GB
 MEMORY_LOW_GB = 0.5
 
+# Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
+TALK_MODE_NAMES = ('local', 'cloud', 'realtime')
+
 # State
 TEST_MODE = False
 REPEAT_MODE = False
@@ -175,25 +178,15 @@ def main():
     global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, text_server_process
     TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE = parse_args()
 
-    # Load once, the robot service has no flags so cloud, realtime, and local live here
-    config = utils.load_config({'cloud': False, 'realtime': REALTIME_MODE, 'local': False})
+    # Load the saved mode, the robot service has no flags so it lives in config.json
+    saved_mode = load_saved_mode()
 
-    # Config cannot force both backends, the flags already reject that pair
-    if config['local'] and config['cloud']:
-        print('Error: config.json has local and cloud both true, pick one.')
-        print_usage()
-        sys.exit(1)
-
-    # Config local is --local for the robot service, a --cloud or --realtime flag still wins
-    if config['local'] and not realtime_flag and not cloud_flag:
-        local_flag = True
-
-    # Config cloud is --cloud for the robot service, a --local flag still wins
-    if config['cloud'] and not local_flag:
-        cloud_flag = True
-
-    # Take realtime from the flag or config.json
-    REALTIME_MODE = realtime_flag or config['realtime']
+    # Run the saved mode unless a flag picked one
+    if not realtime_flag and not cloud_flag and not local_flag:
+        realtime_flag = saved_mode == 'realtime'
+        cloud_flag = saved_mode == 'cloud'
+        local_flag = saved_mode == 'local'
+    REALTIME_MODE = realtime_flag
 
     # Two flags that contradict each other, say so rather than quietly pick one
     if realtime_flag and local_flag:
@@ -336,6 +329,15 @@ def parse_args():
 
     # Return the arguments
     return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode
+
+# Read the one mode config.json has true, empty when none is, and stop when more than one is
+def load_saved_mode():
+    config = utils.load_config({name: False for name in TALK_MODE_NAMES})
+    saved = [name for name in TALK_MODE_NAMES if config[name]]
+    if len(saved) > 1:
+        print(f'Error: config.json has {", ".join(saved)} true, set only one of local, cloud, or realtime.')
+        sys.exit(1)
+    return saved[0] if saved else ''
 
 # Use OpenAI when online and a key is present, unless --cloud or --local
 def choose_text_backend(cloud_flag, local_flag, model_name):
