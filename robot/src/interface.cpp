@@ -74,10 +74,10 @@ static const int MENU_BACK = 10;
 static const char* MENU_ITEM_LABELS[] = {"Listen", "Camera", "Record", "Videos", "Move", "Audio", "WiFi", "Call", "Exit", "Settings", "Back"};
 
 // Items on the main page, and on the page Settings opens, top to bottom
-static const int MENU_MAIN_ITEMS[] = {MENU_LISTEN, MENU_CAMERA, MENU_RECORD, MENU_VIDEOS, MENU_CALL, MENU_SETTINGS, MENU_EXIT};
-static const int MENU_MAIN_COUNT = 7;
-static const int MENU_SETTINGS_ITEMS[] = {MENU_MOVE, MENU_AUDIO, MENU_WIFI, MENU_BACK};
-static const int MENU_SETTINGS_COUNT = 4;
+static const int MENU_MAIN_ITEMS[] = {MENU_LISTEN, MENU_CAMERA, MENU_RECORD, MENU_VIDEOS, MENU_CALL, MENU_SETTINGS};
+static const int MENU_MAIN_COUNT = 6;
+static const int MENU_SETTINGS_ITEMS[] = {MENU_MOVE, MENU_AUDIO, MENU_WIFI, MENU_EXIT, MENU_BACK};
+static const int MENU_SETTINGS_COUNT = 5;
 
 // The Record item says how to end the recording while one is running, and Listen says Quiet while talk listens
 static const char* MENU_STOP_LABEL = "Stop";
@@ -1072,6 +1072,10 @@ void handle_call_event(const SDL_Event& event) {
         printf("Tap %s at %d,%d of %dx%d hit %s, %.1f sec after start\n", tap_source, x, y, screen_width, screen_height, hit_name, seconds_since_start());
         fflush(stdout);
     }
+
+    // Drop a second press of the same touch, a page swap puts another button under the finger
+    if ((item >= 0 || talk_mode != TALK_MODE_NONE) && !debounce_tap())
+        return;
 
     // Light a new mode and restart talk on it, the menu stays up so the lit button shows where it landed
     if (talk_mode != TALK_MODE_NONE) {
