@@ -47,6 +47,7 @@ main() {
     install_browser
     quiet_fan_when_cool
     keep_wifi_awake
+    allow_network_control
     fix_mdns_name
     echo "Done."
 }
@@ -86,6 +87,10 @@ MACHINE=""
 # NetworkManager drop-in that keeps the Wi-Fi radio awake for calls
 NETWORK_MANAGER_CONF_DIR="/etc/NetworkManager/conf.d"
 WIFI_POWER_SAVE_CONF_NAME="10-wifi-no-power-save.conf"
+
+# Polkit rules that let the robot service join networks, older polkit reads pkla and newer reads JavaScript rules
+POLKIT_PKLA_PATH="/etc/polkit-1/localauthority/50-local.d/50-deskman-network.pkla"
+POLKIT_RULES_PATH="/etc/polkit-1/rules.d/50-deskman-network.rules"
 
 # Avahi paths, the drop-in holds Avahi back until the network is up
 AVAHI_CONF="/etc/avahi/avahi-daemon.conf"
@@ -1135,6 +1140,32 @@ EOF
     if systemctl is-active --quiet NetworkManager; then
         systemctl reload NetworkManager || true
     fi
+}
+
+# Let the robot user join and change networks with no one logged in, the WiFi list runs from the robot service
+allow_network_control() {
+    # Older polkit, like Ubuntu 22.04 on Jetson
+    mkdir -p "$(dirname "${POLKIT_PKLA_PATH}")"
+    cat > "${POLKIT_PKLA_PATH}" <<EOF
+[Let ${RUN_USER} control networking from the robot service]
+Identity=unix-user:${RUN_USER}
+Action=org.freedesktop.NetworkManager.*
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes
+EOF
+    echo "Wrote ${POLKIT_PKLA_PATH}"
+
+    # Newer polkit, like Raspberry Pi OS Bookworm
+    mkdir -p "$(dirname "${POLKIT_RULES_PATH}")"
+    cat > "${POLKIT_RULES_PATH}" <<EOF
+// Written by robot/install_system.sh, lets the robot service join networks
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 && subject.user == "${RUN_USER}")
+        return polkit.Result.YES;
+});
+EOF
+    echo "Wrote ${POLKIT_RULES_PATH}"
 }
 
 fix_mdns_name() {

@@ -108,8 +108,12 @@ static const char* VIDEO_PLAYING_TEXT = "Tap to stop";
 static const char* VIDEO_MEASURING_TEXT = "--:--";
 
 // The wireless list, a row for each network in range
-static const char* WIFI_LOOKING_TEXT = "Looking...";
-static const char* WIFI_SAVED_MARK = "saved";
+static const char* WIFI_LOOKING_TEXT = "Scanning...";
+static const char* WIFI_CONNECTING_TEXT = "Connecting...";
+static const char* WIFI_SAVED_MARK = "Saved";
+
+// How long the open network list waits after a scan before scanning again
+static const int WIFI_REFRESH_MS = 10000;
 static const char* WIFI_CONNECTED_MARK = "Connected";
 
 // Menu button colors
@@ -940,8 +944,19 @@ void draw_wifi_list(TTF_Font* font) {
     // Darken the face behind the list
     draw_list_backdrop();
 
-    // Where the robot is connected, and on what address
-    string header = wifi_busy() ? WIFI_LOOKING_TEXT : wifi_status_text();
+    // Scan again a while after the last scan or join finished, so the list keeps up while it is open
+    static steady_clock::time_point last_scan = steady_clock::now();
+    if (wifi_busy())
+        last_scan = steady_clock::now();
+    else if (steady_clock::now() - last_scan >= milliseconds(WIFI_REFRESH_MS))
+        refresh_networks();
+
+    // Where the robot is connected and on what address, or what it is busy doing
+    string header = wifi_status_text();
+    if (wifi_joining())
+        header = WIFI_CONNECTING_TEXT;
+    else if (wifi_busy())
+        header = WIFI_LOOKING_TEXT;
     draw_text(header.c_str(), VIDEO_LIST_PAD + VIDEO_TEXT_PAD, VIDEO_LIST_TOP, font, BUTTON_LABEL_COLOR);
 
     // A row for each network in range, name, strength, and whether it can be joined
@@ -971,7 +986,7 @@ static bool handle_wifi_tap(int x, int y) {
         if (!tap_in_rect(x, y, video_row_rect(row + 1)))
             continue;
         if (!networks[row].active)
-            connect_network(networks[row].name);
+            connect_network(networks[row]);
         return true;
     }
 

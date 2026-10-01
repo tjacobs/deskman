@@ -24,8 +24,9 @@ string wifi_status_text();
 // The networks found by the last look, strongest first
 vector<Network> wifi_networks();
 
-// Join a network, one that has been set up before needs no password
-void connect_network(const string& name);
+// Join a network, a new secure one asks for its password on screen
+void connect_network(const Network& network);
 
-// True while a look or a join is still going
+// True while a look or a join is still going, and true only for a join
 bool wifi_busy();
+bool wifi_joining();
