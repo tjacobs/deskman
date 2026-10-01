@@ -258,7 +258,7 @@ int main(int argc, char **argv) {
     else
         use_camera = false;
 
-    // Spawn talk after the bus, socket, and camera probe, with the Mode button on the model it runs
+    // Spawn talk after the bus, socket, and camera probe, with the mode buttons on the model it runs
     set_talk_mode(load_talk_mode());
     if (!g_no_talk)
         start_talk_process();
@@ -354,7 +354,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (take_play_request())
             play_last_recording();
 
-        // Run talk on another model once the Mode button stops changing
+        // Run talk on another model once a mode button is tapped
         int talk_mode = take_talk_mode_request();
         if (talk_mode != TALK_MODE_NONE)
             switch_talk_mode(talk_mode);

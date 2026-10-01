@@ -110,6 +110,7 @@ CHIME_WAV = 'chime.wav'
 TEXT_DIR = os.path.join(utils.SCRIPT_DIR, 'text')
 TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
 TEXT_CUDA_LIBRARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'libggml-cuda.so')
+TEXT_SERVER_BINARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'llama-server')
 TEXT_UNAVAILABLE = 'The language model is not running.'
 CLOUD_UNAVAILABLE = "Sorry, I can't reach OpenAI right now."
 LOW_BATTERY_UNSAID = 'Please plug me in.'
@@ -216,7 +217,7 @@ def main():
     CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
 
     # Update the mode button on screen
-    robot_move.show_talk_mode(running_mode_name())
+    robot_move.show_talk_mode(running_mode_name(), available_mode_names())
 
     # Make sure only one running
     check_already_running()
@@ -398,7 +399,7 @@ def offer_key_setup(asked_for_cloud):
         print(f'Run ./{KEY_SCRIPT_NAME} to add one.', flush=True)
         return
 
-    # Leave a setup that is already open alone, it outlives a talk restart from the Mode button
+    # Leave a setup that is already open alone, it outlives a talk restart from the mode buttons
     if key_setup_running():
         print('The OpenAI key setup is already open, copy your key and it is saved.', flush=True)
         return
@@ -419,13 +420,28 @@ def use_local_text():
         utils.use_hub_offline()
     return False
 
-# Name the mode talk is running in, the same names as the robot Mode button
+# Name the mode talk is running in, the same names as the robot mode buttons
 def running_mode_name():
     if REALTIME_MODE:
         return 'realtime'
     if CLOUD_MODE:
         return 'cloud'
     return 'local'
+
+# Name the modes that could run now, local once Gemma is built, cloud and realtime with the net and a key
+def available_mode_names():
+    names = []
+    if os.path.isfile(TEXT_SERVER_BINARY):
+        names.append('local')
+
+    # Cloud and realtime both need the net and the key, realtime its websocket too
+    text_client.load_openai_env_file()
+    online = utils.network_available() and bool(text_client.cloud_api_key())
+    if online:
+        names.append('cloud')
+    if online and realtime is not None:
+        names.append('realtime')
+    return names
 
 # Why realtime cannot start, empty when it can
 def realtime_unavailable_reason():

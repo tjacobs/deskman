@@ -60,32 +60,32 @@ static const bool LOG_TAPS = false;
 static const int NO_CLIENT = -1;
 
 // Menu items stacked above the button
-static const int MENU_QUIET = 0;
-static const int MENU_LISTEN = 1;
-static const int MENU_MOVE = 2;
-static const int MENU_CAMERA = 3;
-static const int MENU_RECORD = 4;
-static const int MENU_VIDEOS = 5;
-static const int MENU_MODE = 6;
-static const int MENU_AUDIO = 7;
-static const int MENU_WIFI = 8;
-static const int MENU_CALL = 9;
-static const int MENU_EXIT = 10;
-static const char* MENU_ITEM_LABELS[] = {"Quiet", "Listen", "Move", "Camera", "Record", "Videos", "Mode", "Audio", "WiFi", "Call", "Exit"};
+static const int MENU_LISTEN = 0;
+static const int MENU_CAMERA = 1;
+static const int MENU_RECORD = 2;
+static const int MENU_VIDEOS = 3;
+static const int MENU_MOVE = 4;
+static const int MENU_AUDIO = 5;
+static const int MENU_WIFI = 6;
+static const int MENU_CALL = 7;
+static const int MENU_EXIT = 8;
+static const int MENU_SETTINGS = 9;
+static const int MENU_BACK = 10;
+static const char* MENU_ITEM_LABELS[] = {"Listen", "Camera", "Record", "Videos", "Move", "Audio", "WiFi", "Call", "Exit", "Settings", "Back"};
 
-// Menu item size
-static const int MENU_ITEM_COUNT = 11;
+// Items on the main page, and on the page Settings opens, top to bottom
+static const int MENU_MAIN_ITEMS[] = {MENU_LISTEN, MENU_CAMERA, MENU_RECORD, MENU_VIDEOS, MENU_SETTINGS, MENU_CALL, MENU_EXIT};
+static const int MENU_MAIN_COUNT = 7;
+static const int MENU_SETTINGS_ITEMS[] = {MENU_MOVE, MENU_AUDIO, MENU_WIFI, MENU_BACK};
+static const int MENU_SETTINGS_COUNT = 4;
 
-// The Record item says how to end the recording while one is running
+// The Record item says how to end the recording while one is running, and Listen says Quiet while talk listens
 static const char* MENU_STOP_LABEL = "Stop";
-static const int MENU_ITEM_WIDTH = 160;
+static const char* MENU_QUIET_LABEL = "Quiet";
 
-// Which model talk runs, the Mode button steps through these in order
+// Which model talk runs, a row of one button each along the bottom while the menu is open
 static const char* TALK_MODE_LABELS[] = {"Local", "Cloud", "Realtime"};
 static const int TALK_MODE_COUNT = 3;
-
-// Wait out a run of taps before restarting talk, so stepping past a mode costs nothing
-static const int TALK_MODE_APPLY_MS = 2000;
 
 // Hamburger button size and its three lines
 static const int HAMBURGER_BUTTON_WIDTH = 72;
@@ -124,6 +124,12 @@ static const SDL_Color VIDEO_BACKDROP_COLOR = {20, 20, 25, 235};
 static const SDL_Color WIFI_ACTIVE_COLOR = {30, 140, 70, 255};
 static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
+
+// Mode button colors, the running mode lit green like Camera when on, the others dark, and ones that cannot run now dimmer still
+static const SDL_Color TALK_MODE_ON_COLOR = {30, 140, 70, 255};
+static const SDL_Color TALK_MODE_OFF_COLOR = {60, 60, 70, 255};
+static const SDL_Color TALK_MODE_UNAVAILABLE_COLOR = {40, 40, 45, 255};
+static const SDL_Color TALK_MODE_UNAVAILABLE_LABEL_COLOR = {120, 120, 130, 255};
 
 // A warning with a link says it can be tapped, and a tap near it opens the link in the browser
 static const char* WARNING_LINK_HINT = ", tap to fix";
@@ -181,12 +187,13 @@ static string g_video_confirm_path;
 // The wireless list
 static atomic<bool> g_wifi_list_open{false};
 static atomic<bool> g_menu_open{false};
+static atomic<bool> g_settings_open{false};
 static steady_clock::time_point g_last_menu_tap{};
 
-// Mode shown on the button, and the tap that has not reached talk yet
+// The one mode talk runs, the tap that has not reached talk yet, and whether each mode could run, dimmed when not
 static atomic<int> g_talk_mode{0};
 static atomic<bool> g_talk_mode_pending{false};
-static steady_clock::time_point g_talk_mode_tap{};
+static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true};
 static steady_clock::time_point g_interface_start{};
 
 // Handoff of the camera between the robot and a call
@@ -206,6 +213,7 @@ static string handle_request(const string& line, int from_fd);
 static json position_reply();
 static int request_int(const json& request, const char* key, int fallback);
 static int talk_mode_from_name(const string& name);
+static void set_talk_modes_available(const json& names);
 static bool wait_call_handoff(int command);
 static void send_menu();
 static void send_waiting_call(int client_fd);
@@ -216,7 +224,12 @@ static void set_menu_open(bool open);
 static const char* menu_item_label(int index);
 static SDL_Color menu_item_color(int index);
 static SDL_Rect menu_button_rect();
-static SDL_Rect menu_item_rect(int index);
+static int menu_row_count();
+static int menu_row_item(int row);
+static SDL_Rect menu_item_rect(int row);
+static SDL_Rect talk_mode_rect(int mode);
+static int menu_item_width();
+static void draw_talk_modes(TTF_Font* font);
 static void open_video_list();
 static bool handle_video_tap(int x, int y);
 static SDL_Rect video_row_rect(int row);
@@ -229,6 +242,7 @@ static void open_link(const string& url);
 static void draw_list_backdrop();
 static bool tap_in_rect(int x, int y, SDL_Rect rect);
 static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
+static void draw_button(SDL_Rect rect, const char* label, SDL_Color fill, SDL_Color label_color, TTF_Font* font);
 static void draw_hamburger_icon(SDL_Rect rect);
 static void send_to_clients(const string& line, int skip_fd);
 static void remove_client(int client_fd);
@@ -477,7 +491,7 @@ static string handle_request(const string& line, int from_fd) {
             g_warning_url = request.value("url", "");
             reply = {{"ok", true}};
 
-        // Show the mode talk started in, it can fall back from the saved one, which stays for the next start
+        // Light the mode talk started in and dim the ones it cannot run, it can fall back from the saved one, which stays for the next start
         } else if (command == "talk_mode") {
             int mode = talk_mode_from_name(request.value("mode", ""));
             if (mode == TALK_MODE_NONE) {
@@ -485,6 +499,7 @@ static string handle_request(const string& line, int from_fd) {
             } else {
                 if (!g_talk_mode_pending.load())
                     g_talk_mode = mode;
+                set_talk_modes_available(request.value("available", json::array()));
                 reply = {{"ok", true}};
             }
         } else {
@@ -525,6 +540,20 @@ static int talk_mode_from_name(const string& name) {
             return mode;
     }
     return TALK_MODE_NONE;
+}
+
+// Mark each mode talk listed as able to run and dim the rest, every mode stays lit when talk sent no list
+static void set_talk_modes_available(const json& names) {
+    bool listed = names.is_array() && !names.empty();
+    for (int mode = 0; mode < TALK_MODE_COUNT; mode++)
+        g_talk_mode_available[mode] = !listed;
+    if (!listed)
+        return;
+    for (const json& name : names) {
+        int mode = name.is_string() ? talk_mode_from_name(name.get<string>()) : TALK_MODE_NONE;
+        if (mode != TALK_MODE_NONE)
+            g_talk_mode_available[mode] = true;
+    }
 }
 
 // Post a pause or resume, then wait for the main loop to answer
@@ -627,12 +656,12 @@ void complete_call_handoff(bool ok) {
     g_handoff_cv.notify_all();
 }
 
-// Name one popup item, Mode wears the model talk is set to and Record turns into Stop
+// Name one popup item, Record turns into Stop, and Listen into Quiet while talk is listening
 static const char* menu_item_label(int index) {
-    if (index == MENU_MODE)
-        return TALK_MODE_LABELS[g_talk_mode.load()];
     if (index == MENU_RECORD && recording())
         return MENU_STOP_LABEL;
+    if (index == MENU_LISTEN && g_listen_open.load())
+        return MENU_QUIET_LABEL;
     return MENU_ITEM_LABELS[index];
 }
 
@@ -655,12 +684,37 @@ static SDL_Rect menu_button_rect() {
     return {screen_width - pad - HAMBURGER_BUTTON_WIDTH, bar_y + pad, HAMBURGER_BUTTON_WIDTH, height};
 }
 
-// Place a popup item above the menu button, one extra gap under Exit, Quiet at the top
-static SDL_Rect menu_item_rect(int index) {
+// Count the items on the page showing
+static int menu_row_count() {
+    return g_settings_open.load() ? MENU_SETTINGS_COUNT : MENU_MAIN_COUNT;
+}
+
+// Name the item on one row of the page showing
+static int menu_row_item(int row) {
+    return g_settings_open.load() ? MENU_SETTINGS_ITEMS[row] : MENU_MAIN_ITEMS[row];
+}
+
+// Place a popup row above the menu button, one extra gap under the bottom row, the first row at the top
+static SDL_Rect menu_item_rect(int row) {
     SDL_Rect menu_rect = menu_button_rect();
     int pad = status_bar_pad();
-    int from_bottom = MENU_ITEM_COUNT - index;
-    return {screen_width - pad - MENU_ITEM_WIDTH, menu_rect.y - from_bottom * (menu_rect.h + pad) - pad, MENU_ITEM_WIDTH, menu_rect.h};
+    int from_bottom = menu_row_count() - row;
+    int width = menu_item_width();
+    return {screen_width - pad - width, menu_rect.y - from_bottom * (menu_rect.h + pad) - pad, width, menu_rect.h};
+}
+
+// Place one mode button in the row left of the popup, level with its bottom row, Local on the left
+static SDL_Rect talk_mode_rect(int mode) {
+    SDL_Rect bottom_rect = menu_item_rect(menu_row_count() - 1);
+    int pad = status_bar_pad();
+    return {pad + mode * (bottom_rect.w + pad), bottom_rect.y, bottom_rect.w, bottom_rect.h};
+}
+
+// Share the screen width between the mode row and the popup column, so every button is the same width
+static int menu_item_width() {
+    int pad = status_bar_pad();
+    int columns = TALK_MODE_COUNT + 1;
+    return (screen_width - pad * (columns + 1)) / columns;
 }
 
 // True when a tap lands inside a button
@@ -668,8 +722,13 @@ static bool tap_in_rect(int x, int y, SDL_Rect rect) {
     return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
 }
 
-// Draw a filled button with a centered label
+// Draw a filled button with a centered white label
 static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font) {
+    draw_button(rect, label, fill, BUTTON_LABEL_COLOR, font);
+}
+
+// Draw a filled button with a centered label in the given color
+static void draw_button(SDL_Rect rect, const char* label, SDL_Color fill, SDL_Color label_color, TTF_Font* font) {
     SDL_SetRenderDrawColor(renderer, fill.r, fill.g, fill.b, fill.a);
     SDL_RenderFillRect(renderer, &rect);
     if (!font || !label)
@@ -680,7 +739,7 @@ static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TT
     int text_height = 0;
     if (TTF_SizeUTF8(font, label, &text_width, &text_height) != 0)
         return;
-    draw_text(label, rect.x + (rect.w - text_width) / 2, rect.y + (rect.h - text_height) / 2, font, BUTTON_LABEL_COLOR);
+    draw_text(label, rect.x + (rect.w - text_width) / 2, rect.y + (rect.h - text_height) / 2, font, label_color);
 }
 
 // Draw three horizontal lines in the menu button
@@ -699,9 +758,11 @@ static void draw_hamburger_icon(SDL_Rect rect) {
 // Draw the menu button, and the popup above it when it is open
 void draw_menu(TTF_Font* font) {
     if (g_menu_open) {
-        for (int index = 0; index < MENU_ITEM_COUNT; index++) {
-            draw_bar_button(menu_item_rect(index), menu_item_label(index), menu_item_color(index), font);
+        for (int row = 0; row < menu_row_count(); row++) {
+            int item = menu_row_item(row);
+            draw_bar_button(menu_item_rect(row), menu_item_label(item), menu_item_color(item), font);
         }
+        draw_talk_modes(font);
     }
 
     // Three-line toggle on the right of the status bar
@@ -709,6 +770,21 @@ void draw_menu(TTF_Font* font) {
     SDL_Color menu_fill = g_menu_open ? MENU_OPEN_COLOR : MENU_BUTTON_COLOR;
     draw_bar_button(menu_rect, nullptr, menu_fill, font);
     draw_hamburger_icon(menu_rect);
+}
+
+// Draw the three mode buttons, the running one lit and the ones talk cannot run dimmed
+static void draw_talk_modes(TTF_Font* font) {
+    for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
+        SDL_Color fill = TALK_MODE_OFF_COLOR;
+        SDL_Color label_color = BUTTON_LABEL_COLOR;
+        if (mode == g_talk_mode.load()) {
+            fill = TALK_MODE_ON_COLOR;
+        } else if (!g_talk_mode_available[mode].load()) {
+            fill = TALK_MODE_UNAVAILABLE_COLOR;
+            label_color = TALK_MODE_UNAVAILABLE_LABEL_COLOR;
+        }
+        draw_button(talk_mode_rect(mode), TALK_MODE_LABELS[mode], fill, label_color, font);
+    }
 }
 
 // Draw the recordings list, or the video that is playing
@@ -840,7 +916,7 @@ static SDL_Rect video_delete_rect(int row) {
 // Place a page button under the rows, older on the right and newer on the left
 static SDL_Rect video_page_rect(bool older) {
     int y = VIDEO_LIST_TOP + video_rows_that_fit() * (VIDEO_ROW_HEIGHT + VIDEO_ROW_GAP);
-    int width = MENU_ITEM_WIDTH;
+    int width = menu_item_width();
     int x = older ? screen_width - VIDEO_LIST_PAD - width : VIDEO_LIST_PAD;
     return {x, y, width, VIDEO_ROW_HEIGHT};
 }
@@ -927,9 +1003,10 @@ int menu_button_left() {
     return menu_button_rect().x;
 }
 
-// Show or hide the popup list
+// Show or hide the popup list, it always opens on the main page
 static void set_menu_open(bool open) {
     g_menu_open = open;
+    g_settings_open = false;
     if (open)
         set_status_bar_visible(true);
 }
@@ -966,12 +1043,17 @@ void handle_call_event(const SDL_Event& event) {
     // Keep the bar reachable while the popup or a call overlay is up
     bool bar_showing = status_bar_visible() || menu_open() || g_overlay_open.load();
     int item = -1;
+    int talk_mode = TALK_MODE_NONE;
     if (bar_showing && menu_open()) {
-        for (int index = 0; index < MENU_ITEM_COUNT; index++) {
-            if (tap_in_rect(x, y, menu_item_rect(index))) {
-                item = index;
+        for (int row = 0; row < menu_row_count(); row++) {
+            if (tap_in_rect(x, y, menu_item_rect(row))) {
+                item = menu_row_item(row);
                 break;
             }
+        }
+        for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
+            if (tap_in_rect(x, y, talk_mode_rect(mode)))
+                talk_mode = mode;
         }
     }
     bool hit_menu = bar_showing && item < 0 && tap_in_rect(x, y, menu_button_rect());
@@ -980,6 +1062,8 @@ void handle_call_event(const SDL_Event& event) {
     const char* hit_name = "face";
     if (item >= 0)
         hit_name = menu_item_label(item);
+    else if (talk_mode != TALK_MODE_NONE)
+        hit_name = TALK_MODE_LABELS[talk_mode];
     else if (hit_menu)
         hit_name = "Menu";
 
@@ -989,20 +1073,36 @@ void handle_call_event(const SDL_Event& event) {
         fflush(stdout);
     }
 
-    // Popup items close the list, then do the action, Mode stays up so it can be stepped again
-    if (item >= 0 && item != MENU_MODE)
+    // Light a new mode and restart talk on it, the menu stays up so the lit button shows where it landed
+    if (talk_mode != TALK_MODE_NONE) {
+        if (talk_mode != g_talk_mode.load()) {
+            g_talk_mode = talk_mode;
+            g_talk_mode_pending = true;
+        }
+        return;
+    }
+
+    // Settings and Back swap the page, the menu stays up
+    if (item == MENU_SETTINGS || item == MENU_BACK) {
+        g_settings_open = item == MENU_SETTINGS;
+        return;
+    }
+
+    // Popup items close the list, then do the action
+    if (item >= 0)
         set_menu_open(false);
     if (item == MENU_EXIT) {
         send_to_clients(json{{"command", "quit"}}.dump(), NO_CLIENT);
         g_quit = true;
         return;
     }
-    if (item == MENU_QUIET) {
-        send_quiet();
-        return;
-    }
+
+    // Listen wakes talk, and quiets it when it is already listening
     if (item == MENU_LISTEN) {
-        send_to_clients(json{{"command", "wake"}}.dump(), NO_CLIENT);
+        if (g_listen_open.load())
+            send_quiet();
+        else
+            send_to_clients(json{{"command", "wake"}}.dump(), NO_CLIENT);
         return;
     }
     if (item == MENU_MOVE) {
@@ -1028,12 +1128,6 @@ void handle_call_event(const SDL_Event& event) {
     if (item == MENU_WIFI) {
         refresh_networks();
         g_wifi_list_open = true;
-        return;
-    }
-    if (item == MENU_MODE) {
-        g_talk_mode = (g_talk_mode.load() + 1) % TALK_MODE_COUNT;
-        g_talk_mode_pending = true;
-        g_talk_mode_tap = steady_clock::now();
         return;
     }
     if (item == MENU_CALL) {
@@ -1194,18 +1288,15 @@ void set_camera_showing(bool showing) {
     g_camera_showing = showing;
 }
 
-// Show the mode talk is running, so the button starts on the right label
+// Light the saved mode, so the row starts on the right button before talk reports in
 void set_talk_mode(int mode) {
     g_talk_mode = mode;
 }
 
-// The mode the button settled on, or no mode while taps are still coming
+// The mode button just tapped, or no mode when none is waiting
 int take_talk_mode_request() {
-    if (!g_talk_mode_pending.load())
+    if (!g_talk_mode_pending.exchange(false))
         return TALK_MODE_NONE;
-    if (duration_cast<milliseconds>(steady_clock::now() - g_talk_mode_tap).count() < TALK_MODE_APPLY_MS)
-        return TALK_MODE_NONE;
-    g_talk_mode_pending = false;
     return g_talk_mode.load();
 }
 

@@ -176,10 +176,10 @@ def show_warning(text, url):
     except Exception:
         pass
 
-# Put the mode talk started in on the Mode button
-def show_talk_mode(mode):
+# Light the mode talk started in on the mode buttons, and dim the ones it cannot run
+def show_talk_mode(mode, available):
     try:
-        send_command({"command": "talk_mode", "mode": mode})
+        send_command({"command": "talk_mode", "mode": mode, "available": available})
     except Exception:
         pass
 

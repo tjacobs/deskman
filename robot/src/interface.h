@@ -69,7 +69,7 @@ void draw_warning(TTF_Font* font, int x, int y, SDL_Color color);
 // Send talk back to ready, the same as tapping Quiet
 void send_quiet();
 
-// Which model talk runs, and no request waiting on the Mode button
+// Which model talk runs, and no request waiting on the mode buttons
 const int TALK_MODE_LOCAL = 0;
 const int TALK_MODE_CLOUD = 1;
 const int TALK_MODE_REALTIME = 2;
@@ -78,7 +78,7 @@ const int TALK_MODE_NONE = -1;
 // Show whether the camera preview is up, so the Camera button can say so
 void set_camera_showing(bool showing);
 
-// Show the mode talk is running, take the mode the Mode button settled on, and name one
+// Light the mode talk is running, take the mode button just tapped, and name one
 void set_talk_mode(int mode);
 int take_talk_mode_request();
 const char* talk_mode_name(int mode);
