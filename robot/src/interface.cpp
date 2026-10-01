@@ -74,7 +74,7 @@ static const int MENU_BACK = 10;
 static const char* MENU_ITEM_LABELS[] = {"Listen", "Camera", "Record", "Videos", "Move", "Audio", "WiFi", "Call", "Exit", "Settings", "Back"};
 
 // Items on the main page, and on the page Settings opens, top to bottom
-static const int MENU_MAIN_ITEMS[] = {MENU_LISTEN, MENU_CAMERA, MENU_RECORD, MENU_VIDEOS, MENU_SETTINGS, MENU_CALL, MENU_EXIT};
+static const int MENU_MAIN_ITEMS[] = {MENU_LISTEN, MENU_CAMERA, MENU_RECORD, MENU_VIDEOS, MENU_CALL, MENU_SETTINGS, MENU_EXIT};
 static const int MENU_MAIN_COUNT = 7;
 static const int MENU_SETTINGS_ITEMS[] = {MENU_MOVE, MENU_AUDIO, MENU_WIFI, MENU_BACK};
 static const int MENU_SETTINGS_COUNT = 4;

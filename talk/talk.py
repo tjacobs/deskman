@@ -123,7 +123,7 @@ TEXT_SERVER_RESTART_TRIES = 3
 # Script that opens the key page and saves what gets pasted, and the reason that calls for it
 KEY_SCRIPT_NAME = 'install_openai_key.sh'
 KEY_SCRIPT = os.path.join(utils.SCRIPT_DIR, KEY_SCRIPT_NAME)
-NO_KEY_REASON = 'no OpenAI key.'
+NO_KEY_REASON = 'No OpenAI key.'
 
 # Expected RAM use in gigabytes
 TEXT_SERVER_EXPECTED_GB = 2.0
@@ -204,7 +204,7 @@ def main():
     if REALTIME_MODE:
         reason = realtime_unavailable_reason()
         if reason:
-            print(f'Warning: {reason} Using local.', flush=True)
+            print(f'{reason} Using local.', flush=True)
             REALTIME_MODE = False
 
             # Realtime was asked for, so a missing key is worth opening the setup over
@@ -447,12 +447,12 @@ def available_mode_names():
 def realtime_unavailable_reason():
     global LOCAL_REASON_SHOWN
     if realtime is None:
-        return 'realtime needs websocket-client. Run ./install.sh to install it.'
+        return 'Realtime needs websocket-client. Run ./install.sh to install it.'
 
     # No net and no key also stop the text cloud path, so the caller speaks for both
     if not utils.network_available():
         LOCAL_REASON_SHOWN = True
-        return 'realtime needs the internet.'
+        return 'Realtime needs internet.'
 
     # The spoken session needs the same key the text cloud path uses
     text_client.load_openai_env_file()

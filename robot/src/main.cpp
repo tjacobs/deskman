@@ -72,8 +72,8 @@ static const int SCREEN_ROTATE_TRIES = 2;
 // Frames to pump before the slow startup work, so the eyes appear early
 static const int STARTUP_FRAMES = 8;
 
-// Ask talk.py to stop, then kill it, the last code says the exec never took
-static const int TALK_STOP_WAIT_MS = 200;
+// Ask talk.py to stop, then kill it, it holds the GPU so exiting takes a few seconds, the last code says the exec never took
+static const int TALK_STOP_WAIT_MS = 5000;
 static const int TALK_STOP_POLL_MS = 50;
 static const int TALK_EXEC_FAILED = 127;
 
@@ -1162,9 +1162,9 @@ static void stop_talk_process() {
         waited_ms += TALK_STOP_POLL_MS;
     }
 
-    // Out of patience
+    // Out of patience, and wait until it is gone, a new talk quits while the old one is still alive
     kill(g_talk_pid, SIGKILL);
-    waitpid(g_talk_pid, &status, WNOHANG);
+    waitpid(g_talk_pid, &status, 0);
     g_talk_pid = -1;
 }
 
