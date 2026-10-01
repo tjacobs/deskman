@@ -147,6 +147,10 @@ FAN_STATUS="/var/lib/nvfancontrol/status"
 FAN_PROFILE_NAME="deskman"
 FAN_OFF_BELOW_C=35
 
+# Lowest fan power once on, below it the fan stalls and hunts, and the control that drives power straight from temperature
+FAN_MIN_PWM=45
+FAN_CONTROL_MODE="open_loop"
+
 # Cursor theme holding one transparent pixel, so the compositor never draws a pointer
 CURSOR_THEME_NAME="blank"
 CURSOR_POINTER_NAMES="left_ptr pointer arrow top_left_arrow xterm text hand hand1 hand2 grab grabbing watch wait progress crosshair help question_arrow move fleur all-scroll not-allowed no-drop dnd-move dnd-copy col-resize row-resize e-resize n-resize s-resize w-resize ne-resize nw-resize se-resize sw-resize ew-resize ns-resize nesw-resize nwse-resize left_side right_side top_side bottom_side sb_h_double_arrow sb_v_double_arrow"
@@ -1089,13 +1093,19 @@ quiet_fan_when_cool() {
     max_temperature="$(awk '/GROUP_MAX_TEMP/ {print $2; exit}' "${FAN_CONFIG}")"
     off_margin=$(( max_temperature - FAN_OFF_BELOW_C ))
 
-    # Replace our profile, full speed near the limit, easing down to off at the off point
+    # Replace our profile, full speed near the limit, easing down to the lowest steady power, then off at the off point
     sed -i "/FAN_PROFILE ${FAN_PROFILE_NAME} {/,/}/d" "${FAN_CONFIG}"
-    profile="\tFAN_PROFILE ${FAN_PROFILE_NAME} {\n\t\t0\t0\t255\t6000\n\t\t10\t0\t255\t6000\n\t\t11\t0\t187\t4000\n\t\t31\t0\t187\t4000\n\t\t${off_margin}\t0\t0\t0\n\t\t${max_temperature}\t0\t0\t0\n\t}"
+    profile="\tFAN_PROFILE ${FAN_PROFILE_NAME} {\n\t\t0\t0\t255\t6000\n\t\t10\t0\t255\t6000\n\t\t11\t0\t187\t4000\n\t\t31\t0\t187\t4000\n\t\t$(( off_margin - 1 ))\t0\t${FAN_MIN_PWM}\t0\n\t\t${off_margin}\t0\t0\t0\n\t\t${max_temperature}\t0\t0\t0\n\t}"
     sed -i "0,/^\s*THERMAL_GROUP/s//${profile}\n&/" "${FAN_CONFIG}"
 
-    # Make it the default, and drop the saved state so the service does not keep the old profile
+    # Add a block for the control mode when the stock file lacks one
+    if ! grep -q "FAN_CONTROL ${FAN_CONTROL_MODE} {" "${FAN_CONFIG}"; then
+        sed -i "0,/^\s*FAN_PROFILE/s//\tFAN_CONTROL ${FAN_CONTROL_MODE} {\n\t\tRPM_TOLERANCE 100\n\t}\n&/" "${FAN_CONFIG}"
+    fi
+
+    # Make the profile and control the defaults, and drop the saved state so the service does not keep the old ones
     sed -i "s/^\(\s*FAN_DEFAULT_PROFILE\s\+\).*/\1${FAN_PROFILE_NAME}/" "${FAN_CONFIG}"
+    sed -i "s/^\(\s*FAN_DEFAULT_CONTROL\s\+\).*/\1${FAN_CONTROL_MODE}/" "${FAN_CONFIG}"
     systemctl stop nvfancontrol
     rm -f "${FAN_STATUS}"
     systemctl start nvfancontrol
