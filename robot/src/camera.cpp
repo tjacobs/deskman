@@ -56,10 +56,10 @@ struct CameraModel {
 static const vector<CameraModel> CAMERA_MODELS = {
     {"Arducam 1080P Low Light", {
         {V4L2_CID_POWER_LINE_FREQUENCY, V4L2_CID_POWER_LINE_FREQUENCY_DISABLED},
-        {V4L2_CID_BRIGHTNESS, -64},
+        {V4L2_CID_BRIGHTNESS, 0},
         {V4L2_CID_BACKLIGHT_COMPENSATION, 0},
         {V4L2_CID_CONTRAST, 64},
-        {V4L2_CID_GAMMA, 72},
+        {V4L2_CID_GAMMA, 160},
         {V4L2_CID_SATURATION, 90},
     }},
 };

@@ -41,7 +41,7 @@ The `config.json` file is read from the working directory, and written with defa
 
 When the robot opens a USB camera it sets any picture settings listed for that camera model in `CAMERA_MODELS` in `src/camera.cpp`, matched on the name `v4l2-ctl --info` reports. The settings stay on the camera, so calls and recordings get them too.
 
-The Arducam 1080P Low Light gets anti-flicker off, lowest brightness, no backlight compensation, more contrast, lower gamma, and more saturation.
+The Arducam 1080P Low Light gets anti-flicker off, no backlight compensation, more contrast, higher gamma to lift faces against a bright window, and more saturation.
 
 Recordings ask for 1920x1080 at 30 fps when the camera lists it, otherwise ffmpeg takes the camera's own mode.
 
