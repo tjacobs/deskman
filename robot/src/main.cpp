@@ -770,6 +770,9 @@ static void toggle_recording(FaceTracker& faceTracker) {
 
         // Talk held the microphone through the recording, send it back to ready
         send_quiet();
+
+        // Play back what was just recorded
+        play_last_recording();
         return;
     }
 

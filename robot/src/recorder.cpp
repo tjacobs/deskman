@@ -2,6 +2,7 @@
 
 // Local
 #include "camera.h"
+#include "config.h"
 #include "recorder.h"
 
 // System
@@ -17,6 +18,7 @@
 
 // Posix
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -30,6 +32,12 @@ using namespace std::chrono;
 static const int RECORD_WIDTH = 1920;
 static const int RECORD_HEIGHT = 1080;
 static const int RECORD_FRAMERATE = 30;
+
+// Pi records at this video resolution
+static const int PI_RECORD_WIDTH = 1280;
+static const int PI_RECORD_HEIGHT = 720;
+
+// Camera format the recording reads
 static const char* RECORD_INPUT_FORMAT = "mjpeg";
 
 // Mirror the file as it is written, so a playback matches the preview it was watched on
@@ -40,10 +48,17 @@ static const char* RECORD_VIDEO_CODEC = "libx264";
 static const char* RECORD_PRESET = "ultrafast";
 static const char* RECORD_QUALITY = "26";
 static const char* RECORD_PIXEL_FORMAT = "yuv420p";
+
+// Encode on two cores, leaving the rest for the microphone
+static const char* RECORD_ENCODER_THREADS = "2";
+static const char* RECORD_FILTER_THREADS = "1";
+
+// Record audio from the shared microphone, queued until video catches up
 static const char* RECORD_AUDIO_CODEC = "aac";
 static const char* RECORD_AUDIO_RATE = "16000";
 static const char* RECORD_AUDIO_FILTER = "aresample=async=1:first_pts=0";
 static const char* RECORD_THREAD_QUEUE = "512";
+static const char* RECORD_MUX_QUEUE = "1024";
 
 // Stop on its own after this long, so a recording left running cannot fill the card
 static const char* RECORD_MAX_SECONDS = "3600";
@@ -60,6 +75,9 @@ static const int PREVIEW_WIDTH = 640;
 static const int PREVIEW_HEIGHT = 360;
 static const char* PREVIEW_SIZE = "640x360";
 static const char* PREVIEW_PIXEL_FORMAT = "bgr24";
+
+// Preview pipe size, room for a whole frame
+static const int PREVIEW_PIPE_BYTES = 1048576;
 
 // Read the microphone through the software mixer, so talk can keep listening
 static const char* SHARED_CAPTURE_PREFIX = "plug:\"dsnoop:";
@@ -120,21 +138,26 @@ bool start_recording(const string& directory, int cameraIndex) {
     string microphone = microphoneDevice();
     string path = recordingFilePath(directory);
 
+    // Pick the size for this board
+    bool pi = board_name() == BOARD_PI_NAME;
+    int width = pi ? PI_RECORD_WIDTH : RECORD_WIDTH;
+    int height = pi ? PI_RECORD_HEIGHT : RECORD_HEIGHT;
+
     // Ask for the recording mode only when the camera lists it
     vector<string> cameraMode;
-    if (camera_offers_MJPEG(cameraIndex, RECORD_WIDTH, RECORD_HEIGHT, RECORD_FRAMERATE))
-        cameraMode = {"-input_format", RECORD_INPUT_FORMAT, "-video_size", to_string(RECORD_WIDTH) + "x" + to_string(RECORD_HEIGHT), "-framerate", to_string(RECORD_FRAMERATE)};
+    if (camera_offers_MJPEG(cameraIndex, width, height, RECORD_FRAMERATE))
+        cameraMode = {"-input_format", RECORD_INPUT_FORMAT, "-video_size", to_string(width) + "x" + to_string(height), "-framerate", to_string(RECORD_FRAMERATE)};
 
     // Build the ffmpeg arguments, both inputs use the wall clock so they stay lined up
-    vector<string> arguments = {"ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-fflags", "+genpts", "-f", "v4l2"};
+    vector<string> arguments = {"ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-fflags", "+genpts", "-filter_threads", RECORD_FILTER_THREADS, "-f", "v4l2"};
     arguments.insert(arguments.end(), cameraMode.begin(), cameraMode.end());
     arguments.insert(arguments.end(), {
         "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", cameraDevice,
         "-f", "alsa", "-ac", "1", "-ar", RECORD_AUDIO_RATE,
         "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", microphone,
         "-map", "0:v", "-map", "1:a", "-vf", RECORD_FLIP, "-vsync", "vfr",
-        "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
-        "-af", RECORD_AUDIO_FILTER, "-c:a", RECORD_AUDIO_CODEC, "-t", RECORD_MAX_SECONDS, "-y", path,
+        "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-threads", RECORD_ENCODER_THREADS, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
+        "-af", RECORD_AUDIO_FILTER, "-c:a", RECORD_AUDIO_CODEC, "-max_muxing_queue_size", RECORD_MUX_QUEUE, "-t", RECORD_MAX_SECONDS, "-y", path,
         "-map", "0:v", "-s", PREVIEW_SIZE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
     });
 
@@ -144,6 +167,9 @@ bool start_recording(const string& directory, int cameraIndex) {
         perror("pipe preview");
         return false;
     }
+
+    // Grow the pipe to hold a whole frame
+    fcntl(previewPipe[0], F_SETPIPE_SZ, PREVIEW_PIPE_BYTES);
 
     // Hand the strings to exec as a plain array
     vector<char*> commandLine;
