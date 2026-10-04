@@ -21,6 +21,9 @@ using json = nlohmann::ordered_json;
 static const char* CONFIG_NAME = "config.json";
 static const int CONFIG_INDENT = 2;
 
+// Where the board names itself
+static const char* BOARD_MODEL_FILE = "/proc/device-tree/model";
+
 // One lock for load and save so they cannot interleave
 static recursive_mutex config_mutex;
 
@@ -121,6 +124,18 @@ void saveConfig(const AppConfig& config) {
     if (rename(temp_path.c_str(), path.c_str()) != 0) {
         cerr << "Failed to replace config.json" << endl;
     }
+}
+
+// Read the board name from the device tree, empty when it is neither one we know
+string board_name() {
+    ifstream model(BOARD_MODEL_FILE);
+    string line;
+    getline(model, line);
+    if (line.find(BOARD_PI_NAME) != string::npos)
+        return BOARD_PI_NAME;
+    if (line.find(BOARD_ORIN_NAME) != string::npos)
+        return BOARD_ORIN_NAME;
+    return "";
 }
 
 // Path of config.json beside the sources, not inside build

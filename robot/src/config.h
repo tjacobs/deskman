@@ -1,5 +1,12 @@
 #pragma once
 
+// System
+#include <string>
+
+// Board names found in the device tree model, and handed back by board_name
+inline const char* BOARD_PI_NAME = "Pi";
+inline const char* BOARD_ORIN_NAME = "Orin";
+
 // Settings read from config.json, the defaults run the robot with no file
 struct AppConfig {
     bool useCamera = true;
@@ -20,3 +27,6 @@ AppConfig loadConfig();
 
 // Write config.json, keeping the servo travel limits already in the file
 void saveConfig(const AppConfig& config);
+
+// Read the board name from the device tree, empty when it is neither one we know
+std::string board_name();
