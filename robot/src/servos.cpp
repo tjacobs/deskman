@@ -61,9 +61,11 @@ static const int SWEEP_NUDGE_PERCENT = 20;
 static const int SWEEP_RANGE_PERCENT = 80;
 static const int SWEEP_STEP_MS = 5000;
 static const int SWEEP_POLL_MS = 50;
-static const int SWEEP_ARRIVAL_AMOUNT = 15;
 static const int SWEEP_SPEED = 600;
 static const int SWEEP_ACCELERATION = 10;
+
+// How close counts as arrived, tilt lifting the head settles a little short under its weight
+static const int SWEEP_ARRIVAL_AMOUNT = 25;
 
 // How far the sweep scans for extra servos, and room for their labels
 static const int SERVO_SWEEP_SCAN_MAX = 20;

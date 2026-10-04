@@ -27,6 +27,7 @@ Starts the face window, servos, camera tracking, and `talk/talk.py`.
 | -------------- | ------------------------------------------------- |
 | `--no-talk`    | Skip starting `talk.py`                           |
 | `--servos`     | Sweep servos, scan IDs, then exit                 |
+| `--move`       | Start normally, then sweep the servos once        |
 | `--no-servos`  | Relax servos and print positions, for servo setup |
 | `--id OLD NEW` | Set a servo ID, OLD of 0 is every servo           |
 | `--camera`     | Show the face tracking preview on screen          |

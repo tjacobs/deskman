@@ -144,7 +144,7 @@ static atomic<bool> g_sweeping{false};
 VectorRenderer vectorRenderer;
 
 // Later in this file
-static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos);
+static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& move_once);
 static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
 static void toggle_camera_preview(FaceTracker& faceTracker);
 static void start_servo_sweep();
@@ -205,9 +205,10 @@ int main(int argc, char **argv) {
     // Default the flags the parse can turn on
     bool sweep_only = false;
     bool no_servos = false;
+    bool move_once = false;
 
     // Parse arguments
-    int exit_code = parse_arguments(argc, argv, sweep_only, no_servos);
+    int exit_code = parse_arguments(argc, argv, sweep_only, no_servos, move_once);
     if (exit_code != KEEP_RUNNING)
         return exit_code;
 
@@ -234,11 +235,14 @@ int main(int argc, char **argv) {
     }
 
     // Connect to servos, or relax them and leave them disabled
+    bool servos_ready = false;
     if (no_servos) {
         relax_servos();
     } else if (start_servos() != 0) {
         if (sweep_only)
             return 1;
+    } else {
+        servos_ready = true;
     }
 
     // Servo sweep test around center, then exit
@@ -267,6 +271,14 @@ int main(int argc, char **argv) {
     if (no_servos)
         start_servo_position_log();
 
+    // Sweep the servos once when asked, the face keeps drawing
+    if (move_once) {
+        if (servos_ready)
+            start_servo_sweep();
+        else
+            printf("Servos disabled, not sweeping\n");
+    }
+
     // Draw the face until quit, then put everything down
     bool quit = false;
     run_robot_loop(faceTracker, quit);
@@ -275,7 +287,7 @@ int main(int argc, char **argv) {
 }
 
 // Parse flags, return the exit code, or KEEP_RUNNING to carry on
-static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos) {
+static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& move_once) {
     g_no_talk = false;
     for (int i = 1; i < argc; i++) {
         string argument = argv[i];
@@ -283,6 +295,8 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             g_no_talk = true;
         } else if (argument == "--servos") {
             sweep_only = true;
+        } else if (argument == "--move") {
+            move_once = true;
         } else if (argument == "--no-servos") {
             no_servos = true;
             g_no_talk = true;
@@ -305,6 +319,7 @@ static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_ser
             cout << "Options:" << endl;
             cout << "  --no-talk            Do not spawn talk.py" << endl;
             cout << "  --servos             Sweep servos around center, scan IDs 1 to 20, then exit" << endl;
+            cout << "  --move               Start normally, then sweep the servos once" << endl;
             cout << "  --no-servos          Relax servos, print positions every second, no talk.py, no camera, no face tracking" << endl;
             cout << "  --id OLD NEW         Set a servo ID, OLD is 0 to address every servo on the bus" << endl;
             cout << "  --camera             Show face-tracking video feed on the display" << endl;
