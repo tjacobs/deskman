@@ -69,7 +69,6 @@ struct SavedConnection {
 
 static void readNetworks();
 static vector<Network> listNetworks();
-static vector<string> savedNetworkNames();
 static vector<SavedConnection> savedConnections();
 static string describeConnection(const vector<Network>& networks);
 static void joinNetwork(const Network& network);
@@ -99,7 +98,7 @@ static void readNetworks() {
 
 // Read the networks in range, strongest first and one row per name
 static vector<Network> listNetworks() {
-    vector<string> saved = savedNetworkNames();
+    vector<SavedConnection> connections = savedConnections();
     vector<Network> networks;
     for (const string& line : runCommand(LIST_COMMAND)) {
         // Each line is active, name, then signal
@@ -110,7 +109,10 @@ static vector<Network> listNetworks() {
         network.name = fields[1];
         network.signal = atoi(fields[2].c_str());
         network.active = fields[0] == "yes";
-        network.saved = find(saved.begin(), saved.end(), network.name) != saved.end();
+
+        // Saved means it has joined before, remembered means any connection is kept for it, even one that never worked
+        network.saved = any_of(connections.begin(), connections.end(), [&](const SavedConnection& connection) { return connection.ssid == network.name && connection.joined; });
+        network.remembered = any_of(connections.begin(), connections.end(), [&](const SavedConnection& connection) { return connection.ssid == network.name; });
 
         // A mesh shows the same name more than once, keep the strongest of them
         auto same = find_if(networks.begin(), networks.end(), [&](const Network& other) { return other.name == network.name; });
@@ -130,15 +132,6 @@ static vector<Network> listNetworks() {
         return left.signal > right.signal;
     });
     return networks;
-}
-
-// Read the network names this machine has joined before, a password that never worked does not count
-static vector<string> savedNetworkNames() {
-    vector<string> names;
-    for (const SavedConnection& connection : savedConnections())
-        if (connection.joined)
-            names.push_back(connection.ssid);
-    return names;
 }
 
 // Read every wireless connection, the network it joins, and whether it ever has
@@ -238,14 +231,17 @@ void forget_network(const Network& network) {
     // Delete off the main thread, after any scan finishes, then look again before letting go of the radio
     thread([network] {
         waitForWifi();
+        bool dropped = false;
         for (const SavedConnection& connection : savedConnections()) {
             if (connection.ssid != network.name)
                 continue;
-            vector<string> deleted;
-            runProgram({"nmcli", "connection", "delete", "uuid", connection.uuid}, deleted);
-            for (const string& line : deleted)
-                cout << line << endl;
+            vector<string> ignored;
+            dropped = runProgram({"nmcli", "connection", "delete", "uuid", connection.uuid}, ignored) == 0 || dropped;
         }
+
+        // Say it once, by name, however many connections it had
+        if (dropped)
+            cout << "Connection '" << network.name << "' dropped." << endl;
         readNetworks();
         lock_guard<mutex> lock(wifiMutex);
         wifiForgettingName.clear();
@@ -275,6 +271,7 @@ vector<Network> wifi_networks() {
         if (network.name != wifiForgettingName)
             continue;
         network.saved = false;
+        network.remembered = false;
         network.active = false;
     }
     return networks;

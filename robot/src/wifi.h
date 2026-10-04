@@ -13,6 +13,7 @@ struct Network {
     int signal;
     bool active;
     bool saved;
+    bool remembered;
 };
 
 // Look up what is connected and what is in range, in the background

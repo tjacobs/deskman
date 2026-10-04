@@ -1056,7 +1056,7 @@ void draw_wifi_list(TTF_Font* font) {
         draw_text(text.c_str(), rowRect.x + VIDEO_TEXT_PAD, rowRect.y + (rowRect.h - textHeight) / 2, font, BUTTON_LABEL_COLOR);
 
         // A remembered network gets a drop button that asks once before forgetting it
-        if (!network.saved && !network.active)
+        if (!network.remembered && !network.active)
             continue;
         bool confirming = network.name == g_wifi_confirm_name;
         const char* dropLabel = confirming ? VIDEO_CONFIRM_LABEL : WIFI_DROP_LABEL;
@@ -1075,7 +1075,7 @@ static bool handle_wifi_tap(int x, int y) {
     int rows = video_rows_that_fit() - 1;
     for (int row = 0; row < rows && row < (int)networks.size(); row++) {
         const Network& network = networks[row];
-        bool remembered = network.saved || network.active;
+        bool remembered = network.remembered || network.active;
 
         // Drop asks first, then forgets on the second tap
         if (remembered && tap_in_rect(x, y, video_delete_rect(row + 1))) {
