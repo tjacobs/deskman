@@ -1,31 +1,52 @@
-#ifndef SCREEN_H
-#define SCREEN_H
+#pragma once
 
+// SDL
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
-#include <string>
-#include <mutex>
 
+// System
+#include <mutex>
+#include <string>
+
+// Namespace
 using namespace std;
 
-// Screen
+// Window size, and the renderer everything draws through
 extern int screen_width;
 extern int screen_height;
 extern SDL_Renderer* renderer;
 
-// Status
+// Latest status text, and the lock guarding it
 extern string currentStatus;
 extern mutex statusMutex;
 
-// Screen functions
+// Open and close the fullscreen window
 bool create_window();
 bool close_window();
+
+// Give a child process the input method back, the face itself keeps the touch keyboard away
+void allow_screen_keyboard();
+
+// Keep the pointer off the face
+void hide_cursor();
+
+// Draw text, and the status bar
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
-void draw_bottom_bar(const char* battery, TTF_Font* font, bool show_exit);
-bool tap_is_exit(int x, int y);
+void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible);
+
+// Status bar size, so the menu button can sit inside it
+int status_bar_height();
+int status_bar_pad();
+
+// Show or hide the status bar
+bool status_bar_visible();
+void set_status_bar_visible(bool visible);
+
+// Set the status text
 void setStatus(const string& status);
+
+// Tee stdout and stderr into log.txt, and read the newest line back
+void start_robot_log();
+void write_robot_log_direct(const char* line);
 string last_log_line();
-
-#endif
-

@@ -22,7 +22,7 @@ install_linux() {
     sudo apt-get update -y
 
     # Install SDL and image build deps
-    sudo apt-get install -y pkg-config libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libjpeg-dev libpng-dev libwebp-dev libcurl4-openssl-dev
+    sudo apt-get install -y pkg-config libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libjpeg-dev libpng-dev libwebp-dev libcurl4-openssl-dev i2c-tools
 }
 
 # Install macOS packages with Homebrew

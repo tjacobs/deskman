@@ -20,6 +20,7 @@ import move
 import reminders
 import system
 import talks
+import video
 import voice
 import volume
 
@@ -39,10 +40,9 @@ TEMPERATURE = 0.7
 MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
-PROMPT_EXTRAS_HEADER = "Do not mention this context unless the user asks."
 
 # Tools the local model can call, Sonos and Google Calendar are added when an account is saved
-BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + voice.TOOLS + volume.TOOLS
+BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + video.TOOLS + voice.TOOLS + volume.TOOLS
 
 # Conversation history kept across asks in this process
 conversation_history = []
@@ -95,29 +95,44 @@ def parse_args():
     print_prompt = False
     clear_cache = False
     run_tests = False
+    cloud_flag = False
+    model_name = ""
     words = []
-    for argument in sys.argv[1:]:
+    arguments = sys.argv[1:]
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
         if argument == "--prompt":
             print_prompt = True
-            continue
-        if argument == "--clear":
+        elif argument == "--clear":
             clear_cache = True
-            continue
-        if argument == "--test":
+        elif argument == "--test":
             run_tests = True
-            continue
-        if argument in ("-h", "--help"):
+        elif argument == "--cloud":
+            cloud_flag = True
+        elif argument == "--model":
+            if index + 1 >= len(arguments):
+                print("Error: --model needs a model name.", flush=True)
+                sys.exit(1)
+            index += 1
+            model_name = arguments[index]
+        elif argument in ("-h", "--help"):
             print_usage()
             sys.exit(0)
-        words.append(argument)
+        else:
+            words.append(argument)
+        index += 1
+    client.apply_cloud_settings(cloud_flag, model_name)
     return " ".join(words) if words else "Say hello.", print_prompt, clear_cache, run_tests
 
 # Print usage help
 def print_usage():
-    print("Usage: ./ask.py [--prompt] [--clear] [--test] [question...]")
+    print("Usage: ./ask.py [--prompt] [--clear] [--test] [--cloud] [--model name] [question...]")
     print("  --prompt  print the full model context, messages, tools, and rendered prompt")
     print("  --clear   clear the server cache before asking")
     print("  --test    run tests.py, one ask per tool")
+    print("  --cloud   ask OpenAI instead of the local llama-server")
+    print("  --model   cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL")
     print("  (no arg)  say hello.")
 
 # Ask the model, running any tool calls it requests
@@ -269,6 +284,35 @@ def ask_model(prompt):
                 if action:
                     return action
 
+            # Force get_battery when the model guessed the pack level
+            if move.needs_get_battery(prompt) and "get_battery" not in used and "battery" not in retried:
+                retried.add("battery")
+                print("[ask] missing get_battery, retrying", flush=True)
+                messages.append(message)
+                messages.append({"role": "user", "content": move.GET_BATTERY_RETRY_PROMPT})
+                continue
+
+            # Restart when the model talked instead of calling the tool
+            if move.needs_restart(prompt) and "restart" not in used:
+                result = move.run_restart()
+                record_tool("restart", {}, result)
+                remember_turn(messages, result)
+                return result
+
+            # Exit when the model talked instead of calling quit
+            if move.needs_quit(prompt) and "quit" not in used:
+                result = move.run_quit()
+                record_tool("quit", {}, result)
+                remember_turn(messages, result)
+                return result
+
+            # Go ready when the model talked instead of calling silence
+            if move.needs_silence(prompt) and "silence" not in used:
+                result = move.run_silence()
+                record_tool("silence", {}, result)
+                remember_turn(messages, result)
+                return result
+
             # Force get_volume when the model guessed the current volume
             if volume.needs_get_volume(prompt) and "get_volume" not in used and "volume" not in retried:
                 retried.add("volume")
@@ -360,6 +404,22 @@ def ask_model(prompt):
             tool_name = (tool_call.get("function") or {}).get("name")
             if tool_name:
                 used.add(tool_name)
+            if tool_name == "look" and result.startswith("My hat"):
+                remember_turn(messages, result)
+                return result
+            if tool_name == "set_volume":
+                reply = volume.confirm_volume_set() or result
+                remember_turn(messages, reply)
+                return reply
+            if tool_name == "restart":
+                remember_turn(messages, result)
+                return result
+            if tool_name == "quit":
+                remember_turn(messages, result)
+                return result
+            if tool_name == "silence":
+                remember_turn(messages, result)
+                return result
             if tool_name == "calculate":
                 arguments = parse_tool_arguments((tool_call.get("function") or {}).get("arguments"))
                 last_calculate_expression = arguments.get("expression", "")
@@ -502,7 +562,7 @@ def ask_one_liner(prompt):
         "max_tokens": 32,
         "temperature": 0.9,
     }
-    response = client.request_chat(body, client.API_KEY, client.REQUEST_TIMEOUT_SECONDS)
+    response = client.request_chat(body, client.chat_api_key(), client.REQUEST_TIMEOUT_SECONDS)
     reply = ((response.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
     reply = reply.strip().strip('"').strip("'")
     if "\n" in reply:
@@ -511,28 +571,26 @@ def ask_one_liner(prompt):
 
 # Build the chat messages for one ask
 def build_messages(prompt):
-    # Start with text_prompt.json alone so that prefix stays identical across asks for KV cache reuse
+    # Start with text_prompt.json, that prefix stays identical across asks for KV cache reuse
     system_prompt = load_system_prompt()
 
     # Teach 1b to emit tool JSON in content, its chat template has no tool path
     if uses_content_tools():
         system_prompt = system_prompt + "\n\n" + client.content_tools_instruction(active_tool_names())
 
+    # Append memories and reminders last, a small model answers an instruction it finds in the user turn
+    extras = prompt_extras()
+    if extras:
+        system_prompt = system_prompt + "\n\n" + extras
+
     messages = [{"role": "system", "content": system_prompt}]
 
     # Load previous turns in conversation history
     messages.extend(conversation_history)
 
-    # Add this question last, memories and reminders only on the first question
-    messages.append({"role": "user", "content": with_prompt_extras(prompt)})
+    # Add this question last
+    messages.append({"role": "user", "content": prompt})
     return messages
-
-# Prefix memories and reminders onto the first question only, later asks keep them via history
-def with_prompt_extras(prompt):
-    extras = prompt_extras()
-    if not extras or conversation_history:
-        return prompt
-    return extras + "\n\n" + prompt
 
 # Handle a forced tool result, True means retry the model, text means return that reply
 def apply_forced(forced, messages, domain, retried):
@@ -583,31 +641,21 @@ def remember_turn(messages, reply):
 # Drop oldest full turns when history grows too long
 def trim_conversation_history():
     while len(conversation_history) > MAX_HISTORY_MESSAGES:
-        drop_at = first_droppable_user_index()
+        drop_at = first_user_index()
         if drop_at is None:
             break
 
-        # Remove that turn, keep the first memories prefix if present
+        # Remove that turn, the question and everything answering it
         conversation_history.pop(drop_at)
         while drop_at < len(conversation_history) and conversation_history[drop_at].get("role") != "user":
             conversation_history.pop(drop_at)
 
-# Oldest user turn that is safe to drop, skip the first memories prefix
-def first_droppable_user_index():
-    kept_extras = False
+# Oldest user turn in the history
+def first_user_index():
     for index, message in enumerate(conversation_history):
-        if message.get("role") != "user":
-            continue
-        if not kept_extras and message_has_prompt_extras(message):
-            kept_extras = True
-            continue
-        return index
+        if message.get("role") == "user":
+            return index
     return None
-
-# Return true when this user message already carries memories or reminders
-def message_has_prompt_extras(message):
-    content = message.get("content") or ""
-    return content.startswith(PROMPT_EXTRAS_HEADER)
 
 # Tools sent to the model this ask, Sonos and Google Calendar only when an account is saved
 def active_tools():
@@ -648,11 +696,7 @@ def prompt_extras():
     reminder_text = reminders.format_reminders_for_prompt()
     if reminder_text:
         extras.append(reminder_text)
-    if not extras:
-        return ""
-
-    # Keep facts available without treating them as something to announce
-    return PROMPT_EXTRAS_HEADER + "\n\n" + "\n\n".join(extras)
+    return "\n\n".join(extras)
 
 # Print everything that will go into the model for this ask
 def print_context(prompt):
@@ -664,6 +708,12 @@ def print_context(prompt):
     print("Request:")
     print(json.dumps(body, indent=2))
     print()
+
+    # Cloud has no llama chat template endpoint
+    if client.use_cloud():
+        print("Rendered prompt: cloud chat completions, no local template.")
+        print()
+        return
 
     # Show the chat-template rendered prompt when the server is up
     rendered = apply_chat_template(messages, body.get("tools") or [])
@@ -728,6 +778,8 @@ def count_tokens(text):
 # Read the model alias from the running server, fall back to the default
 def resolve_model_name():
     global resolved_model
+    if client.use_cloud():
+        return client.cloud_model_name()
     if resolved_model:
         return resolved_model
     request = urllib.request.Request(client.MODELS_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
@@ -746,6 +798,8 @@ def resolve_model_name():
 # Read the context window size from the running server
 def resolve_context_size():
     global resolved_context_size
+    if client.use_cloud():
+        return DEFAULT_CONTEXT_SIZE
     if resolved_context_size:
         return resolved_context_size
     request = urllib.request.Request(client.PROPS_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
@@ -777,7 +831,7 @@ def chat_completion(messages):
 
     # Send request, client.py asks server.sh to enlarge context when the window is full
     model_start = time.perf_counter()
-    response = client.request_chat(body, client.API_KEY, client.REQUEST_TIMEOUT_SECONDS)
+    response = client.request_chat(body, client.chat_api_key(), client.REQUEST_TIMEOUT_SECONDS)
     model_seconds = time.perf_counter() - model_start
     resolved_model = None
     resolved_context_size = None
@@ -807,6 +861,40 @@ def run_tool(tool_call):
     # Turn the head
     if name == "look":
         result = move.run_look(arguments)
+        record_tool(name, arguments, result)
+        return result
+
+    # Start or stop recording, and play the newest recording
+    if name == "record_video":
+        result = video.run_record_video(arguments)
+        record_tool(name, arguments, result)
+        return result
+    if name == "play_video":
+        result = video.run_play_video()
+        record_tool(name, arguments, result)
+        return result
+
+    # Return the pack percent and voltage
+    if name == "get_battery":
+        result = move.run_get_battery()
+        record_tool(name, arguments, result)
+        return result
+
+    # Bounce robot and teleport
+    if name == "restart":
+        result = move.run_restart()
+        record_tool(name, arguments, result)
+        return result
+
+    # Exit the robot and this program
+    if name == "quit":
+        result = move.run_quit()
+        record_tool(name, arguments, result)
+        return result
+
+    # Stop talking and go back to ready
+    if name == "silence":
+        result = move.run_silence()
         record_tool(name, arguments, result)
         return result
 
@@ -1099,11 +1187,6 @@ def format_inference_input(messages):
         if role not in ("user", "tool"):
             continue
 
-        # Drop the memories prefix so timing lines show just the question
-        extras = prompt_extras()
-        if role == "user" and extras and content.startswith(extras):
-            content = content[len(extras):].lstrip()
-
         text = " ".join(content.split())
         if len(text) > INFERENCE_INPUT_CHARS:
             text = text[:INFERENCE_INPUT_CHARS - 3] + "..."
@@ -1126,6 +1209,11 @@ def format_token_speed(speed):
 
 # Erase the server prompt cache so the next ask is a cold prefill
 def clear_prompt_cache():
+    # Cloud has no llama slot cache
+    if client.use_cloud():
+        print("Cleared cache.", flush=True)
+        return
+
     # List cache contexts, then erase each one
     list_request = urllib.request.Request(client.CACHE_URL, headers={"Authorization": f"Bearer {client.API_KEY}"})
     try:
@@ -1168,6 +1256,7 @@ if __name__ == "__main__":
     try:
         main()
     except urllib.error.URLError as error:
-        print(f"LLM unavailable at {client.API_URL}: {error.reason}")
-        print(f"Start the model server first, run {SERVER_SCRIPT}")
+        print(f"LLM unavailable at {client.chat_api_url()}: {error.reason}")
+        if not client.use_cloud():
+            print(f"Start the model server first, run {SERVER_SCRIPT}")
         sys.exit(1)

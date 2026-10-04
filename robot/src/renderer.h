@@ -1,57 +1,70 @@
 #pragma once
 
+// SDL
 #include <SDL2/SDL.h>
-#include <vector>
-#include <cmath>
+
+// Local
 #include "screen.h"
 
+// System
+#include <cmath>
+#include <vector>
+
+// Namespace
 using namespace std;
+
+// Shapes further back shrink by this much per unit of depth
+static const float PERSPECTIVE_DEPTH = 0.001f;
+
+// Step this many pixels when filling a shape, then draw a fat dot at each one
+static const int SHAPE_FILL_STEP = 2;
+
+// Default shape size and colour when the caller does not say
+static const float DEFAULT_CIRCLE_RADIUS = 50;
+static const float DEFAULT_ELLIPSE_RADIUS_X = 100;
+static const float DEFAULT_ELLIPSE_RADIUS_Y = 50;
+static const float DEFAULT_STROKE_WIDTH = 1.0f;
+static const SDL_Color DEFAULT_SHAPE_COLOR = {0, 0, 0, 255};
 
 // 3D Vector class for transformations
 struct Vec3 {
     float x, y, z;
+
+    // Build a vector, defaulting to the origin
     Vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-    
+
+    // Add two vectors
     Vec3 operator+(const Vec3& other) const {
         return Vec3(x + other.x, y + other.y, z + other.z);
     }
-    
+
+    // Scale a vector
     Vec3 operator*(float scalar) const {
         return Vec3(x * scalar, y * scalar, z * scalar);
     }
-    
-    // Apply rotation matrix to vector
+
+    // Turn about the X axis, in degrees
     Vec3 rotateX(float angle) const {
-        float rad = angle * M_PI / 180.0f;
-        float cosA = cos(rad);
-        float sinA = sin(rad);
-        return Vec3(
-            x,
-            y * cosA - z * sinA,
-            y * sinA + z * cosA
-        );
+        float radians = angle * M_PI / 180.0f;
+        float cosine = cos(radians);
+        float sine = sin(radians);
+        return Vec3(x, y * cosine - z * sine, y * sine + z * cosine);
     }
-    
+
+    // Turn about the Y axis, in degrees
     Vec3 rotateY(float angle) const {
-        float rad = angle * M_PI / 180.0f;
-        float cosA = cos(rad);
-        float sinA = sin(rad);
-        return Vec3(
-            x * cosA + z * sinA,
-            y,
-            -x * sinA + z * cosA
-        );
+        float radians = angle * M_PI / 180.0f;
+        float cosine = cos(radians);
+        float sine = sin(radians);
+        return Vec3(x * cosine + z * sine, y, -x * sine + z * cosine);
     }
-    
+
+    // Turn about the Z axis, in degrees
     Vec3 rotateZ(float angle) const {
-        float rad = angle * M_PI / 180.0f;
-        float cosA = cos(rad);
-        float sinA = sin(rad);
-        return Vec3(
-            x * cosA - y * sinA,
-            x * sinA + y * cosA,
-            z
-        );
+        float radians = angle * M_PI / 180.0f;
+        float cosine = cos(radians);
+        float sine = sin(radians);
+        return Vec3(x * cosine - y * sine, x * sine + y * cosine, z);
     }
 };
 
@@ -64,19 +77,24 @@ namespace Projection {
 // Base class for all vector shapes
 class VectorShape {
 public:
-    Vec3 localPosition;  // Position relative to the face plane
-    Vec3 rotation;  // Euler angles in degrees
+    // Where the shape sits on the face plane, and how it is turned and sized
+    Vec3 localPosition;
+    Vec3 rotation;
     Vec3 scale;
+
+    // How the shape is painted, and whether it is drawn at all
     SDL_Color fillColor;
     SDL_Color strokeColor;
     float strokeWidth;
     bool visible;
-    
+
+    // Start centred, unturned, full size, and black
     VectorShape() : localPosition(0, 0, 0), rotation(0, 0, 0), scale(1, 1, 1),
-                   fillColor({0, 0, 0, 255}), strokeColor({0, 0, 0, 255}), strokeWidth(1.0f),
+                   fillColor(DEFAULT_SHAPE_COLOR), strokeColor(DEFAULT_SHAPE_COLOR), strokeWidth(DEFAULT_STROKE_WIDTH),
                    visible(true) {}
     virtual ~VectorShape() {}
-    
+
+    // Each shape paints itself against the face position and rotation
     virtual void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) = 0;
 };
 
@@ -87,34 +105,34 @@ void drawLargeDot(SDL_Renderer* renderer, int x, int y);
 class Circle : public VectorShape {
 public:
     float radius;
-    
-    Circle(float radius = 50, SDL_Color fillColor = {0, 0, 0, 255}, 
-           SDL_Color strokeColor = {0, 0, 0, 255}, float strokeWidth = 1.0f) 
+
+    // Build a circle of the given radius and colours
+    Circle(float radius = DEFAULT_CIRCLE_RADIUS, SDL_Color fillColor = DEFAULT_SHAPE_COLOR,
+           SDL_Color strokeColor = DEFAULT_SHAPE_COLOR, float strokeWidth = DEFAULT_STROKE_WIDTH)
         : radius(radius) {
         this->fillColor = fillColor;
         this->strokeColor = strokeColor;
         this->strokeWidth = strokeWidth;
     }
-    
+
+    // Fill the circle a dot at a time, so perspective applies to every point
     void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) override {
         SDL_SetRenderDrawColor(renderer, fillColor.r, fillColor.g, fillColor.b, fillColor.a);
-        
+
         // Calculate effective radius based on perspective
-        float effectiveRadius = radius * (1.0f / (1.0f + (localPosition.z + facePosition.z) * 0.001f));
-        
+        float effectiveRadius = radius * (1.0f / (1.0f + (localPosition.z + facePosition.z) * PERSPECTIVE_DEPTH));
+
         // Draw filled circle by projecting each point in 3D space
-        // Use step size of 2 to reduce number of points
-        for (int y = -effectiveRadius; y <= effectiveRadius; y += 2) {
-            for (int x = -effectiveRadius; x <= effectiveRadius; x += 2) {
-                if (x*x + y*y <= effectiveRadius*effectiveRadius) {
-                    // Create point in local space
-                    Vec3 point(x, y, 0);
-                    // Add shape position and face position
-                    point = point + localPosition + facePosition;
-                    // Project to screen
-                    SDL_Point screenPoint = Projection::project(point, faceRotation);
-                    drawLargeDot(renderer, screenPoint.x, screenPoint.y);
-                }
+        for (int y = -effectiveRadius; y <= effectiveRadius; y += SHAPE_FILL_STEP) {
+            for (int x = -effectiveRadius; x <= effectiveRadius; x += SHAPE_FILL_STEP) {
+                if (x * x + y * y > effectiveRadius * effectiveRadius)
+                    continue;
+
+                // Move the local point onto the face, then project it
+                Vec3 point(x, y, 0);
+                point = point + localPosition + facePosition;
+                SDL_Point screenPoint = Projection::project(point, faceRotation);
+                drawLargeDot(renderer, screenPoint.x, screenPoint.y);
             }
         }
     }
@@ -124,52 +142,53 @@ public:
 class Ellipse : public VectorShape {
 public:
     float radiusX, radiusY;
-    float cutoutY;  // Y position of cutout center
-    float cutoutHeight;  // Height of cutout
-    
-    Ellipse(float radiusX = 100, float radiusY = 50, 
-            SDL_Color fillColor = {0, 0, 0, 255},
-            SDL_Color strokeColor = {0, 0, 0, 255}, float strokeWidth = 1.0f,
+
+    // Centre and height of an ellipse cut out of this one, for the mouth
+    float cutoutY;
+    float cutoutHeight;
+
+    // Build an ellipse of the given radii, colours, and cutout
+    Ellipse(float radiusX = DEFAULT_ELLIPSE_RADIUS_X, float radiusY = DEFAULT_ELLIPSE_RADIUS_Y,
+            SDL_Color fillColor = DEFAULT_SHAPE_COLOR,
+            SDL_Color strokeColor = DEFAULT_SHAPE_COLOR, float strokeWidth = DEFAULT_STROKE_WIDTH,
             float cutoutY = 0, float cutoutHeight = 0)
         : radiusX(radiusX), radiusY(radiusY), cutoutY(cutoutY), cutoutHeight(cutoutHeight) {
         this->fillColor = fillColor;
         this->strokeColor = strokeColor;
         this->strokeWidth = strokeWidth;
     }
-    
+
+    // Fill the ellipse a dot at a time, skipping anything inside the cutout
     void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) override {
         SDL_SetRenderDrawColor(renderer, fillColor.r, fillColor.g, fillColor.b, fillColor.a);
-        
+
         // Calculate effective radii based on perspective
-        float effectiveRadiusX = radiusX * (1.0f / (1.0f + (localPosition.z + facePosition.z) * 0.001f));
-        float effectiveRadiusY = radiusY * (1.0f / (1.0f + (localPosition.z + facePosition.z) * 0.001f));
-        
+        float effectiveRadiusX = radiusX * (1.0f / (1.0f + (localPosition.z + facePosition.z) * PERSPECTIVE_DEPTH));
+        float effectiveRadiusY = radiusY * (1.0f / (1.0f + (localPosition.z + facePosition.z) * PERSPECTIVE_DEPTH));
+
         // Draw filled ellipse by projecting each point in 3D space
-        // Use step size of 2 to reduce number of points
-        for (int y = -effectiveRadiusY; y <= effectiveRadiusY; y += 2) {
-            for (int x = -effectiveRadiusX; x <= effectiveRadiusX; x += 2) {
+        for (int y = -effectiveRadiusY; y <= effectiveRadiusY; y += SHAPE_FILL_STEP) {
+            for (int x = -effectiveRadiusX; x <= effectiveRadiusX; x += SHAPE_FILL_STEP) {
                 // Calculate if point is in the main ellipse
-                float ellipseValue = (x*x)/(float)(effectiveRadiusX*effectiveRadiusX) + (y*y)/(float)(effectiveRadiusY*effectiveRadiusY);
-                
+                float ellipseValue = (x * x) / (float)(effectiveRadiusX * effectiveRadiusX) + (y * y) / (float)(effectiveRadiusY * effectiveRadiusY);
+
                 // Calculate if point is in the cutout ellipse
                 float cutoutValue = 0.0f;
                 if (cutoutHeight > 0) {
                     float cutoutRadiusY = cutoutHeight / 2.0f;
                     float cutoutRadiusX = effectiveRadiusX * (cutoutRadiusY / effectiveRadiusY);
-                    cutoutValue = (x*x)/(float)(cutoutRadiusX*cutoutRadiusX) + 
-                                 ((y-cutoutY)*(y-cutoutY))/(float)(cutoutRadiusY*cutoutRadiusY);
+                    cutoutValue = (x * x) / (float)(cutoutRadiusX * cutoutRadiusX) + ((y - cutoutY) * (y - cutoutY)) / (float)(cutoutRadiusY * cutoutRadiusY);
                 }
-                
+
                 // Draw point if it's in the main ellipse but not in the cutout
-                if (ellipseValue <= 1.0f && (cutoutHeight == 0 || cutoutValue > 1.0f)) {
-                    // Create point in local space
-                    Vec3 point(x, y, 0);
-                    // Add shape position and face position
-                    point = point + localPosition + facePosition;
-                    // Project to screen
-                    SDL_Point screenPoint = Projection::project(point, faceRotation);
-                    drawLargeDot(renderer, screenPoint.x, screenPoint.y);
-                }
+                if (ellipseValue > 1.0f || (cutoutHeight != 0 && cutoutValue <= 1.0f))
+                    continue;
+
+                // Move the local point onto the face, then project it
+                Vec3 point(x, y, 0);
+                point = point + localPosition + facePosition;
+                SDL_Point screenPoint = Projection::project(point, faceRotation);
+                drawLargeDot(renderer, screenPoint.x, screenPoint.y);
             }
         }
     }
@@ -178,31 +197,37 @@ public:
 // Vector face class to manage all face elements
 class VectorFace {
 private:
-    std::vector<VectorShape*> shapes;
+    // Shapes the face owns, and where the whole face sits
+    vector<VectorShape*> shapes;
     Vec3 position;
     Vec3 rotation;
-    
+
 public:
+    // Start the face centred and facing forward
     VectorFace() : position(0, 0, 0), rotation(0, 0, 0) {}
+
+    // Free every shape handed over
     ~VectorFace() {
         for (auto shape : shapes) {
             delete shape;
         }
     }
-    
+
+    // Take ownership of a shape
     void addShape(VectorShape* shape) {
         shapes.push_back(shape);
     }
-    
-    void setRotation(const Vec3& rot) {
-        rotation = rot;
+
+    // Turn the whole face
+    void setRotation(const Vec3& rotation) {
+        this->rotation = rotation;
     }
-    
+
+    // Draw every visible shape
     void render(SDL_Renderer* renderer) {
         for (auto shape : shapes) {
-            if (shape->visible) {
+            if (shape->visible)
                 shape->render(renderer, position, rotation);
-            }
         }
     }
 };
@@ -210,17 +235,21 @@ public:
 // Vector renderer manager
 class VectorRenderer {
 private:
+    // The one face this renderer draws
     VectorFace face;
-    
+
 public:
+    // Hand a shape to the face
     void addShape(VectorShape* shape) {
         face.addShape(shape);
     }
-    
+
+    // Draw the face
     void render(SDL_Renderer* renderer) {
         face.render(renderer);
     }
-    
+
+    // Turn the face toward where it is looking
     void setFaceRotation(const Vec3& rotation) {
         face.setRotation(rotation);
     }

@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 PYTHON_VERSION="3.12"
 JETSON_PYTHON_VERSION="3.10"
-PYTHON_PACKAGES=(kokoro soundfile soco)
+PYTHON_PACKAGES=(kokoro soundfile soco websocket-client)
 SPACY_MODEL_URL="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 LISTEN_PACKAGES=(faster-whisper)
 BUILD_PACKAGES=(pybind11 wheel)
@@ -30,7 +30,7 @@ RASPBERRY_PI_MATCH="Raspberry Pi"
 JETSON_RELEASE_FILE="/etc/nv_tegra_release"
 
 # Config system packages and players
-LINUX_PACKAGES=(espeak-ng alsa-utils htop)
+LINUX_PACKAGES=(espeak-ng alsa-utils htop zenity wl-clipboard xsel)
 MAC_PACKAGES=(espeak-ng)
 MAC_LISTEN_PACKAGES=(sox)
 LINUX_PLAYER="aplay"

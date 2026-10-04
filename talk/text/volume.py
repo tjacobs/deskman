@@ -3,6 +3,7 @@
 # Speaker volume control through amixer
 
 # Imports
+import argparse
 import os
 import re
 import subprocess
@@ -11,6 +12,13 @@ import subprocess
 VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
 VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested percent, then answer using only the tool result."
 GET_VOLUME_RETRY_PROMPT = "Do not guess. Call get_volume now, then answer using only the tool result."
+VOLUME_SET_REPLY = "Set to {percent} percent."
+
+# Config spoken check, cached as a wav per phrase so later taps play at once
+TALK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SAY_WAV_PREFIX = "say_"
+SAY_SAMPLE_RATE = 24000
+SAY_SPEED = 1.2
 
 # Tools the local model can call for volume
 TOOLS = [
@@ -18,7 +26,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "set_volume",
-            "description": "Set the speaker volume to a percent from 0 to 100.",
+            "description": "Set the speaker volume to a percent from 0 to 100. Call this immediately. Do not speak first. Do not call get_volume first.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -46,14 +54,62 @@ last_volume_percent = None
 
 # Main
 def main():
-    # Print the current volume when run with no args
-    print(run_get_volume())
+    args = parse_args()
+
+    # Print the current volume when run with no args, otherwise set it
+    if args.percent is None:
+        print(run_get_volume())
+    else:
+        print(run_set_volume({"percent": args.percent}))
+
+    # Speak a phrase at the new level so it can be heard
+    if args.say:
+        say_phrase(args.say)
+
+# Parse args
+def parse_args():
+    parser = argparse.ArgumentParser(description="Get or set the speaker volume.")
+    parser.add_argument("percent", nargs="?", type=int, help="Volume percent to set, leave out to print the current volume")
+    parser.add_argument("--say", default="", help="Phrase to speak afterwards, like Hi")
+    return parser.parse_args()
+
+# Play a phrase in the talk voice, making its wav with kokoro the first time
+def say_phrase(text):
+    import sys
+    sys.path.insert(0, TALK_DIR)
+    import utils
+
+    # Make the wav once, then reuse it
+    name = SAY_WAV_PREFIX + re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") + ".wav"
+    wav_path = os.path.join(utils.AUDIO_DIR, name)
+    if not os.path.isfile(wav_path):
+        make_phrase_wav(utils, text, wav_path)
+
+    # Play through the shared speaker device so talk can still speak
+    subprocess.run(utils.play_wav_command(wav_path), capture_output=True)
+
+# Generate one phrase with kokoro on the cpu and write it as a wav
+def make_phrase_wav(utils, text, wav_path):
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    utils.enable_offline_if_cached(utils.DEFAULT_VOICE)
+    utils.configure_torch_threads()
+    utils.suppress_torch_warnings()
+    import kokoro
+    import numpy
+    import soundfile
+
+    # Load the voice, then join every chunk the pipeline yields
+    model = kokoro.KModel(repo_id=utils.REPO_ID, disable_complex=True).eval()
+    pipeline = kokoro.KPipeline(lang_code=utils.DEFAULT_VOICE[0], repo_id=utils.REPO_ID, model=model)
+    chunks = [audio for _, _, audio in pipeline(text, voice=utils.DEFAULT_VOICE, speed=SAY_SPEED)]
+    os.makedirs(os.path.dirname(wav_path), exist_ok=True)
+    soundfile.write(wav_path, numpy.concatenate(chunks), SAY_SAMPLE_RATE)
 
 # Spoken confirmation after a successful volume set
 def confirm_volume_set():
     if last_volume_percent is None:
         return None
-    return f"I have set the volume to {last_volume_percent} percent."
+    return VOLUME_SET_REPLY.format(percent=last_volume_percent)
 
 # Return true when the question needs a volume tool
 def needs_volume_tool(prompt):
@@ -115,7 +171,7 @@ def force_set_volume(prompt, messages, message, already_retried, record_tool):
     result = run_set_volume(arguments)
     record_tool("set_volume", arguments, result)
     print(f"[volume] forced set_volume -> {result}", flush=True)
-    return f"I have set the volume to {percent} percent."
+    return VOLUME_SET_REPLY.format(percent=percent)
 
 # Set speaker volume from tool arguments
 def run_set_volume(arguments):
@@ -133,7 +189,7 @@ def run_set_volume(arguments):
 
     # Remember the requested value, ALSA rounds and should not be spoken back
     last_volume_percent = percent
-    return f"Volume set to {percent} percent."
+    return VOLUME_SET_REPLY.format(percent=percent)
 
 # Read speaker volume for the tool
 def run_get_volume(arguments=None):

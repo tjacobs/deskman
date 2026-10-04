@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<keyboard>
+
+<!--
+
+ Touch keyboard layout for the Deskman panel, digits and web punctuation over the stock letters
+
+-->
+
+<layout id="Deskman QWERTY">
+
+    <!-- Digits, with the symbols above them on shift -->
+    <row>
+        <key>
+            <default display="1" />
+            <shifted display="!" />
+        </key>
+        <key>
+            <default display="2" />
+            <shifted display="&quot;" />
+        </key>
+        <key>
+            <default display="3" />
+            <shifted display="£" />
+        </key>
+        <key>
+            <default display="4" />
+            <shifted display="$" />
+        </key>
+        <key>
+            <default display="5" />
+            <shifted display="%" />
+        </key>
+        <key>
+            <default display="6" />
+            <shifted display="^" />
+        </key>
+        <key>
+            <default display="7" />
+            <shifted display="&amp;" />
+        </key>
+        <key>
+            <default display="8" />
+            <shifted display="*" />
+        </key>
+        <key>
+            <default display="9" />
+            <shifted display="(" />
+        </key>
+        <key>
+            <default display="0" />
+            <shifted display=")" />
+        </key>
+        <key width="1500">
+            <default display="Ctrl" action="modifier:ctrl" />
+        </key>
+    </row>
+
+    <!-- Tab, slashes, and the rest of the web punctuation -->
+    <include file="internet-fragment.xml"/>
+
+    <!-- Letters, shift, enter, and the space bar -->
+    <include file="base-fragment.xml"/>
+</layout>
+</keyboard>

@@ -19,7 +19,7 @@ fi
 # Install Linux packages
 if [ "$OS" = "Linux" ]; then
     sudo apt update
-    sudo apt install -y build-essential cmake pkg-config nodejs gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libjson-glib-dev libnice-dev libx264-dev
+    sudo apt install -y build-essential cmake pkg-config nodejs gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-nice libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libjson-glib-dev libnice-dev libx264-dev libsdl2-dev libsdl2-ttf-dev libx11-dev libxext-dev
     if apt-cache show nvidia-l4t-gstreamer >/dev/null 2>&1; then
         sudo apt install -y nvidia-l4t-gstreamer nvidia-l4t-multimedia nvidia-l4t-multimedia-utils
     fi

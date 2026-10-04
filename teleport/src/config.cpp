@@ -50,9 +50,9 @@ TeleportConfig loadConfig() {
         in >> settings;
         if (settings.contains("autoAnswer")) config.autoAnswer = settings["autoAnswer"].get<int>();
         if (settings.contains("deviceId")) config.deviceId = settings["deviceId"].get<int>();
-        if (settings.contains("statusOpen")) config.statusOpen = settings["statusOpen"].get<bool>();
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
+        config.loaded = false;
     }
 
     // An old device.id still wins, so a machine keeps its name across the upgrade
@@ -111,17 +111,22 @@ static void migrateDeviceIdFile(TeleportConfig& config) {
 // Write ./config.json
 void saveConfig(const TeleportConfig& config) {
     try {
-        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}, {"statusOpen", config.statusOpen}};
-        ofstream out(CONFIG_PATH);
-        out << settings.dump(2);
+        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}};
+        ofstream out("config.json.tmp");
+        if (!out.good()) {
+            cerr << "Failed to write config.json" << endl;
+            return;
+        }
+        out << settings.dump(2) << '\n';
+        if (!out.good()) {
+            cerr << "Failed to write config.json" << endl;
+            return;
+        }
+        out.close();
+        if (rename("config.json.tmp", CONFIG_PATH) != 0) {
+            cerr << "Failed to replace config.json" << endl;
+        }
     } catch (const exception& error) {
         cerr << "Failed to write config.json: " << error.what() << endl;
     }
-}
-
-// Remember whether the peer list was showing
-void saveStatusOpen(bool open) {
-    TeleportConfig config = loadConfig();
-    config.statusOpen = open;
-    saveConfig(config);
 }

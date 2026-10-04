@@ -1,17 +1,92 @@
-// Unix socket for other programs to move the head, pause the camera, and open the menu.
-
 #pragma once
 
+// SDL
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 
+// System
+#include <string>
+
+// Namespace
+using namespace std;
+
+// What a caller wants the camera to do around a video call
 const int CALL_HANDOFF_NONE = 0;
 const int CALL_HANDOFF_PAUSE = 1;
 const int CALL_HANDOFF_RESUME = 2;
 
-bool start_interface();
+// Open and close the Unix socket other programs talk to, and say where recordings are kept
+bool start_interface(const string& recordings_path);
 void stop_interface();
+
+// Pick up a pause or resume request, then report how it went
 int take_call_handoff();
 void complete_call_handoff(bool ok);
+
+// Route a screen tap to the menu button and the popup items
 void handle_call_event(const SDL_Event& event);
+
+// Draw the menu button, and the popup above it when it is open
+void draw_menu(TTF_Font* font);
+
+// Record button in the status bar's place, shown only while that bar is hidden, and the date above the video while recording
+void draw_entry_prompt(TTF_Font* font, bool bar_kept);
+void draw_entry_date(TTF_Font* font, int video_top);
+
+// True while the popup list is showing, and where the button starts
+bool menu_open();
+int menu_button_left();
+
+// True while the peer list is up
 bool call_overlay_open();
-void set_call_overlay_open(bool open);
+
+// Draw the recordings list or the playing video, and say when it is up
+void draw_video_list(TTF_Font* font);
+bool video_list_open();
+
+// Draw the wireless networks, and say when that list is up
+void draw_wifi_list(TTF_Font* font);
+bool wifi_list_open();
+
+// Draw the volume levels, and say when that picker is up
+void draw_volume_list(TTF_Font* font);
+bool volume_list_open();
+
+// Camera, Move, and Audio presses since the last check, then clear them
+void take_menu_presses(bool& camera, bool& move, bool& audio);
+
+// What the Record button or a voice command last asked for
+const int RECORD_REQUEST_NONE = 0;
+const int RECORD_REQUEST_TOGGLE = 1;
+const int RECORD_REQUEST_START = 2;
+const int RECORD_REQUEST_STOP = 3;
+
+// Take the recording request, and a request to play the newest recording
+int take_record_request();
+bool take_play_request();
+
+// True once after a client asked for talk to restart, like the key setup after saving a key
+bool take_talk_restart_request();
+
+// True while face tracking should follow, off in ready until talk hears the wake word
+bool listen_open();
+
+// Draw the warning sent over the socket, a tap on it opens its link when it has one
+void draw_warning(TTF_Font* font, int x, int y, SDL_Color color);
+
+// Send talk back to ready, the same as tapping Quiet
+void send_quiet();
+
+// Which model talk runs, and no request waiting on the mode buttons
+const int TALK_MODE_LOCAL = 0;
+const int TALK_MODE_CLOUD = 1;
+const int TALK_MODE_REALTIME = 2;
+const int TALK_MODE_NONE = -1;
+
+// Show whether the camera preview is up, so the Camera button can say so
+void set_camera_showing(bool showing);
+
+// Light the mode talk is running, take the mode button just tapped, and name one
+void set_talk_mode(int mode);
+int take_talk_mode_request();
+const char* talk_mode_name(int mode);

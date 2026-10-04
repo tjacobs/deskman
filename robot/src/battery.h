@@ -6,17 +6,17 @@
 // Namespace
 using namespace std;
 
-// Recheck the INA219 about once a second
+// Recheck the INA219 battery voltage and current
 void check_battery();
 
-// Empty when the meter is missing
+// Return the face label, empty when the meter is missing
 string battery_text();
 
-// Filtered pack voltage, or 0 when unread
+// Return the filtered pack voltage, 0 when unread
 float battery_voltage();
 
-// 0 to 100 from the LiPo curve, or 0 when unread
+// Return charge from 0 to 100 on the pack curve, 0 when unread
 int battery_percent();
 
-// Filtered shunt current in amps, sign follows the meter wiring
+// Return the filtered shunt current in amps, sign follows the meter wiring
 float battery_current();

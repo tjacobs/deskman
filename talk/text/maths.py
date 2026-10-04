@@ -38,13 +38,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "calculate",
-            "description": "Evaluate a Python math or date expression. Required for arithmetic and day counts. For days until a date use (date(year, month, day) - today()).days. Never invent the answer and never pass a bare number.",
+            "description": "Evaluate a Python math or date expression.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "expression": {
                         "type": "string",
-                        "description": "Python expression, for example 17 * 43, math.sqrt(144), or (date(2026, 8, 15) - today()).days.",
+                        "description": "Python expression, for example 17 * 43 or (date(2026, 8, 15) - today()).days.",
                     },
                 },
                 "required": ["expression"],

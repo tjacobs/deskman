@@ -10,20 +10,13 @@ TALK_DIR="$(cd "${ROBOT_DIR}/../talk" && pwd)"
 ROBOT_BIN="${ROBOT_DIR}/build/robot"
 TALK_SCRIPT="${TALK_DIR}/talk.py"
 TALK_PYTHON="${TALK_DIR}/.venv/bin/python"
-LOG_FILE="${ROBOT_DIR}/log.txt"
 DISPLAY_DEFAULT=":0"
+OPENAI_ENV_FILE="${TALK_DIR}/openai.env"
 
 # Main
 main() {
-    # Tell the user where output goes
-    mkdir -p "$(dirname "${LOG_FILE}")"
-    echo "Writing ${LOG_FILE}"
-    echo "Run: tail -f ${LOG_FILE}"
-
-    # Append all to log
-    exec >> "${LOG_FILE}" 2>&1
-    echo ""
-    echo "=== robot_service $(date -Is) ==="
+    # Give talk.py --cloud the key when the service did not inherit bashrc
+    load_openai_key
 
     # Run the robot binary when it exists, it starts talk.py itself
     if [[ -x "${ROBOT_BIN}" ]]; then
@@ -36,7 +29,20 @@ main() {
     # Start talk.py without the face
     echo "Starting talk.py..."
     cd "${TALK_DIR}"
-    exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}" --no-replay-robot
+    exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}"
+}
+
+# Load OPENAI_API_KEY from the user env file when unset
+load_openai_key() {
+    if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+        return
+    fi
+    if [[ ! -f "${OPENAI_ENV_FILE}" ]]; then
+        return
+    fi
+    set -a
+    . "${OPENAI_ENV_FILE}"
+    set +a
 }
 
 # Run service

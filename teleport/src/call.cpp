@@ -6,7 +6,6 @@
 #include "audio.h"
 #include "video.h"
 #include "interface.h"
-#include "config.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -170,23 +169,13 @@ bool toggleCallDirectory() {
     if (requestedView == CALL_INTERFACE_DIRECTORY) {
         requestedView = CALL_INTERFACE_IDLE;
         callStatus.clear();
-        saveStatusOpen(false);
         return false;
     }
     if (requestedView != CALL_INTERFACE_IDLE) return false;
     requestedView = CALL_INTERFACE_DIRECTORY;
     callPeers.clear();
     callStatus.clear();
-    saveStatusOpen(true);
     return true;
-}
-
-// Show the peer list after a restart that left it open
-void restoreCallDirectory() {
-    lock_guard<mutex> lock(callInterfaceMutex);
-    requestedView = CALL_INTERFACE_DIRECTORY;
-    callPeers.clear();
-    callStatus.clear();
 }
 
 void showIncomingCall(string peer) {
@@ -510,11 +499,10 @@ static int incomingStripHeight() {
     return height;
 }
 
-// Tom's robots are teleport1 and teleport3, browsers log in as webNNNNNN
+// Name the caller, browsers log in as webNNNNNN
 static string incomingCallTitle(const string& peer) {
     string lower;
     for (unsigned char character : peer) lower.push_back((char)tolower(character));
-    if (lower == "teleport1" || lower == "teleport3") return "Tom calling...";
     if (lower.find(WEB_PEER_PREFIX) == 0) return "Web calling...";
     if (peer.empty()) return "Incoming call";
     return peer + " calling...";
@@ -611,7 +599,7 @@ static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill
     SDL_SetRenderDrawColor(drawTarget, fill.r, fill.g, fill.b, fill.a);
     SDL_RenderFillRect(drawTarget, &rect);
     if (!callFont || label.empty()) return;
-    SDL_Surface* surface = TTF_RenderText_Solid(callFont, label.c_str(), text);
+    SDL_Surface* surface = TTF_RenderUTF8_Solid(callFont, label.c_str(), text);
     if (!surface) return;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(drawTarget, surface);
     int x = rect.x + (rect.w - surface->w) / 2;
@@ -689,7 +677,7 @@ static void drawCameraIcon(int x, int y, bool recording) {
 
 static void drawLabel(const char* text, int x, int y, SDL_Color color) {
     if (!callFont || !text || !text[0]) return;
-    SDL_Surface* surface = TTF_RenderText_Solid(callFont, text, color);
+    SDL_Surface* surface = TTF_RenderUTF8_Solid(callFont, text, color);
     if (!surface) return;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(drawTarget, surface);
     SDL_Rect dest = {x, y, surface->w, surface->h};

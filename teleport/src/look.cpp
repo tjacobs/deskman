@@ -12,6 +12,7 @@
 
 #ifdef HAVE_X11_FULLSCREEN
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/extensions/shape.h>
 #endif
 
@@ -22,6 +23,10 @@ using namespace std::chrono;
 const int LOOK_CIRCLE_RADIUS = 40;
 const char* LOOK_ORIGIN_COLOR = "#808080";
 const char* LOOK_FINGER_COLOR = "#22A570";
+
+// Paint the circle into a see-through window, a shaped one comes out as a black square under a compositor
+const int LOOK_CIRCLE_DEPTH = 32;
+const unsigned long LOOK_CIRCLE_ALPHA = 0xFF000000;
 
 // Ignore the first few pixels of a drag, then step at the rate the web client repeats
 const int LOOK_DEAD_ZONE = 5;
@@ -43,6 +48,8 @@ static string lookDeviceName;
 static Display* lookDisplay = NULL;
 static Window lookOriginWindow = 0;
 static Window lookFingerWindow = 0;
+static unsigned long lookOriginPixel = 0;
+static unsigned long lookFingerPixel = 0;
 
 // The finger, in screen pixels
 static bool lookDown = false;
@@ -58,9 +65,10 @@ static steady_clock::time_point lastLookSend;
 static void pollLookPointer();
 static bool isLookChrome(int x, int y);
 static bool ensureLookCircles();
-static Window createCircleWindow(const char* colorName);
+static Window createCircleWindow(const char* colorName, unsigned long& pixel);
+static void paintCircle(Window window, unsigned long pixel);
 static void showCircles();
-static void placeCircle(Window window, int x, int y);
+static void placeCircle(Window window, unsigned long pixel, int x, int y);
 static void hideCircles();
 static void sendLookStep();
 static void sendLookValues(int pan, int tilt);
@@ -118,7 +126,7 @@ static void pollLookPointer() {
     if (buttonDown && lookDown) {
         lookX = rootX;
         lookY = rootY;
-        placeCircle(lookFingerWindow, lookX, lookY);
+        placeCircle(lookFingerWindow, lookFingerPixel, lookX, lookY);
         return;
     }
 
@@ -141,55 +149,78 @@ static bool isLookChrome(int x, int y) {
 static bool ensureLookCircles() {
     if (!lookDisplay) return false;
     if (lookOriginWindow && lookFingerWindow) return true;
-    lookOriginWindow = createCircleWindow(LOOK_ORIGIN_COLOR);
-    lookFingerWindow = createCircleWindow(LOOK_FINGER_COLOR);
+    lookOriginWindow = createCircleWindow(LOOK_ORIGIN_COLOR, lookOriginPixel);
+    lookFingerWindow = createCircleWindow(LOOK_FINGER_COLOR, lookFingerPixel);
     return lookOriginWindow && lookFingerWindow;
 }
 
-// One circle of solid colour, input falls through so QueryPointer still sees the finger
-static Window createCircleWindow(const char* colorName) {
+// One see-through window to paint a circle into, input falls through so QueryPointer still sees the finger
+static Window createCircleWindow(const char* colorName, unsigned long& pixel) {
     int screen = DefaultScreen(lookDisplay);
     int size = LOOK_CIRCLE_RADIUS * 2;
     XColor color;
-    Colormap colormap = DefaultColormap(lookDisplay, screen);
-    if (!XParseColor(lookDisplay, colormap, colorName, &color)) return 0;
-    if (!XAllocColor(lookDisplay, colormap, &color)) return 0;
+    if (!XParseColor(lookDisplay, DefaultColormap(lookDisplay, screen), colorName, &color)) return 0;
+    pixel = LOOK_CIRCLE_ALPHA | ((color.red >> 8) << 16) | ((color.green >> 8) << 8) | (color.blue >> 8);
 
-    // Keep it out of the window manager's hands
+    // Take a visual with an alpha channel, so everything outside the circle stays clear
+    XVisualInfo visualInfo;
+    bool haveAlpha = XMatchVisualInfo(lookDisplay, screen, LOOK_CIRCLE_DEPTH, TrueColor, &visualInfo) != 0;
+
+    // Keep it out of the window manager's hands, and start it fully clear
     XSetWindowAttributes attributes;
     attributes.override_redirect = True;
-    Window window = XCreateWindow(lookDisplay, RootWindow(lookDisplay, screen), 0, 0, size, size, 0, CopyFromParent, InputOutput, CopyFromParent, CWOverrideRedirect, &attributes);
+    attributes.background_pixel = 0;
+    attributes.border_pixel = 0;
+    unsigned long attributeMask = CWOverrideRedirect | CWBackPixel | CWBorderPixel;
+    if (haveAlpha) {
+        attributes.colormap = XCreateColormap(lookDisplay, RootWindow(lookDisplay, screen), visualInfo.visual, AllocNone);
+        attributeMask |= CWColormap;
+    }
+    Window window = XCreateWindow(lookDisplay, RootWindow(lookDisplay, screen), 0, 0, size, size, 0, haveAlpha ? LOOK_CIRCLE_DEPTH : CopyFromParent, InputOutput, haveAlpha ? visualInfo.visual : CopyFromParent, attributeMask, &attributes);
     if (!window) return 0;
-    XSetWindowBackground(lookDisplay, window, color.pixel);
 
-    // Cut the square down to a circle
-    Pixmap mask = XCreatePixmap(lookDisplay, window, size, size, 1);
-    GC maskContext = XCreateGC(lookDisplay, mask, 0, NULL);
-    XSetForeground(lookDisplay, maskContext, 0);
-    XFillRectangle(lookDisplay, mask, maskContext, 0, 0, size, size);
-    XSetForeground(lookDisplay, maskContext, 1);
-    XFillArc(lookDisplay, mask, maskContext, 0, 0, size, size, 0, 360 * 64);
-    XShapeCombineMask(lookDisplay, window, ShapeBounding, 0, 0, mask, ShapeSet);
-    XFreeGC(lookDisplay, maskContext);
-    XFreePixmap(lookDisplay, mask);
+    // Without alpha, cut the square down instead, a shaped window on top of alpha comes back as a black square
+    if (!haveAlpha) {
+        Pixmap mask = XCreatePixmap(lookDisplay, window, size, size, 1);
+        GC maskContext = XCreateGC(lookDisplay, mask, 0, NULL);
+        XSetForeground(lookDisplay, maskContext, 0);
+        XFillRectangle(lookDisplay, mask, maskContext, 0, 0, size, size);
+        XSetForeground(lookDisplay, maskContext, 1);
+        XFillArc(lookDisplay, mask, maskContext, 0, 0, size, size, 0, 360 * 64);
+        XShapeCombineMask(lookDisplay, window, ShapeBounding, 0, 0, mask, ShapeSet);
+        XFreeGC(lookDisplay, maskContext);
+        XFreePixmap(lookDisplay, mask);
+    }
+
+    // Let taps through, the pointer poll reads the finger off the root
     XShapeCombineRectangles(lookDisplay, window, ShapeInput, 0, 0, NULL, 0, ShapeSet, Unsorted);
     return window;
 }
 
+// Fill the circle, mapping clears the window so this runs every time one comes up
+static void paintCircle(Window window, unsigned long pixel) {
+    if (!window) return;
+    int size = LOOK_CIRCLE_RADIUS * 2;
+    GC context = XCreateGC(lookDisplay, window, 0, NULL);
+    XSetForeground(lookDisplay, context, pixel);
+    XFillArc(lookDisplay, window, context, 0, 0, size, size, 0, 360 * 64);
+    XFreeGC(lookDisplay, context);
+}
+
 // Put the grey circle where the finger landed and the green one on the finger
 static void showCircles() {
-    placeCircle(lookOriginWindow, lookStartX, lookStartY);
-    placeCircle(lookFingerWindow, lookX, lookY);
     if (lookOriginWindow) XMapRaised(lookDisplay, lookOriginWindow);
     if (lookFingerWindow) XMapRaised(lookDisplay, lookFingerWindow);
-    XFlush(lookDisplay);
+    placeCircle(lookOriginWindow, lookOriginPixel, lookStartX, lookStartY);
+    placeCircle(lookFingerWindow, lookFingerPixel, lookX, lookY);
 }
 
 // Centre one circle on a point, and keep it above the video
-static void placeCircle(Window window, int x, int y) {
+static void placeCircle(Window window, unsigned long pixel, int x, int y) {
     if (!window) return;
     XMoveWindow(lookDisplay, window, x - LOOK_CIRCLE_RADIUS, y - LOOK_CIRCLE_RADIUS);
     XRaiseWindow(lookDisplay, window);
+    paintCircle(window, pixel);
     XFlush(lookDisplay);
 }
 

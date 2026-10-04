@@ -18,9 +18,12 @@ In another terminal, ask a question:
 ```bash
 cd talk/text
 ./ask.py "What time is it?"
+./ask.py --cloud "What time is it?"
 ./ask.py --test
 ./tests.py
 ```
+
+`--cloud` uses OpenAI chat completions instead of llama-server. Set `OPENAI_API_KEY`. `TALK_LLM=cloud`, `TALK_CLOUD_MODEL`, and `TALK_CLOUD_BASE` work the same as on `talk.py`. `--test` still uses the local server.
 
 `./ask.py --test` and `./tests.py` run the tool suite in `tests.py`, one ask per tool. They start `./server.sh` when the text server is not already up, and stop it again if they started it.
 
@@ -66,7 +69,7 @@ Daily spoken reminders use `set_reminder`, `cancel_reminder`, and `list_reminder
 
 ### Talk logs
 
-`load_talk_log` reads `../talks/YYYY-MM-DD.txt` into context for today, yesterday, or a date, so the model can answer questions about prior conversations.
+`load_talk_log` reads `../history/YYYY-MM-DD.txt` into context for today, yesterday, or a date, so the model can answer questions about prior conversations.
 
 ### System
 

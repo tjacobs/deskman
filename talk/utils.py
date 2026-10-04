@@ -3,6 +3,7 @@
 # Imports
 import os
 import sys
+import json
 import time
 import glob
 import shutil
@@ -12,6 +13,7 @@ import warnings
 
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(SCRIPT_DIR, 'config.json')
 CACHE_DIR = os.path.join(SCRIPT_DIR, 'cache')
 AUDIO_DIR = os.path.join(SCRIPT_DIR, 'audio')
 MODEL_CACHE_DIR = os.path.join(CACHE_DIR, 'models--hexgrad--Kokoro-82M', 'snapshots')
@@ -38,6 +40,16 @@ VIDEO_DIR = '/sys/class/video4linux'
 CPU_SCALING_DIR = '/sys/devices/system/cpu'
 CPU_INDEX_MAX = 64
 
+# Config quiet hours on the 24 hour clock, the robot makes no sound from bedtime until wake up
+BEDTIME = 22
+WAKE_UP = 7
+
+# Config internet check, ping until one reply or the deadline in seconds
+INTERNET_HOST = '1.1.1.1'
+INTERNET_DEADLINE = '3'
+LINUX_DEADLINE_FLAG = '-w'
+MAC_DEADLINE_FLAG = '-t'
+
 # Config huggingface cache
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
@@ -45,14 +57,55 @@ os.environ['HF_HUB_VERBOSITY'] = 'error'
 # State
 PLAYBACK_AVAILABLE = True
 
+# Read config.json, keeping the given defaults for anything it does not set
+def load_config(defaults):
+    # Start from the defaults the caller asked for
+    config = dict(defaults)
+
+    # Load the file, a missing or broken one just leaves the defaults
+    try:
+        with open(CONFIG_PATH) as handle:
+            config.update(json.load(handle))
+    except (OSError, ValueError):
+        print(f'No readable {os.path.basename(CONFIG_PATH)}, using defaults.', flush=True)
+
+    # Return the settings
+    return config
+
+# True from bedtime until wake up, when the robot must stay silent
+def is_bedtime():
+    hour = time.localtime().tm_hour
+    return hour >= BEDTIME or hour < WAKE_UP
+
 # Return audio player command for this platform
 def audio_player():
     return MAC_PLAYER if platform.system() == 'Darwin' else LINUX_PLAYER
 
 # Build playback command for one wav file
 def play_wav_command(wav_path):
-    # Play through the default device, tools/audio.sh points that at the USB soundcard
-    return [audio_player(), wav_path]
+    player = audio_player()
+    command = [player]
+
+    # Share the USB speaker through dmix too, the default device is PulseAudio, which locks the card and silences the realtime voice
+    card = find_usb_card()
+    if player == LINUX_PLAYER and card is not None:
+        command += ['-D', shared_playback_device(card)]
+    command.append(wav_path)
+    return command
+
+# Build playback command for a raw stream arriving on stdin
+def play_raw_command(rate, channels):
+    player = audio_player()
+    command = [player]
+
+    # Share the USB speaker through dmix, plughw locks the card and fails while the mic is open
+    card = find_usb_card()
+    if player == LINUX_PLAYER and card is not None:
+        command += ['-D', shared_playback_device(card)]
+
+    # plug converts, the card may only accept another rate or channel count
+    command += ['-q', '-f', 'S16_LE', '-r', str(rate), '-c', str(channels), '-t', 'raw']
+    return command
 
 # Return true when audio player is available
 def check_audio_player():
@@ -75,7 +128,7 @@ def check_playback():
         PLAYBACK_AVAILABLE = False
         print(f'Audio playback unavailable: {player_error}, generating without playback.')
 
-# Return card index for the playback-only USB sound device
+# Return card index for the USB speaker
 def find_usb_card():
     if not os.path.isfile(CARDS_PATH):
         return None
@@ -90,12 +143,21 @@ def find_usb_card():
             if card_index_text.isdigit():
                 usb_cards.append(int(card_index_text))
 
-    # Prefer the speaker-only card, one without a mic
+    # Skip cameras and capture-only nodes, they cannot play
+    speaker_cards = []
     for card_index in usb_cards:
+        if card_is_camera(card_index):
+            continue
+        if not card_has_playback(card_index):
+            continue
+        speaker_cards.append(card_index)
+
+    # Prefer the speaker-only card, one without a mic
+    for card_index in speaker_cards:
         if not card_has_capture(card_index):
             return card_index
-    if usb_cards:
-        return usb_cards[0]
+    if speaker_cards:
+        return speaker_cards[0]
     return None
 
 # Return true when a card has a capture stream
@@ -170,7 +232,15 @@ def linux_record_command():
     if card is None:
         print('No microphone found. Plug in a USB mic and try again.')
         sys.exit(1)
-    return [LINUX_RECORDER, '-D', f'plughw:{card},0', '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+    return [LINUX_RECORDER, '-D', shared_capture_device(card), '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+
+# Name the shared capture device, dsnoop lets a recording read the mic at the same time
+def shared_capture_device(card):
+    return f'plug:"dsnoop:{card},0"'
+
+# Name the shared playback device, dmix lets talk speak while a recording holds the card
+def shared_playback_device(card):
+    return f'plug:"dmix:{card},0"'
 
 # Start the recorder streaming raw audio to stdout
 def start_recorder(command):
@@ -284,6 +354,10 @@ def voice_cache_path(voice):
             return voice_path
     return None
 
+# Stop Hugging Face from waiting on the network
+def use_hub_offline():
+    os.environ['HF_HUB_OFFLINE'] = '1'
+
 # Use local cache only when model and voice are already downloaded
 def enable_offline_if_cached(voice):
     if voice_cache_path(voice) is not None:
@@ -309,7 +383,8 @@ def is_offline():
 
 # Return true when public internet responds to ping
 def network_available():
-    result = subprocess.run(['ping', '-c', '1', '-W', '2', '1.1.1.1'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline_flag = MAC_DEADLINE_FLAG if platform.system() == 'Darwin' else LINUX_DEADLINE_FLAG
+    result = subprocess.run(['ping', '-c', '1', deadline_flag, INTERNET_DEADLINE, INTERNET_HOST], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return result.returncode == 0
 
 # Return true when model and default voice are cached locally

@@ -6,13 +6,25 @@
 import json
 import os
 import socket
+import threading
+import time
 
 # Config
 LOOK_DEFAULT_DEGREES = 90
-LOOK_MAX_DEGREES = 90
-HEAD_PERCENT_MAX = 100
+HAT_UP_DEGREES = -40
+HAT_DOWN_DEGREES = 90
 CONNECT_TIMEOUT_SEC = 2.0
 READ_TIMEOUT_SEC = 5.0
+PUSH_RETRY_SECONDS = 1.0
+PUSH_COMMANDS = ('wake', 'quiet')
+
+# Face menu presses pushed by the robot, one held socket
+pending_requests = {'wake': False, 'quiet': False}
+pending_lock = threading.Lock()
+push_listener_started = False
+
+# Warning last put on the face, so a good reply only clears one that is up
+shown_warning = ''
 
 # Map spoken names onto socket directions
 DIRECTION_ALIASES = {
@@ -52,19 +64,21 @@ def main():
 # Turn the head via the deskman control socket
 def look(direction, degrees):
     direction = normalize_direction(direction)
-    percent = degrees_to_percent(degrees)
+    amount = look_degrees(degrees)
     if direction == "center":
-        reply = send_command({"command": "center"})
-    elif direction == "left" or direction == "right":
-        reply = send_command({"command": "move", "direction": direction, "degrees": float(percent * LOOK_MAX_DEGREES / HEAD_PERCENT_MAX)})
+        reply = send_command({"command": "move", "pan": 0, "tilt": 0})
+    elif direction == "left":
+        reply = send_command({"command": "move", "pan": -amount})
+    elif direction == "right":
+        reply = send_command({"command": "move", "pan": amount})
     elif direction == "up":
-        reply = send_command({"command": "move", "y": percent})
+        reply = send_command({"command": "move", "tilt": amount})
     elif direction == "down":
-        reply = send_command({"command": "move", "y": -percent})
+        reply = send_command({"command": "move", "tilt": -amount})
     elif direction == "hat_up":
-        reply = send_command({"command": "move", "hat": HEAD_PERCENT_MAX - percent})
+        reply = send_command({"command": "move", "hat": HAT_UP_DEGREES})
     elif direction == "hat_down":
-        reply = send_command({"command": "move", "hat": percent})
+        reply = send_command({"command": "move", "hat": HAT_DOWN_DEGREES})
     else:
         raise RuntimeError(f"unknown direction {direction}")
 
@@ -85,22 +99,20 @@ def look(direction, degrees):
     if direction == "down":
         return "Looked down."
     if direction == "hat_up":
-        return "Moved my hat up."
+        return "My hat is up."
     if direction == "hat_down":
-        return "Moved my hat down."
+        return "My hat is down."
     return f"Moved {direction}."
 
-# Map 0-90 degrees onto 0-100 percent of travel
-def degrees_to_percent(degrees):
+# Read a look amount in degrees, default all the way
+def look_degrees(degrees):
     try:
         value = float(degrees)
     except (TypeError, ValueError):
         value = float(LOOK_DEFAULT_DEGREES)
     if value <= 0:
         value = float(LOOK_DEFAULT_DEGREES)
-    if value > LOOK_MAX_DEGREES:
-        value = LOOK_MAX_DEGREES
-    return int(round(value / LOOK_MAX_DEGREES * HEAD_PERCENT_MAX))
+    return int(round(value))
 
 # Lowercase and collapse aliases like hat up
 def normalize_direction(direction):
@@ -110,18 +122,125 @@ def normalize_direction(direction):
         return DIRECTION_ALIASES[text]
     return text.replace(" ", "_")
 
-# Read pack percent from the robot, or None when the socket is down
-def battery_percent():
+# Read pack percent and voltage from the robot, or None when the socket is down
+def battery_reading():
     try:
         reply = send_command({"command": "battery"})
     except Exception:
-        return None
+        return None, None
     if not reply.get("ok"):
-        return None
+        return None, None
     try:
-        return int(round(float(reply.get("percent"))))
+        return int(round(float(reply.get("percent")))), float(reply.get("voltage"))
     except (TypeError, ValueError):
-        return None
+        return None, None
+
+# Tell the robot whether talk is listening, so it can track a face
+def set_listen(open):
+    send_command({"command": "listen", "open": bool(open)})
+
+# Start or stop recording a video on the robot
+def set_recording(start):
+    reply = send_command({"command": "record", "start": bool(start)})
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "unknown error"))
+
+# Play the newest recording on the robot screen
+def play_last_recording():
+    reply = send_command({"command": "play"})
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "unknown error"))
+
+# Ask the robot to restart talk, so a newly saved key or setting takes effect
+def restart_talk():
+    reply = send_command({"command": "restart_talk"})
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "unknown error"))
+
+# Print a warning last so the status bar shows it, and hold it on the face
+def print_warning(text, url):
+    print(f"Warning: {text}.", flush=True)
+    show_warning(text, url)
+
+# Take the warning off the face, when one is up
+def clear_warning():
+    if shown_warning:
+        show_warning('', '')
+
+# Put a warning on the face, a tap opens the url when there is one, empty text clears it, a robot that is down just misses it
+def show_warning(text, url):
+    global shown_warning
+    shown_warning = text
+    try:
+        send_command({"command": "warning", "text": text, "url": url})
+    except Exception:
+        pass
+
+# Light the mode talk started in on the mode buttons, and dim the ones it cannot run
+def show_talk_mode(mode, available):
+    try:
+        send_command({"command": "talk_mode", "mode": mode, "available": available})
+    except Exception:
+        pass
+
+# Hold a socket so Listen and Quiet arrive as pushes, not polls
+def start_push_listener():
+    global push_listener_started
+    if push_listener_started:
+        return
+    push_listener_started = True
+    thread = threading.Thread(target=push_loop, daemon=True)
+    thread.start()
+
+# Reconnect when the robot is down or the socket drops
+def push_loop():
+    while True:
+        try:
+            read_pushes()
+        except Exception:
+            time.sleep(PUSH_RETRY_SECONDS)
+
+# Stay on one connection and take wake and quiet lines as they arrive
+def read_pushes():
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(CONNECT_TIMEOUT_SEC)
+        sock.connect(robot_interface_path())
+        sock.settimeout(None)
+        data = b''
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                return
+            data += chunk
+            while b'\n' in data:
+                line, data = data.split(b'\n', 1)
+                note_push_line(line)
+
+# Remember a Listen or Quiet press from the face
+def note_push_line(line):
+    try:
+        event = json.loads(line.decode('utf-8', errors='replace'))
+    except json.JSONDecodeError:
+        return
+    command = event.get('command')
+    if command not in PUSH_COMMANDS:
+        return
+    with pending_lock:
+        pending_requests[command] = True
+
+# True when a face menu press is waiting
+def has_pending_request():
+    with pending_lock:
+        return pending_requests['wake'] or pending_requests['quiet']
+
+# True when the face menu asked for this command, then clear it
+def consume_request(command):
+    start_push_listener()
+    with pending_lock:
+        if not pending_requests.get(command):
+            return False
+        pending_requests[command] = False
+        return True
 
 # Ask the robot process to exit, it also tells teleport to exit
 def quit_robot():

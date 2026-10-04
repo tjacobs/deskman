@@ -1,79 +1,195 @@
 // Deskman robot.
 // Face, servos, and camera tracking.
 
+// Local
 #include "face.h"
 #include "screen.h"
 #include "servos.h"
 #include "renderer.h"
-#include "tracker.hpp"
+#include "tracker.h"
 #include "config.h"
 #include "interface.h"
+#include "recorder.h"
+#include "player.h"
 #include "fan.h"
 #include "battery.h"
-#include <iostream>
-#include <thread>
+
+// Json
+#include "json.hpp"
+
+// System
+#include <atomic>
+#include <cctype>
 #include <chrono>
-#include <mutex>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <sstream>
+#include <system_error>
+#include <thread>
+#include <vector>
+
+// Posix
 #include <signal.h>
 #include <sys/resource.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <filesystem>
-#include <fstream>
-#include <cctype>
-#include <system_error>
-#include <vector>
-#include <iterator>
 
+// Namespace
 using namespace std;
 using namespace std::chrono;
 using namespace std::this_thread;
 
+// Parsing the flags hands this back when the robot should carry on running
+static const int KEEP_RUNNING = -1;
+
+// Fall back to the local HDMI seat when DISPLAY is unset
 static const char* DEFAULT_DISPLAY = ":0";
+
+// Whether a sweep probes the bus for extra servos first, which takes a few seconds
+static const bool SWEEP_SCAN_BUS = true;
+static const bool SWEEP_KNOWN_SERVOS = false;
+
+// Frame rate the face is drawn at, and the faster one used while video is on screen
+static const int MAX_FPS = 20;
+static const int FRAME_MS = 1000 / MAX_FPS;
+static const int VIDEO_FPS = 30;
+static const int VIDEO_FRAME_MS = 1000 / VIDEO_FPS;
+
+// Turn on to log how many frames a second the face loop is drawing
+static const bool LOG_SCREEN_FPS = false;
+static const int LOG_FPS_GAP_MS = 5000;
+
+// Wait for the panel to connect, and retry the rotate
 static const int SCREEN_WAIT_MS = 500;
-static const int TALK_EARLY_WAIT_MS = 3000;
-static const int TALK_EARLY_POLL_MS = 100;
-static const int TALK_STOP_WAIT_MS = 200;
+static const int SCREEN_ROTATE_TRIES = 2;
+
+// Frames to pump before the slow startup work, so the eyes appear early
+static const int STARTUP_FRAMES = 8;
+
+// Ask talk.py to stop, then kill it, it holds the GPU so exiting takes a few seconds, the last code says the exec never took
+static const int TALK_STOP_WAIT_MS = 5000;
 static const int TALK_STOP_POLL_MS = 50;
-static const int MAX_FPS = 30;
+static const int TALK_EXEC_FAILED = 127;
+
+// Turn on to print memory, threads, and open files once a minute
+static const bool LOG_HEALTH = false;
+static const int HEALTH_LOG_SECONDS = 60;
+
+// How far the head and eyes swing for a full face offset
+static const int FACE_TRACK_COUNTS = 20;
+static const int FACE_LOOK_TILT_DEGREES = 30;
+
+// Process and script names to match
+static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
 static const char* TALK_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
+static const char* TALK_CONFIG_FROM_REPO = "talk/config.json";
+static const char* AUDIO_TEST_FROM_REPO = "talk/tools/test_audio.py";
+static const char* RECORDINGS_FROM_REPO = "robot/recordings";
+static const char* JETSON_OUTPUT = "DP-1";
+static const char* JETSON_TOUCH = "WaveShare WS170120";
+static const char* PI_OUTPUT = "DSI-2";
+static const char* PI_TOUCH_MATCH = "ft5x06";
 
+// Close inherited descriptors in the talk child, ignoring a silly rlimit
+static const int DEFAULT_MAX_DESCRIPTORS = 1024;
+static const int MAX_SANE_DESCRIPTORS = 100000;
+
+// Longest line of ps output to read
+static const int PS_LINE_SIZE = 4096;
+
+// White behind the face, red warnings down the left side
+static const SDL_Color BACKGROUND_COLOR = {255, 255, 255, 255};
+static const SDL_Color WARNING_COLOR = {200, 0, 0, 255};
+static const int WARNING_X = 10;
+static const int FAN_WARNING_Y = 10;
+static const int TEMPERATURE_WARNING_Y = 50;
+
+// Recording mark sits under the warnings, a square dot beside the elapsed time
+static const int RECORDING_MARK_Y = 90;
+static const int RECORDING_DOT_SIZE = 22;
+static const int RECORDING_MARK_GAP = 10;
+
+// Other warnings sit under the recording mark
+static const int WARNING_Y = 130;
+
+// Set from flags, read across the program
 bool show_window = true;
 bool use_camera = true;
 bool show_camera = false;
 volatile bool g_quit = false;
 
+// Talk child process and the call handoff state
 static pid_t g_talk_pid = -1;
 static bool g_no_talk = false;
-static bool g_cold_talk = false;
 static bool g_call_paused = false;
 static bool g_call_had_talk = false;
 
+// Audio test child, and whether it took the microphone off talk
+static pid_t g_audio_test_pid = -1;
+static bool g_audio_test_had_talk = false;
+
+// Whether the preview was up before a recording turned it on
+static bool g_camera_before_record = false;
+static atomic<bool> g_sweeping{false};
+
+// Renderer holding the face shapes
 VectorRenderer vectorRenderer;
 
-static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos);
-static void setup_display_env();
+// Later in this file
+static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& move_once);
+static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
+static void toggle_camera_preview(FaceTracker& faceTracker);
+static void start_servo_sweep();
+static bool sweeping();
+static void set_up_display();
+static void signalHandler(int signal);
+static void check_already_running();
+static pid_t find_other_running();
 static void rotate_screen();
+static const char* wait_for_portrait_output();
+static bool output_is_connected(const char* output);
+static void rotate_jetson_panel();
+static void map_touch();
+static bool display_is_rotated_left();
 static void show_face();
 static void draw_face();
 static int start_servos();
-static string repo_path(const char* relative);
+static int sweep_servo_test(bool no_servos);
+static void apply_record_request(FaceTracker& faceTracker);
+static void play_last_recording();
+static void toggle_recording(FaceTracker& faceTracker);
+static void take_camera_back(FaceTracker& faceTracker);
+static int frame_gap_ms();
+static void log_screen_rate();
+static void draw_recording_mark(TTF_Font* font);
+static void start_audio_test();
+static void reap_audio_test();
+static int load_talk_mode();
+static void switch_talk_mode(int mode);
+static bool start_talk_process();
 static pid_t find_talk_pid();
-static bool start_talk_process(bool cold_talk);
-static void stop_talk_process();
-static void reap_talk_process();
-static void wait_for_talk_early_exit();
-static void signalHandler(int signal);
-static void run_robot_loop(FaceTracker& faceTracker, bool& quit);
+static string repo_path(const char* relative);
 static void apply_call_handoff(FaceTracker& faceTracker);
+static void reap_talk_process();
+static void stop_robot(FaceTracker& faceTracker);
+static void stop_talk_process();
+static void log_robot_health();
+static int count_open_files();
 
 int main(int argc, char **argv) {
-    setup_display_env();
+    // Log
+    start_robot_log();
+
+    // Set up display
+    set_up_display();
 
     // Register signal handlers for clean shutdown
     signal(SIGINT, signalHandler);
@@ -82,42 +198,35 @@ int main(int argc, char **argv) {
     signal(SIGQUIT, signalHandler);
     signal(SIGPIPE, SIG_IGN);
 
-    // Load config, then overlay flags
+    // Load config
     AppConfig config = loadConfig();
     use_camera = config.useCamera;
-    set_call_overlay_open(config.statusOpen);
+
+    // Default the flags the parse can turn on
     bool sweep_only = false;
     bool no_servos = false;
-    bool print_servos = false;
-    int parse_result = parse_arguments(argc, argv, sweep_only, no_servos, print_servos);
-    if (parse_result != 0) return parse_result == 1 ? 0 : 1;
+    bool move_once = false;
+
+    // Parse arguments
+    int exit_code = parse_arguments(argc, argv, sweep_only, no_servos, move_once);
+    if (exit_code != KEEP_RUNNING)
+        return exit_code;
+
+    // Make sure only one robot is running
+    check_already_running();
+
+    // First log line
+    cout << "Starting robot..." << endl;
 
     // Relax servos on any later exit
     atexit([]() { relax_servos(); });
 
-    // Print positions only, skip the rest of the robot
-    if (print_servos) {
-        relax_servos();
-        start_servo_position_log();
-        while (!g_quit) {
-            sleep_for(milliseconds(100));
-        }
-        stop_servo_position_log();
-        return 0;
-    }
-
     // Rotate the screen and keep touch aligned
     rotate_screen();
 
-    // Put the face on screen before talk and the servo bus scan
-    bool quit = false;
-    if (!sweep_only) show_face();
-
-    // Spawn talk before the camera so a fast talk.py crash is not mid libcamera
-    if (!sweep_only && !g_no_talk) {
-        start_talk_process(g_cold_talk);
-        wait_for_talk_early_exit();
-    }
+    // Put the face on screen before the servo bus scan
+    if (!sweep_only)
+        show_face();
 
     // Relax servos when travel limits are missing from config.json
     if (!config.has_servo_limits) {
@@ -126,102 +235,103 @@ int main(int argc, char **argv) {
     }
 
     // Connect to servos, or relax them and leave them disabled
+    bool servos_ready = false;
     if (no_servos) {
         relax_servos();
     } else if (start_servos() != 0) {
-        if (sweep_only) return 1;
+        if (sweep_only)
+            return 1;
+    } else {
+        servos_ready = true;
     }
 
     // Servo sweep test around center, then exit
-    if (sweep_only) {
-        if (no_servos) {
-            printf("Servos disabled, not sweeping\n");
-            return 0;
-        }
-        sweep_servos();
-        return 0;
-    }
+    if (sweep_only)
+        return sweep_servo_test(no_servos);
 
     // Listen so other programs can move the head and pause the camera
-    start_interface();
+    start_interface(repo_path(RECORDINGS_FROM_REPO));
 
-    // Create face tracker after args so --camera / --no-camera apply
+    // Keep a way to log before the camera silences stderr, ffmpeg reports its errors on it
+    keep_recorder_errors();
+
+    // Open the camera before talk, so a missing one fails in the startup log
     FaceTracker faceTracker(show_camera, use_camera);
-    rotate_screen();
-
-    // Start face tracking if camera is available
-    if (use_camera && faceTracker.isCameraAvailable()) {
+    if (use_camera && faceTracker.isCameraAvailable())
         faceTracker.startTracking();
-    }
+    else
+        use_camera = false;
+
+    // Spawn talk after the bus, socket, and camera probe, with the mode buttons on the model it runs
+    set_talk_mode(load_talk_mode());
+    if (!g_no_talk)
+        start_talk_process();
 
     // Log positions after startup prints, so they do not interleave
-    if (no_servos) start_servo_position_log();
+    if (no_servos)
+        start_servo_position_log();
 
+    // Sweep the servos once when asked, the face keeps drawing
+    if (move_once) {
+        if (servos_ready)
+            start_servo_sweep();
+        else
+            printf("Servos disabled, not sweeping\n");
+    }
+
+    // Draw the face until quit, then put everything down
+    bool quit = false;
     run_robot_loop(faceTracker, quit);
-
-    // Stop child talk, sockets, tracking, then drop torque
-    quit = true;
-    g_quit = true;
-    cout << "Quit" << endl;
-    stop_talk_process();
-    stop_interface();
-    stop_servo_position_log();
-    faceTracker.stopTracking();
-    relax_servos();
-    if (show_window) close_window();
+    stop_robot(faceTracker);
     return 0;
 }
 
-// Parse flags, return 1 for help, -1 for error, 0 to continue
-static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& print_servos) {
+// Parse flags, return the exit code, or KEEP_RUNNING to carry on
+static int parse_arguments(int argc, char **argv, bool& sweep_only, bool& no_servos, bool& move_once) {
     g_no_talk = false;
-    g_cold_talk = false;
     for (int i = 1; i < argc; i++) {
-        string arg = argv[i];
-        if (arg == "--no-talk") {
+        string argument = argv[i];
+        if (argument == "--no-talk") {
             g_no_talk = true;
-        } else if (arg == "--cold") {
-            g_cold_talk = true;
-        } else if (arg == "--servos") {
+        } else if (argument == "--servos") {
             sweep_only = true;
-        } else if (arg == "--no-servos") {
+        } else if (argument == "--move") {
+            move_once = true;
+        } else if (argument == "--no-servos") {
             no_servos = true;
             g_no_talk = true;
             use_camera = false;
             show_camera = false;
-        } else if (arg == "--servos-print") {
-            print_servos = true;
-        } else if (arg == "--id") {
+        } else if (argument == "--id") {
             if (i + 2 >= argc) {
                 cerr << "Error: --id needs old and new ID" << endl;
-                return -1;
+                return 1;
             }
             int old_id = atoi(argv[++i]);
             int new_id = atoi(argv[++i]);
-            return set_servo_id(old_id, new_id) == 0 ? 1 : -1;
-        } else if (arg == "--camera") {
+            return set_servo_id(old_id, new_id) == 0 ? 0 : 1;
+        } else if (argument == "--camera") {
             show_camera = true;
-        } else if (arg == "--no-camera") {
+        } else if (argument == "--no-camera") {
             use_camera = false;
-        } else if (arg == "--help" || arg == "-h") {
+        } else if (argument == "--help" || argument == "-h") {
             cout << "Usage: " << argv[0] << " [options]" << endl;
             cout << "Options:" << endl;
             cout << "  --no-talk            Do not spawn talk.py" << endl;
-            cout << "  --cold               Skip talk.py text model warm-up" << endl;
             cout << "  --servos             Sweep servos around center, scan IDs 1 to 20, then exit" << endl;
-            cout << "  --servos-print       Relax servos and print positions every second, then exit" << endl;
+            cout << "  --move               Start normally, then sweep the servos once" << endl;
             cout << "  --no-servos          Relax servos, print positions every second, no talk.py, no camera, no face tracking" << endl;
             cout << "  --id OLD NEW         Set a servo ID, OLD is 0 to address every servo on the bus" << endl;
             cout << "  --camera             Show face-tracking video feed on the display" << endl;
             cout << "  --no-camera          Do not open a camera, face tracking off" << endl;
             cout << "  --help, -h           Show this help message" << endl;
-            return 1;
+            return 0;
         } else {
-            cerr << "Error: unknown option " << arg << endl;
-            return -1;
+            cerr << "Error: unknown option " << argument << endl;
+            return 1;
         }
     }
-    return 0;
+    return KEEP_RUNNING;
 }
 
 // Draw the face, track people, and handle keys until quit
@@ -229,9 +339,47 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
     SDL_Event event;
     while (!quit && !g_quit) {
         reap_talk_process();
+        reap_audio_test();
+
+        // Take the camera back when a recording stopped at the length cap on its own
+        bool was_recording = recording();
+        reap_recording();
+        if (was_recording && !recording())
+            take_camera_back(faceTracker);
+        close_playback();
         check_fan();
         check_battery();
+        log_robot_health();
         apply_call_handoff(faceTracker);
+
+        // Camera preview, the Move look sequence, and the audio test from the popup
+        bool camera_pressed = false;
+        bool move_pressed = false;
+        bool audio_pressed = false;
+        take_menu_presses(camera_pressed, move_pressed, audio_pressed);
+        if (camera_pressed)
+            toggle_camera_preview(faceTracker);
+        if (move_pressed)
+            start_servo_sweep();
+        if (audio_pressed)
+            start_audio_test();
+
+        // Record and play, from the popup or from a voice command
+        apply_record_request(faceTracker);
+        if (take_play_request())
+            play_last_recording();
+
+        // Run talk on another model once a mode button is tapped
+        int talk_mode = take_talk_mode_request();
+        if (talk_mode != TALK_MODE_NONE)
+            switch_talk_mode(talk_mode);
+
+        // Restart talk when a client asks, a new key only loads at startup
+        if (take_talk_restart_request() && !g_no_talk) {
+            cout << "Restarting talk.py..." << endl;
+            stop_talk_process();
+            start_talk_process();
+        }
 
         // Process keyboard input on the main thread when a window exists
         while (show_window && SDL_PollEvent(&event) != 0) {
@@ -242,7 +390,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
                 quit = true;
             }
 
-            // Toggle camera face tracking on/off with c
+            // Toggle camera face tracking on and off with c
             if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_c) {
                 use_camera = !use_camera;
                 if (use_camera) {
@@ -257,95 +405,136 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
                     faceTracker.stopCamera();
                     setStatus("Face tracking disabled");
                 }
+
+                // Remember the choice for the next run
                 AppConfig current = loadConfig();
                 current.useCamera = use_camera;
                 saveConfig(current);
             }
 
+            // Hand the event to the servo keys and the menu button
             handle_servo_keyboard_input(&event, &face);
             handle_call_event(event);
         }
 
-        // Point eyes and head at the tracked face
+        // Point eyes and head at the tracked face until talk goes ready after listening
         float faceX, faceY;
-        bool hasFaceTracking = use_camera && faceTracker.isCameraAvailable() && faceTracker.getFacePosition(faceX, faceY);
-        if (hasFaceTracking) {
-            face.lookTiltX = -faceX * 30;
-            face.lookTiltY = faceY * 30;
-            move_head(-faceX * 20, faceY * 20, 0);
+        bool hasFaceTracking = use_camera && listen_open() && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY);
+        if (hasFaceTracking && !sweeping()) {
+            face.lookTiltX = -faceX * FACE_LOOK_TILT_DEGREES;
+            face.lookTiltY = faceY * FACE_LOOK_TILT_DEGREES;
+
+            // Truncate to whole counts, so a small face offset leaves the head still
+            int pan_nudge = (int)(-faceX * FACE_TRACK_COUNTS);
+            int tilt_nudge = (int)(faceY * FACE_TRACK_COUNTS);
+            move_degrees(pan_degrees_from_counts(pan_nudge), tilt_degrees_from_counts(tilt_nudge), 0);
         }
 
-        update_face_animation(&face, 1000.0f / MAX_FPS);
+        // Step the blink
+        update_face_animation(&face);
 
-        // Draw face when a window is available
-        if (show_window && renderer) {
-            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-            SDL_RenderClear(renderer);
-            vectorRenderer.render(renderer);
-
-            string fan_warning = fan_warning_text();
-            if (!fan_warning.empty()) draw_text(fan_warning.c_str(), 10, 10, face.font, {200, 0, 0, 255});
-
-            string temperature_warning = temperature_warning_text();
-            if (!temperature_warning.empty()) draw_text(temperature_warning.c_str(), 10, 50, face.font, {200, 0, 0, 255});
-
-            // Last log line, pack voltage, and Exit, only while the overlay is up
-            draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
-
-            if (use_camera && faceTracker.isCameraAvailable()) faceTracker.updateWindow();
-
-            SDL_RenderPresent(renderer);
-
-            static Uint32 lastFrameTime = SDL_GetTicks();
-            Uint32 currentTime = SDL_GetTicks();
-            Uint32 frameTime = currentTime - lastFrameTime;
-            if (frameTime < (1000 / MAX_FPS)) SDL_Delay((1000 / MAX_FPS) - frameTime);
-            lastFrameTime = SDL_GetTicks();
-        } else {
-            sleep_for(milliseconds(1000 / MAX_FPS));
+        // Sleep out the frame when there is nothing to draw
+        if (!show_window || !renderer) {
+            sleep_for(milliseconds(frame_gap_ms()));
+            continue;
         }
+
+        // Keep the pointer off the face, then clear to white and draw the eyes and mouth
+        hide_cursor();
+        SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
+        SDL_RenderClear(renderer);
+        vectorRenderer.render(renderer);
+
+        // Warn about a slow fan, a hot CPU, or anything else sent to the face
+        string fan_warning = fan_warning_text();
+        if (!fan_warning.empty())
+            draw_text(fan_warning.c_str(), WARNING_X, FAN_WARNING_Y, face.font, WARNING_COLOR);
+        string temperature_warning = temperature_warning_text();
+        if (!temperature_warning.empty())
+            draw_text(temperature_warning.c_str(), WARNING_X, TEMPERATURE_WARNING_Y, face.font, WARNING_COLOR);
+        draw_warning(face.font, WARNING_X, WARNING_Y, WARNING_COLOR);
+
+        // Preview first, then the record mark and menu so they stay on top, a video takes that space
+        if (use_camera && faceTracker.isTracking() && !playing())
+            faceTracker.updateWindow();
+        draw_entry_date(face.font, faceTracker.previewTop());
+        draw_recording_mark(face.font);
+        draw_video_list(face.font);
+        draw_wifi_list(face.font);
+        draw_volume_list(face.font);
+        set_camera_showing(show_camera);
+
+        // Status bar, or the record button in its place while the bar is hidden
+        bool keep_bar = menu_open() || call_overlay_open() || video_list_open() || wifi_list_open() || volume_list_open();
+        draw_status_bar(battery_text().c_str(), face.font, keep_bar);
+        draw_entry_prompt(face.font, keep_bar);
+        SDL_RenderPresent(renderer);
+
+        // Count the frames the face loop is drawing
+        if (LOG_SCREEN_FPS)
+            log_screen_rate();
+
+        // Hold the frame rate
+        static Uint32 lastFrameTime = SDL_GetTicks();
+        Uint32 frameTime = SDL_GetTicks() - lastFrameTime;
+        int gap = frame_gap_ms();
+        if (frameTime < (Uint32)gap)
+            SDL_Delay(gap - frameTime);
+        lastFrameTime = SDL_GetTicks();
     }
 }
 
-// Pause camera and talk for other programs, or restore them after
-static void apply_call_handoff(FaceTracker& faceTracker) {
-    int command = take_call_handoff();
-    if (command == CALL_HANDOFF_NONE) return;
-
-    if (command == CALL_HANDOFF_PAUSE) {
-        if (!g_call_paused) {
-            faceTracker.stopCamera();
-            g_call_had_talk = !g_no_talk && g_talk_pid > 0;
-            if (g_call_had_talk) stop_talk_process();
-            g_call_paused = true;
-            cout << "Paused camera and talk." << endl;
+// Show or hide the camera preview on the face
+static void toggle_camera_preview(FaceTracker& faceTracker) {
+    show_camera = !show_camera;
+    if (show_camera) {
+        if (!faceTracker.isCameraAvailable()) {
+            if (!faceTracker.initializeCamera()) {
+                show_camera = false;
+                setStatus("No camera");
+                return;
+            }
         }
-        complete_call_handoff(true);
+        if (!faceTracker.isTracking())
+            faceTracker.startTracking();
+        faceTracker.showWindow = true;
+        use_camera = true;
+        setStatus("Camera preview on");
+        return;
+    }
+    faceTracker.showWindow = false;
+    setStatus("Camera preview off");
+}
+
+// Run the servo sweep in the background, the face keeps drawing while it goes
+static void start_servo_sweep() {
+    if (g_sweeping.load()) {
+        cout << "Already sweeping" << endl;
         return;
     }
 
-    if (g_call_paused) {
-        if (use_camera && faceTracker.initializeCamera()) faceTracker.startTracking();
-        if (g_call_had_talk) start_talk_process(g_cold_talk);
-        g_call_paused = false;
-        g_call_had_talk = false;
-        setStatus("");
-        cout << "Resumed camera and talk." << endl;
-    }
-    complete_call_handoff(true);
+    // Sweep off the main thread, it works each servo in turn and takes a while
+    g_sweeping = true;
+    thread([] {
+        sweep_servos(SWEEP_KNOWN_SERVOS);
+        g_sweeping = false;
+    }).detach();
 }
 
-static void setup_display_env() {
+// True while the sweep has the servos, face tracking leaves them alone until it ends
+static bool sweeping() {
+    return g_sweeping.load();
+}
 
+// Point at the local display, its runtime directory, and its X authority
+static void set_up_display() {
     // Default DISPLAY to the local HDMI seat
     if (getenv("DISPLAY") == nullptr || getenv("DISPLAY")[0] == '\0') {
         setenv("DISPLAY", DEFAULT_DISPLAY, 1);
     }
 
-    // Build the per-user runtime path
-    string runtime = "/run/user/" + to_string(getuid());
-
     // Default XDG_RUNTIME_DIR for pulse and similar
+    string runtime = "/run/user/" + to_string(getuid());
     if (getenv("XDG_RUNTIME_DIR") == nullptr || getenv("XDG_RUNTIME_DIR")[0] == '\0') {
         setenv("XDG_RUNTIME_DIR", runtime.c_str(), 1);
     }
@@ -353,59 +542,156 @@ static void setup_display_env() {
     // Point at the gdm Xauthority file when present
     if (getenv("XAUTHORITY") == nullptr || getenv("XAUTHORITY")[0] == '\0') {
         string xauth = runtime + "/gdm/Xauthority";
-        if (filesystem::exists(xauth)) setenv("XAUTHORITY", xauth.c_str(), 1);
+        if (filesystem::exists(xauth))
+            setenv("XAUTHORITY", xauth.c_str(), 1);
     }
 }
 
-static void rotate_screen() {
-#ifdef __linux__
-    const int tries = 2;
-    bool connected = false;
+// Break the main loop so shutdown runs in order
+static void signalHandler(int) {
+    g_quit = true;
+}
 
-    // Wait until DP-1 is connected after login or service start
-    for (int try_index = 0; try_index < tries; try_index++) {
-        if (system("xrandr --query 2>/dev/null | grep -q '^DP-1 connected'") == 0) {
-            connected = true;
+// Make sure only one robot is running
+static void check_already_running() {
+    pid_t existing_pid = find_other_running();
+    if (existing_pid <= 0)
+        return;
+    cout << "Robot already running, pid " << existing_pid << endl;
+    cout << "sudo service robot stop" << endl;
+    exit(1);
+}
+
+// Find another robot process
+static pid_t find_other_running() {
+    FILE* pipe = popen("ps aux", "r");
+    if (!pipe)
+        return -1;
+
+    // Skip the ps header, then parse pid and command
+    pid_t my_pid = getpid();
+    char line[PS_LINE_SIZE];
+    bool header = true;
+    pid_t found_pid = -1;
+    while (fgets(line, sizeof(line), pipe)) {
+        if (header) {
+            header = false;
+            continue;
+        }
+
+        // Skip user, pid, cpu, mem, and the other ps columns so the rest is the command
+        stringstream stream(line);
+        string user, cpu, memory, virtual_size, resident, tty, stat, start, time;
+        pid_t pid = 0;
+        if (!(stream >> user >> pid >> cpu >> memory >> virtual_size >> resident >> tty >> stat >> start >> time))
+            continue;
+        if (pid == my_pid)
+            continue;
+
+        // Command is the remainder of the line
+        string command;
+        getline(stream, command);
+        if (!command.empty() && command[0] == ' ')
+            command.erase(0, 1);
+
+        // Match the robot binary, not robot_service.sh or journalctl
+        stringstream command_stream(command);
+        string executable;
+        command_stream >> executable;
+        size_t slash = executable.find_last_of('/');
+        if (slash != string::npos)
+            executable = executable.substr(slash + 1);
+        if (executable == BINARY_NAME) {
+            found_pid = pid;
             break;
         }
-        sleep_for(milliseconds(SCREEN_WAIT_MS));
     }
+    pclose(pipe);
+    return found_pid;
+}
 
-    // Skip quietly when this machine has no Waveshare panel
-    if (!connected) return;
-
-    // Apply left rotation, use right for the other direction
-    system("xrandr --output DP-1 --rotate left 2>/dev/null");
-
-    // Wait until xrandr reports left, GNOME can overwrite it during login
-    for (int try_index = 0; try_index < tries; try_index++) {
-        if (system("xrandr --query 2>/dev/null | grep -q '^DP-1 connected.* left ('") == 0) break;
-        system("xrandr --output DP-1 --rotate left 2>/dev/null");
-        sleep_for(milliseconds(SCREEN_WAIT_MS));
-    }
-
-    // Keep the touch device mapped to the rotated output
-    system("xinput map-to-output \"WaveShare WS170120\" DP-1 2>/dev/null");
+// Rotate Jetson to portrait, then map touch on Jetson or Pi
+static void rotate_screen() {
+#ifdef __linux__
+    const char* output = wait_for_portrait_output();
+    if (output == nullptr)
+        return;
+    if (strcmp(output, JETSON_OUTPUT) == 0)
+        rotate_jetson_panel();
+    map_touch();
 #endif
+}
+
+// Wait for DP-1 or DSI-2 after login or service start
+static const char* wait_for_portrait_output() {
+    for (int try_index = 0; try_index < SCREEN_ROTATE_TRIES; try_index++) {
+        if (output_is_connected(JETSON_OUTPUT))
+            return JETSON_OUTPUT;
+        if (output_is_connected(PI_OUTPUT))
+            return PI_OUTPUT;
+        sleep_for(milliseconds(SCREEN_WAIT_MS));
+    }
+    return nullptr;
+}
+
+// True when xrandr reports this output as connected
+static bool output_is_connected(const char* output) {
+    string command = string("xrandr --query 2>/dev/null | grep -q '^") + output + " connected'";
+    return system(command.c_str()) == 0;
+}
+
+// Rotate DP-1 left, skip xrandr when already left so the NVIDIA splash does not flash
+static void rotate_jetson_panel() {
+    if (display_is_rotated_left())
+        return;
+
+    // A rotate modeset blanks the panel and shows the NVIDIA logo in native landscape
+    int rotated = system("xrandr --output DP-1 --rotate left 2>/dev/null");
+    (void)rotated;
+    for (int try_index = 0; try_index < SCREEN_ROTATE_TRIES; try_index++) {
+        if (display_is_rotated_left())
+            break;
+        rotated = system("xrandr --output DP-1 --rotate left 2>/dev/null");
+        sleep_for(milliseconds(SCREEN_WAIT_MS));
+    }
+}
+
+// Keep the touch device mapped to the rotated output
+static void map_touch() {
+    string jetson = string("xinput map-to-output \"") + JETSON_TOUCH + "\" " + JETSON_OUTPUT + " 2>/dev/null";
+    int mapped = system(jetson.c_str());
+    (void)mapped;
+
+    // Pi DSI overlay names include the I2C address, match the controller
+    string pi = string("xinput list --name-only 2>/dev/null | grep -F '") + PI_TOUCH_MATCH +
+        "' | while IFS= read -r name; do xinput map-to-output \"$name\" " + PI_OUTPUT + "; done";
+    mapped = system(pi.c_str());
+    (void)mapped;
+}
+
+// True when DP-1 is already in the portrait left orientation
+static bool display_is_rotated_left() {
+    return system("xrandr --query 2>/dev/null | grep -q '^DP-1 connected.* left ('") == 0;
 }
 
 // Open the window and draw the face before slower startup work
 static void show_face() {
     // Create the window, continue headless if the display is missing
-    if (show_window && !create_window()) show_window = false;
+    if (show_window && !create_window())
+        show_window = false;
 
-    // Build the face at the current screen size
-    face = create_face(screen_width, screen_height);
+    // Build the face and point it straight ahead
+    face = create_face();
     reset_face_animation(&face);
 
     // Pump a few frames so the compositor actually shows the eyes
-    for (int frame = 0; frame < 8 && !g_quit; frame++) draw_face();
+    for (int frame = 0; frame < STARTUP_FRAMES && !g_quit; frame++) draw_face();
 }
 
 // Draw one face frame and give X a chance to map the window
 static void draw_face() {
     if (!show_window || !renderer) {
-        sleep_for(milliseconds(1000 / MAX_FPS));
+        sleep_for(milliseconds(FRAME_MS));
         return;
     }
 
@@ -413,18 +699,24 @@ static void draw_face() {
     SDL_PumpEvents();
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        if (event.type == SDL_QUIT) g_quit = true;
+        if (event.type == SDL_QUIT)
+            g_quit = true;
     }
 
     // Animate the face and keep the battery strip on the first frames
+    hide_cursor();
     check_battery();
-    update_face_animation(&face, 1000.0f / MAX_FPS);
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    update_face_animation(&face);
+    SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
     SDL_RenderClear(renderer);
     vectorRenderer.render(renderer);
-    draw_bottom_bar(battery_text().c_str(), face.font, call_overlay_open());
+
+    // Status bar, or the record button in its place while the bar is hidden
+    bool keep_bar = menu_open() || call_overlay_open();
+    draw_status_bar(battery_text().c_str(), face.font, keep_bar);
+    draw_entry_prompt(face.font, keep_bar);
     SDL_RenderPresent(renderer);
-    SDL_Delay(1000 / MAX_FPS);
+    SDL_Delay(FRAME_MS);
 }
 
 // Open the servo bus on a worker so the face can keep drawing
@@ -437,25 +729,285 @@ static int start_servos() {
     });
 
     // Keep drawing until the bus scan finishes
-    while (!done && !g_quit) draw_face();
+    while (!done && !g_quit)
+        draw_face();
     worker.join();
     return result;
 }
 
-static void signalHandler(int) {
-    g_quit = true;
+// Sweep the servos around center, then exit
+static int sweep_servo_test(bool no_servos) {
+    if (no_servos) {
+        printf("Servos disabled, not sweeping\n");
+        return 0;
+    }
+    sweep_servos(SWEEP_SCAN_BUS);
+    return 0;
 }
 
-static string repo_path(const char* relative) {
-    error_code error;
-    filesystem::path executable = filesystem::read_symlink("/proc/self/exe", error);
-    if (error) return relative;
+// Act on the Record button, or on a start or stop asked for by voice
+static void apply_record_request(FaceTracker& faceTracker) {
+    int request = take_record_request();
+    if (request == RECORD_REQUEST_NONE)
+        return;
 
-    // robot/build/robot sits two folders under the repo root
-    filesystem::path repo = executable.parent_path().parent_path().parent_path();
-    return (repo / relative).string();
+    // A voice command names what it wants, the button just flips
+    if (request == RECORD_REQUEST_START && recording())
+        return;
+    if (request == RECORD_REQUEST_STOP && !recording())
+        return;
+    toggle_recording(faceTracker);
 }
 
+// Play the recording made most recently
+static void play_last_recording() {
+    vector<Recording> recordings = list_recordings(repo_path(RECORDINGS_FROM_REPO));
+    if (recordings.empty()) {
+        cout << "No recordings to play" << endl;
+        return;
+    }
+    start_playback(recordings.front().path);
+}
+
+// Start or stop a recording, ffmpeg needs the camera to itself while it runs
+static void toggle_recording(FaceTracker& faceTracker) {
+    // Stopping hands the camera back to face tracking, and puts the preview back as it was
+    if (recording()) {
+        stop_recording();
+        take_camera_back(faceTracker);
+        show_camera = g_camera_before_record;
+        faceTracker.showWindow = show_camera;
+
+        // Talk held the microphone through the recording, send it back to ready
+        send_quiet();
+
+        // Play back what was just recorded
+        play_last_recording();
+        return;
+    }
+
+    // There is nothing to record without a camera
+    if (!use_camera || !faceTracker.isCameraAvailable()) {
+        cout << "No camera to record from" << endl;
+        return;
+    }
+
+    // Free the camera, ffmpeg opens the same device
+    int cameraIndex = faceTracker.cameraIndex();
+    faceTracker.stopCamera();
+
+    // Take the camera back when ffmpeg will not start, so tracking is not left off
+    if (!start_recording(repo_path(RECORDINGS_FROM_REPO), cameraIndex)) {
+        take_camera_back(faceTracker);
+        return;
+    }
+
+    // Show what is being recorded, and remember what the preview was doing before
+    g_camera_before_record = show_camera;
+    show_camera = true;
+    faceTracker.showWindow = true;
+
+    // Follow faces again on the frames ffmpeg sends back
+    faceTracker.startTracking();
+}
+
+// Reopen the camera and follow faces again
+static void take_camera_back(FaceTracker& faceTracker) {
+    faceTracker.stopTracking();
+    if (!use_camera)
+        return;
+    if (faceTracker.initializeCamera())
+        faceTracker.startTracking();
+}
+
+// Hold the faster rate while video is on screen, the face alone needs fewer frames
+static int frame_gap_ms() {
+    if (show_camera || playing())
+        return VIDEO_FRAME_MS;
+    return FRAME_MS;
+}
+
+// Print how many frames a second the face loop is drawing
+static void log_screen_rate() {
+    static int frames = 0;
+    static Uint32 since = SDL_GetTicks();
+    frames++;
+
+    // Report on the interval, then start counting again
+    Uint32 spent = SDL_GetTicks() - since;
+    if (spent < (Uint32)LOG_FPS_GAP_MS)
+        return;
+    printf("Screen FPS: %.1f\n", frames * 1000.0 / spent);
+    frames = 0;
+    since = SDL_GetTicks();
+}
+
+// Red dot and a running time, the menu is closed so this is the only sign it is recording
+static void draw_recording_mark(TTF_Font* font) {
+    if (!recording())
+        return;
+
+    // Dot first, then the time beside it
+    SDL_Rect dot = {WARNING_X, RECORDING_MARK_Y, RECORDING_DOT_SIZE, RECORDING_DOT_SIZE};
+    SDL_SetRenderDrawColor(renderer, WARNING_COLOR.r, WARNING_COLOR.g, WARNING_COLOR.b, WARNING_COLOR.a);
+    SDL_RenderFillRect(renderer, &dot);
+
+    // Minutes and seconds, so a long recording still reads at a glance
+    int seconds = static_cast<int>(recording_seconds());
+    char label[32];
+    snprintf(label, sizeof(label), "REC %d:%02d", seconds / 60, seconds % 60);
+    draw_text(label, WARNING_X + RECORDING_DOT_SIZE + RECORDING_MARK_GAP, RECORDING_MARK_Y, font, WARNING_COLOR);
+}
+
+// Chime, record, and play back, with talk out of the way so the mic and speaker are free
+static void start_audio_test() {
+    if (g_audio_test_pid > 0) {
+        cout << "Audio test already running" << endl;
+        return;
+    }
+
+    // Talk holds the microphone, so it stands down until the test is finished
+    g_audio_test_had_talk = g_talk_pid > 0;
+    if (g_audio_test_had_talk)
+        stop_talk_process();
+
+    // Run the test, its output lands in the robot log and so on the status bar
+    string talk_python = repo_path(TALK_PYTHON_FROM_REPO);
+    string test_script = repo_path(AUDIO_TEST_FROM_REPO);
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork audio test");
+        return;
+    }
+    if (pid == 0) {
+        setenv("PYTHONUNBUFFERED", "1", 1);
+        setenv("NO_COLOR", "1", 1);
+        execl(talk_python.c_str(), talk_python.c_str(), test_script.c_str(), static_cast<char*>(nullptr));
+        cerr << "Error: test_audio.py: " << strerror(errno) << endl;
+        _exit(TALK_EXEC_FAILED);
+    }
+    g_audio_test_pid = pid;
+    cout << "Audio test: listen for the chime, then talk." << endl;
+}
+
+// Collect the test once it ends, then hand the microphone back to talk
+static void reap_audio_test() {
+    if (g_audio_test_pid <= 0)
+        return;
+    int status = 0;
+    if (waitpid(g_audio_test_pid, &status, WNOHANG) <= 0)
+        return;
+    g_audio_test_pid = -1;
+
+    // Say how it went, the detail is already in the log above this line
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+        cout << "Audio test passed." << endl;
+    else
+        cout << "Audio test failed, see the lines above." << endl;
+
+    // Start talk again when it was the one holding the microphone
+    if (g_audio_test_had_talk)
+        start_talk_process();
+    g_audio_test_had_talk = false;
+}
+
+// Read which model talk is set to run, the same keys talk.py reads
+static int load_talk_mode() {
+    ifstream file(repo_path(TALK_CONFIG_FROM_REPO));
+    if (!file)
+        return TALK_MODE_LOCAL;
+
+    // A broken file leaves the button on local rather than stopping the robot
+    nlohmann::json config = nlohmann::json::parse(file, nullptr, false);
+    if (config.is_discarded() || !config.is_object())
+        return TALK_MODE_LOCAL;
+    if (config.value("realtime", false))
+        return TALK_MODE_REALTIME;
+    if (config.value("cloud", false))
+        return TALK_MODE_CLOUD;
+    return TALK_MODE_LOCAL;
+}
+
+// Save the mode for the next run, then bring talk back up on it
+static void switch_talk_mode(int mode) {
+    // Keep the rest of the file in its order, only the three model values change
+    string path = repo_path(TALK_CONFIG_FROM_REPO);
+    nlohmann::ordered_json config = nlohmann::ordered_json::object();
+    ifstream file(path);
+    if (file) {
+        nlohmann::ordered_json loaded = nlohmann::ordered_json::parse(file, nullptr, false);
+        if (!loaded.is_discarded() && loaded.is_object())
+            config = loaded;
+    }
+    file.close();
+
+    // Save only the chosen mode as true, the three are one choice
+    config["local"] = mode == TALK_MODE_LOCAL;
+    config["cloud"] = mode == TALK_MODE_CLOUD;
+    config["realtime"] = mode == TALK_MODE_REALTIME;
+
+    // Write the file, and say so when it cannot be saved
+    ofstream out(path);
+    if (!out) {
+        cout << "Cannot save talk mode to " << path << endl;
+        return;
+    }
+    out << config.dump(2) << endl;
+    out.close();
+
+    // Restart talk so it loads the new model
+    cout << "Talk mode: " << talk_mode_name(mode) << endl;
+    if (g_no_talk)
+        return;
+    stop_talk_process();
+    start_talk_process();
+}
+
+// Fork and exec talk.py, unless one is already running
+static bool start_talk_process() {
+    // Leave an existing talk.py alone
+    pid_t existing_pid = find_talk_pid();
+    if (existing_pid > 0) {
+        cout << "talk.py already running, pid " << existing_pid << endl;
+        return true;
+    }
+
+    // Run the venv python against the script, both relative to the repo
+    string talk_python = repo_path(TALK_PYTHON_FROM_REPO);
+    string talk_script = repo_path(TALK_SCRIPT_FROM_REPO);
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork talk.py");
+        return false;
+    }
+    if (pid == 0) {
+        // Child, drop inherited fds above stdin, stdout, and stderr
+        struct rlimit limit{};
+        int max_descriptor = DEFAULT_MAX_DESCRIPTORS;
+        if (getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_cur > 0 && limit.rlim_cur < MAX_SANE_DESCRIPTORS) {
+            max_descriptor = static_cast<int>(limit.rlim_cur);
+        }
+        for (int descriptor = 3; descriptor < max_descriptor; descriptor++) close(descriptor);
+
+        // Stop Python buffering its output down the pipe, so the face log keeps up
+        setenv("PYTHONUNBUFFERED", "1", 1);
+
+        // Let the browser talk opens for the key setup show the touch keyboard
+        allow_screen_keyboard();
+
+        // Exec talk.py, and report it when the exec itself fails
+        execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), static_cast<char*>(nullptr));
+        cerr << "Error: talk.py: " << strerror(errno) << endl;
+        _exit(TALK_EXEC_FAILED);
+    }
+
+    // Parent, remember the child so it can be reaped and stopped
+    g_talk_pid = pid;
+    cout << "Starting talk.py..." << endl;
+    return true;
+}
+
+// Look through /proc for a python running talk.py
 static pid_t find_talk_pid() {
     error_code error;
     pid_t my_pid = getpid();
@@ -485,8 +1037,8 @@ static pid_t find_talk_pid() {
         }
 
         // cmdline is null-separated argv
-        ifstream in(entry.path() / "cmdline", ios::binary);
-        string cmdline((istreambuf_iterator<char>(in)), istreambuf_iterator<char>());
+        ifstream input(entry.path() / "cmdline", ios::binary);
+        string cmdline((istreambuf_iterator<char>(input)), istreambuf_iterator<char>());
         if (cmdline.empty()) {
             continue;
         }
@@ -533,50 +1085,66 @@ static pid_t find_talk_pid() {
     return -1;
 }
 
-static bool start_talk_process(bool cold_talk) {
-    pid_t existing_pid = find_talk_pid();
-    if (existing_pid > 0) {
-        cout << "talk.py already running, pid " << existing_pid << endl;
-        return true;
-    }
+// Turn a path inside the repo into an absolute one
+static string repo_path(const char* relative) {
+    error_code error;
+    filesystem::path executable = filesystem::read_symlink("/proc/self/exe", error);
+    if (error)
+        return relative;
 
-    string talk_python = repo_path(TALK_PYTHON_FROM_REPO);
-    string talk_script = repo_path(TALK_SCRIPT_FROM_REPO);
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork talk.py");
-        return false;
-    }
-    if (pid == 0) {
-
-        // Child: drop inherited fds above stdin/stdout/stderr, then exec talk.py
-        struct rlimit limit{};
-        int max_fd = 1024;
-        if (getrlimit(RLIMIT_NOFILE, &limit) == 0 && limit.rlim_cur > 0 && limit.rlim_cur < 100000) {
-            max_fd = static_cast<int>(limit.rlim_cur);
-        }
-        for (int fd = 3; fd < max_fd; fd++) close(fd);
-
-        if (cold_talk) {
-            execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), "--no-replay-robot", "--cold", static_cast<char*>(nullptr));
-        } else {
-            execl(talk_python.c_str(), talk_python.c_str(), talk_script.c_str(), "--no-replay-robot", static_cast<char*>(nullptr));
-        }
-        cerr << "Error: talk.py: " << strerror(errno) << endl;
-        _exit(127);
-    }
-    g_talk_pid = pid;
-    cout << "Starting talk.py..." << endl;
-    return true;
+    // robot/build/robot sits two folders under the repo root
+    filesystem::path repo = executable.parent_path().parent_path().parent_path();
+    return (repo / relative).string();
 }
 
+// Pause camera and talk for other programs, or restore them after
+static void apply_call_handoff(FaceTracker& faceTracker) {
+    int command = take_call_handoff();
+    if (command == CALL_HANDOFF_NONE)
+        return;
+
+    // Free the camera and the microphone for the call
+    if (command == CALL_HANDOFF_PAUSE) {
+        if (!g_call_paused) {
+            stop_recording();
+            stop_playback();
+            faceTracker.stopCamera();
+            g_call_had_talk = !g_no_talk && g_talk_pid > 0;
+            if (g_call_had_talk)
+                stop_talk_process();
+            g_call_paused = true;
+            cout << "Paused camera and talk." << endl;
+        }
+        complete_call_handoff(true);
+        return;
+    }
+
+    // Take them back once the call ends
+    if (g_call_paused) {
+        if (use_camera && faceTracker.initializeCamera())
+            faceTracker.startTracking();
+        if (g_call_had_talk)
+            start_talk_process();
+        g_call_paused = false;
+        g_call_had_talk = false;
+        setStatus("");
+        cout << "Resumed camera and talk." << endl;
+    }
+    complete_call_handoff(true);
+}
+
+// Collect the talk child once it exits, and say why it went
 static void reap_talk_process() {
-    if (g_talk_pid <= 0) return;
+    if (g_talk_pid <= 0)
+        return;
     int status = 0;
     pid_t waited = waitpid(g_talk_pid, &status, WNOHANG);
-    if (waited <= 0) return;
+    if (waited <= 0)
+        return;
+
+    // A failed exec already printed its own error
     if (WIFEXITED(status)) {
-        if (WEXITSTATUS(status) != 127) {
+        if (WEXITSTATUS(status) != TALK_EXEC_FAILED) {
             cout << "talk.py exited with code " << WEXITSTATUS(status) << endl;
         }
     } else if (WIFSIGNALED(status)) {
@@ -587,20 +1155,29 @@ static void reap_talk_process() {
     g_talk_pid = -1;
 }
 
-static void wait_for_talk_early_exit() {
-    int waited_ms = 0;
-    while (g_talk_pid > 0 && waited_ms < TALK_EARLY_WAIT_MS) {
-        reap_talk_process();
-        if (g_talk_pid <= 0) return;
-        draw_face();
-        waited_ms += 1000 / MAX_FPS;
-    }
+// Stop child talk, sockets, tracking, then drop torque
+static void stop_robot(FaceTracker& faceTracker) {
+    g_quit = true;
+    cout << "Quit" << endl;
+    stop_recording();
+    stop_playback();
+    stop_talk_process();
+    stop_interface();
+    stop_servo_position_log();
+    faceTracker.stopTracking();
+    relax_servos();
+    if (show_window)
+        close_window();
 }
 
+// Ask talk.py to stop, then kill it if it lingers
 static void stop_talk_process() {
-    if (g_talk_pid <= 0) return;
+    if (g_talk_pid <= 0)
+        return;
     cout << "Stopping talk.py pid " << g_talk_pid << endl;
     kill(g_talk_pid, SIGTERM);
+
+    // Poll for a clean exit
     int status = 0;
     int waited_ms = 0;
     while (waited_ms < TALK_STOP_WAIT_MS) {
@@ -612,7 +1189,52 @@ static void stop_talk_process() {
         sleep_for(milliseconds(TALK_STOP_POLL_MS));
         waited_ms += TALK_STOP_POLL_MS;
     }
+
+    // Out of patience, and wait until it is gone, a new talk quits while the old one is still alive
     kill(g_talk_pid, SIGKILL);
-    waitpid(g_talk_pid, &status, WNOHANG);
+    waitpid(g_talk_pid, &status, 0);
     g_talk_pid = -1;
+}
+
+// Print memory, threads, and open files once a minute
+static void log_robot_health() {
+    if (!LOG_HEALTH) {
+        return;
+    }
+
+    // Wait out the interval
+    static steady_clock::time_point last_health{};
+    static bool have_last_health = false;
+    auto now = steady_clock::now();
+    if (have_last_health && duration_cast<seconds>(now - last_health).count() < HEALTH_LOG_SECONDS)
+        return;
+    last_health = now;
+    have_last_health = true;
+
+    // Status has the thread count and resident memory
+    int threads = 0;
+    int memory_kb = 0;
+    ifstream status("/proc/self/status");
+    string line;
+    while (getline(status, line)) {
+        if (line.rfind("Threads:", 0) == 0) {
+            threads = atoi(line.c_str() + 8);
+        }
+        if (line.rfind("VmRSS:", 0) == 0) {
+            memory_kb = atoi(line.c_str() + 6);
+        }
+    }
+    printf("Health threads %d, memory %d MB, open files %d, talk pid %d\n", threads, memory_kb / 1024, count_open_files(), (int)g_talk_pid);
+    fflush(stdout);
+}
+
+// Count open files under /proc/self/fd
+static int count_open_files() {
+    error_code error;
+    int count = 0;
+    for (const auto& entry : filesystem::directory_iterator("/proc/self/fd", error)) {
+        if (!error)
+            count++;
+    }
+    return count;
 }

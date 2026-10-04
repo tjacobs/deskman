@@ -52,6 +52,10 @@ const double RING_FULL_SCALE = 32767.0;
 
 // Fall back to the first ALSA card until the USB dongle is found
 const string DEFAULT_AUDIO_DEVICE = "plughw:0,0";
+
+// Play through the ALSA software mixer, so robot speech and a call can hold the speaker at once
+const string SHARED_PLAYBACK_PREFIX = "plug:\"dmix:";
+const string SHARED_PLAYBACK_SUFFIX = ",0\"";
 const int DEFAULT_AUDIO_PAYLOAD_TYPE = 97;
 const bool DEFAULT_CALL_MIC_MUTED = true;
 
@@ -127,6 +131,7 @@ guint notchTimerId = 0;
 mutex notchLock;
 
 // Declare helpers that sit further down
+string sharedPlaybackDevice(int card);
 vector<int> listUSBCards();
 vector<int> listUSBCaptureCards();
 bool cardHasCapture(int card);
@@ -184,12 +189,20 @@ string findUSBSpeakerDevice() {
     // Prefer a playback-only USB speaker
     vector<int> usbCards = listUSBCards();
     for (int card : usbCards) {
-        if (!cardHasCapture(card)) return "plughw:" + to_string(card) + ",0";
+        if (cardHasPlayback(card) && !cardHasCapture(card)) return sharedPlaybackDevice(card);
     }
 
-    // Fall back to the first USB card
-    if (!usbCards.empty()) return "plughw:" + to_string(usbCards[0]) + ",0";
+    // Fall back to any USB card that can play, a camera card cannot and would ring into nothing
+    for (int card : usbCards) {
+        if (cardHasPlayback(card)) return sharedPlaybackDevice(card);
+    }
     return "";
+}
+
+// Name the shared mixer playback device for a card
+string sharedPlaybackDevice(int card) {
+    // Route through dmix so another program holding the speaker does not lock us out
+    return SHARED_PLAYBACK_PREFIX + to_string(card) + SHARED_PLAYBACK_SUFFIX;
 }
 
 // Prefer the USB dongle Pulse capture, skip the camera mic

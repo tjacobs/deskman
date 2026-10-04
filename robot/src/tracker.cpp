@@ -1,34 +1,69 @@
-#include "tracker.hpp"
-#include <iostream>
-#include <filesystem>
+// Local
+#include "tracker.h"
 #include "screen.h"
+#include "recorder.h"
 
+// System
+#include <chrono>
+#include <cstdio>
+#include <filesystem>
+#include <iostream>
+#include <string>
+
+// Namespace
+using namespace std;
+
+// Run the Haar detector well under the camera rate, it is the expensive part
 static const int FACE_DETECT_FPS = 3;
-static const int PREVIEW_TOP = 120;
+static const int FACE_DETECT_GAP_MS = 1000 / FACE_DETECT_FPS;
 
+// How long to wait when the recording has not sent its next frame yet
+static const int FRAME_WAIT_MS = 10;
+
+// Pace the preview, reading the camera flat out cooks the Pi for frames nobody sees
+static const int PREVIEW_FPS = 30;
+static const int PREVIEW_GAP_MS = 1000 / PREVIEW_FPS;
+
+// Turn on to log how many camera frames a second actually reach the screen
+static const bool LOG_PREVIEW_FPS = false;
+static const int LOG_FPS_GAP_MS = 5000;
+
+// Green box on the face being followed, grey on the rest
+static const cv::Scalar TRACKED_FACE_COLOR = cv::Scalar(0, 255, 0);
+static const cv::Scalar OTHER_FACE_COLOR = cv::Scalar(128, 128, 128);
+static const int FACE_BOX_THICKNESS = 2;
+
+// Blur before detection, then accept faces between these sizes
+static const int DETECT_BLUR_SIZE = 5;
+static const double DETECT_SCALE_FACTOR = 1.1;
+static const int DETECT_MIN_NEIGHBORS = 3;
+static const int DETECT_MIN_FACE = 60;
+static const int DETECT_MAX_FACE = 300;
+
+// Where OpenCV keeps its Haar cascades, Linux first then Mac
+static const char* CASCADE_PATHS[] = {
+    "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+    "/opt/homebrew/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
+};
+
+// Forward declaration
+static void logPreviewRate();
+
+// Load the face cascade and open the camera
 FaceTracker::FaceTracker(bool show_window, bool use_camera): showWindow(show_window) {
-
-    // Try common OpenCV Haar cascade locations
-    vector<string> possible_paths = {
-        "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
-        "/opt/homebrew/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
-    };
-
-    // Load the face detection classifier
+    // Load the first cascade file that is present
     bool loaded = false;
-    for (const auto& path: possible_paths) {
-        if (filesystem::exists(path)) {
-            if (face_cascade.load(path)) {
-                loaded = true;
-                break;
-            }
+    for (const char* path : CASCADE_PATHS) {
+        if (filesystem::exists(path) && face_cascade.load(path)) {
+            loaded = true;
+            break;
         }
     }
 
     // Fail when the cascade file is missing
     if (!loaded) {
         cerr << "Error: Could not find or load face cascade classifier in any of the following paths:" << endl;
-        for (const auto& path: possible_paths) {
+        for (const char* path : CASCADE_PATHS) {
             cerr << "  " << path << endl;
         }
         throw runtime_error("Failed to load face cascade classifier");
@@ -37,98 +72,181 @@ FaceTracker::FaceTracker(bool show_window, bool use_camera): showWindow(show_win
     // Open the camera unless tracking is disabled
     if (use_camera) {
         cameraAvailable = camera.initialize();
-        if (!cameraAvailable) {
+        if (!cameraAvailable)
             showWindow = false;
-        }
-    }
-
-    // Preview is drawn on the main SDL display when showWindow is set
-    if (showWindow) {
-        cout << "Camera preview enabled on main display" << endl;
     }
 }
 
-FaceTracker::~FaceTracker() {
-    stopTracking();
-
-    // Free cached preview texture on the SDL thread
-    if (previewTexture) {
-        SDL_DestroyTexture(previewTexture);
-        previewTexture = nullptr;
-    }
-}
-
+// Start the detection thread, unless it is already running
 void FaceTracker::startTracking() {
-    if (isTracking()) {
+    if (tracking.load())
         return;
-    }
-    cout << "Starting camera..." << endl;
 
-    // Only start tracking if camera is available
-    if (!cameraAvailable) {
-        cout << "Face tracking disabled - camera not available" << endl;
+    // Collect a thread that stopped on its own, so the assign below is safe
+    if (trackingThread.joinable())
+        trackingThread.join();
+
+    // Only start tracking with a frame source, the camera or a running recording
+    if (!cameraAvailable && !recording())
         return;
-    }
 
     // Start tracking thread
     shouldQuit = false;
+    tracking = true;
+    detectBusy = false;
     trackingThread = thread(&FaceTracker::trackingThreadFunction, this);
+    detectThread = thread(&FaceTracker::detectThreadFunction, this);
 }
 
-void FaceTracker::stopTracking() {
+// Follow the largest face in each frame until stopTracking
+void FaceTracker::trackingThreadFunction() {
+    try {
+        while (!shouldQuit) {
+            // Take a frame from the recording when one is running, otherwise from the camera
+            auto frameStart = chrono::steady_clock::now();
+            cv::Mat frame;
+            if (recording()) {
+                if (!take_recording_frame(frame)) {
+                    this_thread::sleep_for(chrono::milliseconds(FRAME_WAIT_MS));
+                    continue;
+                }
+            } else if (!camera.captureFrame(frame)) {
+                cerr << "Error: Could not read frame from camera" << endl;
+                break;
+            }
 
-    // Close capture so a blocked frame read returns, then join
-    shouldQuit = true;
-    camera.release();
-    cameraAvailable = false;
-    if (trackingThread.joinable()) trackingThread.join();
-}
+            // Hand the frame to the detector on a timer, it runs alongside so it never holds up the preview
+            auto now = chrono::steady_clock::now();
+            if (chrono::duration_cast<chrono::milliseconds>(now - lastDetectAt).count() >= FACE_DETECT_GAP_MS) {
+                unique_lock<mutex> detectLock(detectMutex);
+                if (!detectBusy) {
+                    lastDetectAt = now;
+                    frame.copyTo(detectFrame);
+                    detectBusy = true;
+                    detectLock.unlock();
+                    detectReady.notify_one();
+                }
+            }
 
-bool FaceTracker::initializeCamera() {
-    if (cameraAvailable) {
-        return true;
+            // Draw the boxes from the last detection and update frame buffer if the preview is on
+            if (showWindow.load()) {
+                unique_lock<mutex> faceLock(faceMutex);
+                vector<cv::Rect> faces = lastFaces;
+                size_t largest = largestFace;
+                faceLock.unlock();
+                for (size_t i = 0; i < faces.size(); i++) {
+                    cv::Scalar color = i == largest ? TRACKED_FACE_COLOR : OTHER_FACE_COLOR;
+                    cv::rectangle(frame, faces[i], color, FACE_BOX_THICKNESS);
+                }
+                unique_lock<mutex> frameLock(frameMutex);
+                frame.copyTo(currentFrame);
+                hasNewFrame = true;
+                frameLock.unlock();
+            }
+
+            // Hold the loop to the preview rate, with nothing on screen only the detector needs frames
+            int gap = showWindow.load() ? PREVIEW_GAP_MS : FACE_DETECT_GAP_MS;
+            auto spent = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - frameStart).count();
+            if (spent < gap)
+                this_thread::sleep_for(chrono::milliseconds(gap - spent));
+        }
+    } catch (const exception& error) {
+        cerr << "Face tracking error: " << error.what() << endl;
     }
-    cameraAvailable = camera.initialize();
-    if (!cameraAvailable) {
-        return false;
+
+    // Let startTracking run again after the thread stops on its own
+    tracking = false;
+    detectReady.notify_all();
+}
+
+// Run the Haar detector on whichever frame the capture thread last handed over
+void FaceTracker::detectThreadFunction() {
+    while (!shouldQuit) {
+        // Wait for the next frame to look at
+        cv::Mat frame;
+        {
+            unique_lock<mutex> detectLock(detectMutex);
+            detectReady.wait(detectLock, [this] { return detectBusy || shouldQuit.load(); });
+            if (shouldQuit)
+                return;
+            frame = detectFrame;
+        }
+
+        // Keep the largest face by area, and the boxes the preview draws
+        vector<cv::Rect> faces = detectFaces(frame);
+        unique_lock<mutex> faceLock(faceMutex);
+        lastFaces = faces;
+        frameWidth = frame.cols;
+        frameHeight = frame.rows;
+        largestFace = 0;
+        if (!faces.empty()) {
+            int maxArea = 0;
+            for (size_t i = 0; i < faces.size(); i++) {
+                int area = faces[i].width * faces[i].height;
+                if (area > maxArea) {
+                    maxArea = area;
+                    largestFace = i;
+                    currentFace = faces[largestFace];
+                }
+            }
+        } else {
+            currentFace = cv::Rect();
+        }
+        faceLock.unlock();
+
+        // Say the detector is free for the next frame
+        unique_lock<mutex> detectLock(detectMutex);
+        detectBusy = false;
     }
-    cout << "Camera initialized successfully" << endl;
-    return true;
 }
 
-void FaceTracker::stopCamera() {
-    stopTracking();
-    cout << "Camera stopped" << endl;
+// Find every face in one frame
+vector<cv::Rect> FaceTracker::detectFaces(const cv::Mat& frame) {
+    vector<cv::Rect> faces;
+    cv::Mat frame_gray;
+
+    // Convert, blur, and equalize for more stable Haar detection
+    cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
+    cv::GaussianBlur(frame_gray, frame_gray, cv::Size(DETECT_BLUR_SIZE, DETECT_BLUR_SIZE), 0);
+    cv::equalizeHist(frame_gray, frame_gray);
+
+    // Detect faces, the min size skips the tiny scales that cost the most and never hold a face
+    cv::Size min_face = cv::Size(DETECT_MIN_FACE, DETECT_MIN_FACE);
+    cv::Size max_face = cv::Size(DETECT_MAX_FACE, DETECT_MAX_FACE);
+    face_cascade.detectMultiScale(frame_gray, faces, DETECT_SCALE_FACTOR, DETECT_MIN_NEIGHBORS, cv::CASCADE_SCALE_IMAGE, min_face, max_face);
+    return faces;
 }
 
+// Report the tracked face as an offset from centre, from -1 to 1
 bool FaceTracker::getFacePosition(float& x, float& y) {
-    if (!cameraAvailable) {
+    // A recording feeds the frames when the camera has been handed over
+    if (!cameraAvailable && !recording())
         return false;
-    }
 
     // Check if we have a valid face
     unique_lock<mutex> lock(faceMutex);
-    if (currentFace.width == 0 || currentFace.height == 0) {
+    if (currentFace.width == 0 || currentFace.height == 0 || frameWidth == 0 || frameHeight == 0)
         return false;
-    }
 
-    // Calculate face position relative to frame center, then normalize
-    float centerX = camera.width / 2.0f;
-    float centerY = camera.height / 2.0f;
-    x = (currentFace.x + currentFace.width/2) - centerX;
-    y = (currentFace.y + currentFace.height/2) - centerY;
+    // Measure against the frames being tracked on, a recording pipes a different shape back
+    float centerX = frameWidth / 2.0f;
+    float centerY = frameHeight / 2.0f;
+    x = (currentFace.x + currentFace.width / 2) - centerX;
+    y = (currentFace.y + currentFace.height / 2) - centerY;
     x /= centerX;
     y /= centerY;
+
+    // Flip both so a face to the left reads negative
     x = -x;
     y = -y;
     return true;
 }
 
+// Draw the camera preview over the face
 void FaceTracker::updateWindow() {
-    if (!showWindow || !cameraAvailable || !renderer) return;
-
+    if (!showWindow.load() || !renderer)
+        return;
     try {
-
         // Pull a new camera frame into the preview buffer when one is ready
         bool uploadFrame = false;
         cv::Mat frameCopy;
@@ -144,98 +262,96 @@ void FaceTracker::updateWindow() {
                     uploadFrame = true;
                 }
             }
-            if (!hasPreviewFrame) return;
+            if (!hasPreviewFrame)
+                return;
         }
 
         // Create or resize the cached texture when the frame size changes
         if (uploadFrame) {
             if (!previewTexture || previewTextureWidth != frameCopy.cols || previewTextureHeight != frameCopy.rows) {
-                if (previewTexture) SDL_DestroyTexture(previewTexture);
+                if (previewTexture)
+                    SDL_DestroyTexture(previewTexture);
                 previewTexture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, frameCopy.cols, frameCopy.rows);
                 previewTextureWidth = frameCopy.cols;
                 previewTextureHeight = frameCopy.rows;
             }
-            if (previewTexture) {
+            if (previewTexture)
                 SDL_UpdateTexture(previewTexture, NULL, frameCopy.data, static_cast<int>(frameCopy.step));
-            }
+
+            // Count the camera frames that made it onto the screen
+            if (LOG_PREVIEW_FPS)
+                logPreviewRate();
         }
-        if (!previewTexture) return;
+        if (!previewTexture)
+            return;
 
         // Blit the last frame so SDL_RenderClear does not flash the preview white
-        int previewWidth = screen_width / 4;
-        int previewHeight = (previewWidth * previewTextureHeight) / previewTextureWidth;
-        int previewX = (screen_width - previewWidth) / 2;
-        int previewY = PREVIEW_TOP;
-        SDL_Rect previewRect = {previewX, previewY, previewWidth, previewHeight};
+        int top = previewTop();
+        SDL_Rect previewRect = {0, top, screen_width, screen_height - status_bar_height() - top};
         SDL_RenderCopy(renderer, previewTexture, NULL, &previewRect);
     } catch (const exception& error) {
         cerr << "Error updating window: " << error.what() << endl;
     }
 }
 
-void FaceTracker::trackingThreadFunction() {
-    try {
-        while (!shouldQuit) {
-
-            // Capture frame from camera
-            cv::Mat frame;
-            if (!camera.captureFrame(frame)) {
-                cerr << "Error: Could not read frame from camera" << endl;
-                break;
-            }
-
-            // Detect faces in current frame
-            auto faces = detectFaces(frame);
-
-            // Keep the largest face by area
-            unique_lock<mutex> lock(faceMutex);
-            size_t largestFaceIdx = 0;
-            if (!faces.empty()) {
-                int maxArea = 0;
-                for (size_t i = 0; i < faces.size(); i++) {
-                    int area = faces[i].width * faces[i].height;
-                    if (area > maxArea) {
-                        maxArea = area;
-                        largestFaceIdx = i;
-                        currentFace = faces[largestFaceIdx];
-                    }
-                }
-            } else {
-                currentFace = cv::Rect();
-            }
-            lock.unlock();
-
-            // Draw faces and update frame buffer if window is enabled
-            if (showWindow) {
-                for (size_t i = 0; i < faces.size(); i++) {
-                    cv::Scalar color = (i == largestFaceIdx) ? cv::Scalar(0, 255, 0) : cv::Scalar(128, 128, 128);
-                    cv::rectangle(frame, faces[i], color, 2);
-                }
-                unique_lock<mutex> frameLock(frameMutex);
-                frame.copyTo(currentFrame);
-                hasNewFrame = true;
-                frameLock.unlock();
-            }
-
-            // Sleep for the Haar rate, not the camera rate
-            const int sleep_ms = 1000 / FACE_DETECT_FPS;
-            this_thread::sleep_for(chrono::milliseconds(sleep_ms));
-        }
-    } catch (const exception& error) {
-        cerr << "Face tracking error: " << error.what() << endl;
-    }
+// Top edge of the preview, sized to the screen width and sitting on the status bar
+int FaceTracker::previewTop() const {
+    if (!previewTexture || previewTextureWidth == 0)
+        return -1;
+    int previewHeight = (screen_width * previewTextureHeight) / previewTextureWidth;
+    return screen_height - status_bar_height() - previewHeight;
 }
 
-vector<cv::Rect> FaceTracker::detectFaces(const cv::Mat& frame) {
-    vector<cv::Rect> faces;
-    cv::Mat frame_gray;
+// Print how many camera frames a second the screen is showing
+static void logPreviewRate() {
+    static int frames = 0;
+    static auto since = chrono::steady_clock::now();
+    frames++;
 
-    // Convert, blur, and equalize for more stable Haar detection
-    cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
-    cv::GaussianBlur(frame_gray, frame_gray, cv::Size(5, 5), 0);
-    cv::equalizeHist(frame_gray, frame_gray);
+    // Report on the interval, then start counting again
+    auto spent = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - since).count();
+    if (spent < LOG_FPS_GAP_MS)
+        return;
+    printf("Preview FPS: %.1f\n", frames * 1000.0 / spent);
+    frames = 0;
+    since = chrono::steady_clock::now();
+}
 
-    // Detect faces with a modest min size so distant faces still count
-    face_cascade.detectMultiScale(frame_gray, faces, 1.1, 3, cv::CASCADE_SCALE_IMAGE, cv::Size(20, 20), cv::Size(300, 300));
-    return faces;
+// Reopen the camera after a call handed it back
+bool FaceTracker::initializeCamera() {
+    if (cameraAvailable)
+        return true;
+    cameraAvailable = camera.initialize();
+    return cameraAvailable;
+}
+
+// Hand the camera to another program
+void FaceTracker::stopCamera() {
+    stopTracking();
+    cout << "Camera stopped" << endl;
+}
+
+// Stop the detection thread and close the camera
+void FaceTracker::stopTracking() {
+    // Close capture so a blocked frame read returns, then join
+    shouldQuit = true;
+    camera.release();
+    cameraAvailable = false;
+    detectReady.notify_all();
+    if (trackingThread.joinable())
+        trackingThread.join();
+    if (detectThread.joinable())
+        detectThread.join();
+    tracking = false;
+}
+
+// Stop tracking and free the preview texture
+FaceTracker::~FaceTracker() {
+    stopTracking();
+
+    // Free cached preview texture on the SDL thread
+    if (previewTexture) {
+        SDL_DestroyTexture(previewTexture);
+        previewTexture = nullptr;
+    }
 }
