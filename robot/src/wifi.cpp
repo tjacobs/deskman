@@ -6,6 +6,7 @@
 // System
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <iostream>
 #include <mutex>
 #include <thread>
@@ -23,6 +24,10 @@ static const char* LIST_COMMAND = "nmcli -t -f ACTIVE,SSID,SIGNAL dev wifi list 
 
 // How long a join waits, the system password prompt sits inside it while someone types
 static const char* JOIN_WAIT_SECONDS = "300";
+
+// How often a join or forget checks whether the scan ahead of it has finished
+static const int JOIN_SCAN_POLL_MS = 50;
+
 // What exec returns when the program could not start
 static const int EXEC_FAILED = 127;
 
@@ -52,6 +57,8 @@ static string wifiStatus = STATUS_LOOKING;
 static vector<Network> wifiList;
 static atomic<bool> wifiWorking{false};
 static atomic<bool> wifiJoining{false};
+static string wifiJoiningName;
+static string wifiForgettingName;
 
 // A connection this machine has set up, and whether it has ever joined
 struct SavedConnection {
@@ -66,15 +73,16 @@ static vector<string> savedNetworkNames();
 static vector<SavedConnection> savedConnections();
 static string describeConnection(const vector<Network>& networks);
 static void joinNetwork(const Network& network);
+static void waitForWifi();
 static vector<string> runCommand(const string& command);
 static int runProgram(const vector<string>& arguments, vector<string>& lines);
 static vector<string> splitFields(const string& line);
 
 // Look up the networks without holding up the screen
 void refresh_networks() {
-    if (wifiWorking.load())
+    bool idle = false;
+    if (wifiJoining.load() || !wifiWorking.compare_exchange_strong(idle, true))
         return;
-    wifiWorking = true;
     thread(readNetworks).detach();
 }
 
@@ -167,14 +175,24 @@ static string describeConnection(const vector<Network>& networks) {
 
 // Join a network, nmcli reuses the saved password, and a new secure one asks for it on screen
 void connect_network(const Network& network) {
-    if (wifiWorking.load())
+    if (wifiJoining.load())
         return;
 
-    // Joining takes a few seconds and the password box waits on a person, so it runs off the main thread
-    wifiWorking = true;
+    // Mark the join straight away so the tapped row lights up
     wifiJoining = true;
+    {
+        lock_guard<mutex> lock(wifiMutex);
+        wifiJoiningName = network.name;
+    }
+
+    // Joining takes a few seconds and the password box waits on a person, so it runs off the main thread, after any scan finishes
     thread([network] {
+        waitForWifi();
         joinNetwork(network);
+        {
+            lock_guard<mutex> lock(wifiMutex);
+            wifiJoiningName.clear();
+        }
         wifiJoining = false;
         wifiWorking = false;
         refresh_networks();
@@ -206,16 +224,60 @@ static void joinNetwork(const Network& network) {
     }
 }
 
+// Forget a network, every connection saved for it goes, and a joined one drops off
+void forget_network(const Network& network) {
+    if (wifiJoining.load())
+        return;
+
+    // Show it as forgotten straight away, until the next look no longer finds it saved
+    {
+        lock_guard<mutex> lock(wifiMutex);
+        wifiForgettingName = network.name;
+    }
+
+    // Delete off the main thread, after any scan finishes, then look again before letting go of the radio
+    thread([network] {
+        waitForWifi();
+        for (const SavedConnection& connection : savedConnections()) {
+            if (connection.ssid != network.name)
+                continue;
+            vector<string> deleted;
+            runProgram({"nmcli", "connection", "delete", "uuid", connection.uuid}, deleted);
+            for (const string& line : deleted)
+                cout << line << endl;
+        }
+        readNetworks();
+        lock_guard<mutex> lock(wifiMutex);
+        wifiForgettingName.clear();
+    }).detach();
+}
+
+// Wait until no scan or other change is running, then claim the radio
+static void waitForWifi() {
+    bool idle = false;
+    while (!wifiWorking.compare_exchange_weak(idle, true)) {
+        idle = false;
+        this_thread::sleep_for(chrono::milliseconds(JOIN_SCAN_POLL_MS));
+    }
+}
+
 // The header line for the list
 string wifi_status_text() {
     lock_guard<mutex> lock(wifiMutex);
     return wifiStatus;
 }
 
-// The networks the last look found
+// The networks the last look found, one being forgotten already shown as not saved
 vector<Network> wifi_networks() {
     lock_guard<mutex> lock(wifiMutex);
-    return wifiList;
+    vector<Network> networks = wifiList;
+    for (Network& network : networks) {
+        if (network.name != wifiForgettingName)
+            continue;
+        network.saved = false;
+        network.active = false;
+    }
+    return networks;
 }
 
 // True while a look or a join is running
@@ -226,6 +288,12 @@ bool wifi_busy() {
 // True while a join is running, the password box included
 bool wifi_joining() {
     return wifiJoining.load();
+}
+
+// The network being joined, empty when no join is going
+string wifi_joining_name() {
+    lock_guard<mutex> lock(wifiMutex);
+    return wifiJoiningName;
 }
 
 // Run a command and hand back its lines

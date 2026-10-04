@@ -27,6 +27,12 @@ vector<Network> wifi_networks();
 // Join a network, a new secure one asks for its password on screen
 void connect_network(const Network& network);
 
+// Forget a saved network, dropping it if joined
+void forget_network(const Network& network);
+
 // True while a look or a join is still going, and true only for a join
 bool wifi_busy();
 bool wifi_joining();
+
+// The network being joined, empty when no join is going
+string wifi_joining_name();

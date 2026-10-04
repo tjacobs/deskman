@@ -112,6 +112,7 @@ static const char* VIDEO_MEASURING_TEXT = "--:--";
 static const char* WIFI_LOOKING_TEXT = "Scanning...";
 static const char* WIFI_CONNECTING_TEXT = "Connecting...";
 static const char* WIFI_SAVED_MARK = "Saved";
+static const char* WIFI_DROP_LABEL = "Drop";
 
 // How long the open network list waits after a scan before scanning again
 static const int WIFI_REFRESH_MS = 10000;
@@ -202,6 +203,9 @@ static atomic<bool> g_video_list_open{false};
 static vector<Recording> g_recordings;
 static int g_video_first_row = 0;
 static string g_video_confirm_path;
+
+// The network whose Drop button was tapped once, a second tap forgets it
+static string g_wifi_confirm_name;
 
 // The wireless list
 static atomic<bool> g_wifi_list_open{false};
@@ -1038,16 +1042,26 @@ void draw_wifi_list(TTF_Font* font) {
 
     // A row for each network in range, name, strength, and whether it can be joined
     vector<Network> networks = wifi_networks();
+    string joining = wifi_joining_name();
     int rows = video_rows_that_fit() - 1;
     for (int row = 0; row < rows && row < (int)networks.size(); row++) {
         const Network& network = networks[row];
         SDL_Rect rowRect = video_row_rect(row + 1);
-        draw_bar_button(rowRect, nullptr, network.active ? WIFI_ACTIVE_COLOR : VIDEO_ROW_COLOR, font);
+        bool lit = joining.empty() ? network.active : network.name == joining;
+        draw_bar_button(rowRect, nullptr, lit ? WIFI_ACTIVE_COLOR : VIDEO_ROW_COLOR, font);
         string mark = network.active ? WIFI_CONNECTED_MARK : (network.saved ? WIFI_SAVED_MARK : "");
         string text = network.name + "   " + to_string(network.signal) + "%   " + mark;
         int textHeight = 0;
         TTF_SizeUTF8(font, text.c_str(), nullptr, &textHeight);
         draw_text(text.c_str(), rowRect.x + VIDEO_TEXT_PAD, rowRect.y + (rowRect.h - textHeight) / 2, font, BUTTON_LABEL_COLOR);
+
+        // A remembered network gets a drop button that asks once before forgetting it
+        if (!network.saved && !network.active)
+            continue;
+        bool confirming = network.name == g_wifi_confirm_name;
+        const char* dropLabel = confirming ? VIDEO_CONFIRM_LABEL : WIFI_DROP_LABEL;
+        SDL_Color dropColor = confirming ? VIDEO_CONFIRM_COLOR : VIDEO_DELETE_COLOR;
+        draw_bar_button(video_delete_rect(row + 1), dropLabel, dropColor, font);
     }
 }
 
@@ -1060,15 +1074,30 @@ static bool handle_wifi_tap(int x, int y) {
     vector<Network> networks = wifi_networks();
     int rows = video_rows_that_fit() - 1;
     for (int row = 0; row < rows && row < (int)networks.size(); row++) {
+        const Network& network = networks[row];
+        bool remembered = network.saved || network.active;
+
+        // Drop asks first, then forgets on the second tap
+        if (remembered && tap_in_rect(x, y, video_delete_rect(row + 1))) {
+            if (g_wifi_confirm_name != network.name) {
+                g_wifi_confirm_name = network.name;
+                return true;
+            }
+            g_wifi_confirm_name.clear();
+            forget_network(network);
+            return true;
+        }
         if (!tap_in_rect(x, y, video_row_rect(row + 1)))
             continue;
-        if (!networks[row].active)
-            connect_network(networks[row]);
+        g_wifi_confirm_name.clear();
+        if (!network.active)
+            connect_network(network);
         return true;
     }
 
     // A tap anywhere else closes the list
     g_wifi_list_open = false;
+    g_wifi_confirm_name.clear();
     return true;
 }
 
