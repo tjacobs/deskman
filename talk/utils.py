@@ -44,6 +44,12 @@ CPU_INDEX_MAX = 64
 BEDTIME = 22
 WAKE_UP = 7
 
+# Config internet check, ping until one reply or the deadline in seconds
+INTERNET_HOST = '1.1.1.1'
+INTERNET_DEADLINE = '3'
+LINUX_DEADLINE_FLAG = '-w'
+MAC_DEADLINE_FLAG = '-t'
+
 # Config huggingface cache
 os.environ['HF_HUB_CACHE'] = CACHE_DIR
 os.environ['HF_HUB_VERBOSITY'] = 'error'
@@ -377,7 +383,8 @@ def is_offline():
 
 # Return true when public internet responds to ping
 def network_available():
-    result = subprocess.run(['ping', '-c', '1', '-W', '2', '1.1.1.1'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline_flag = MAC_DEADLINE_FLAG if platform.system() == 'Darwin' else LINUX_DEADLINE_FLAG
+    result = subprocess.run(['ping', '-c', '1', deadline_flag, INTERNET_DEADLINE, INTERNET_HOST], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return result.returncode == 0
 
 # Return true when model and default voice are cached locally
