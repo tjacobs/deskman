@@ -83,7 +83,7 @@ int screen_height = 600;
 string currentStatus;
 mutex statusMutex;
 
-// Grey bar starts visible, a tap on the face hides it
+// Status bar starts visible, a tap on the face hides it
 static bool g_status_bar_visible = true;
 
 // Console, log file, and the read end of the tee pipe
@@ -506,22 +506,22 @@ static string clip_log_line(const string& text) {
     return line;
 }
 
-// Height of the grey bar
+// Height of the status bar
 int status_bar_height() {
     return STATUS_BAR_HEIGHT;
 }
 
-// Inset of the menu button inside the grey bar
+// Inset of the menu button inside the status bar
 int status_bar_pad() {
     return STATUS_BAR_PAD;
 }
 
-// True when the grey bar is on screen
+// True when the status bar is on screen
 bool status_bar_visible() {
     return g_status_bar_visible;
 }
 
-// Show or hide the grey bar
+// Show or hide the status bar
 void set_status_bar_visible(bool visible) {
     g_status_bar_visible = visible;
 }

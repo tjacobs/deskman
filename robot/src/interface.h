@@ -29,6 +29,10 @@ void handle_call_event(const SDL_Event& event);
 // Draw the menu button, and the popup above it when it is open
 void draw_menu(TTF_Font* font);
 
+// Record button in the status bar's place, shown only while that bar is hidden, and the date above the video while recording
+void draw_entry_prompt(TTF_Font* font, bool bar_kept);
+void draw_entry_date(TTF_Font* font, int video_top);
+
 // True while the popup list is showing, and where the button starts
 bool menu_open();
 int menu_button_left();

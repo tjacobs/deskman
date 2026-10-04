@@ -457,11 +457,16 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Preview first, then the record mark and menu so they stay on top, a video takes that space
         if (use_camera && faceTracker.isTracking() && !playing())
             faceTracker.updateWindow();
+        draw_entry_date(face.font, faceTracker.previewTop());
         draw_recording_mark(face.font);
         draw_video_list(face.font);
         draw_wifi_list(face.font);
         set_camera_showing(show_camera);
-        draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open() || video_list_open() || wifi_list_open());
+
+        // Status bar, or the record button in its place while the bar is hidden
+        bool keep_bar = menu_open() || call_overlay_open() || video_list_open() || wifi_list_open();
+        draw_status_bar(battery_text().c_str(), face.font, keep_bar);
+        draw_entry_prompt(face.font, keep_bar);
         SDL_RenderPresent(renderer);
 
         // Count the frames the face loop is drawing
@@ -704,7 +709,11 @@ static void draw_face() {
     SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
     SDL_RenderClear(renderer);
     vectorRenderer.render(renderer);
-    draw_status_bar(battery_text().c_str(), face.font, menu_open() || call_overlay_open());
+
+    // Status bar, or the record button in its place while the bar is hidden
+    bool keep_bar = menu_open() || call_overlay_open();
+    draw_status_bar(battery_text().c_str(), face.font, keep_bar);
+    draw_entry_prompt(face.font, keep_bar);
     SDL_RenderPresent(renderer);
     SDL_Delay(FRAME_MS);
 }

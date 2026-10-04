@@ -35,11 +35,11 @@ void hide_cursor();
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
 void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible);
 
-// Grey bar size, so the menu button can sit inside it
+// Status bar size, so the menu button can sit inside it
 int status_bar_height();
 int status_bar_pad();
 
-// Show or hide the grey bar
+// Show or hide the status bar
 bool status_bar_visible();
 void set_status_bar_visible(bool visible);
 

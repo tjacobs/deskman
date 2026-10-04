@@ -43,6 +43,9 @@ public:
     void updateWindow();
     atomic<bool> showWindow;
 
+    // Top edge of the preview on screen, negative before the first frame
+    int previewTop() const;
+
 private:
     // Worker thread bodies, one grabs frames and one looks for faces in them
     void trackingThreadFunction();

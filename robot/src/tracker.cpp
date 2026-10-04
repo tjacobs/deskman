@@ -286,12 +286,20 @@ void FaceTracker::updateWindow() {
             return;
 
         // Blit the last frame so SDL_RenderClear does not flash the preview white
-        int previewHeight = (screen_width * previewTextureHeight) / previewTextureWidth;
-        SDL_Rect previewRect = {0, screen_height - status_bar_height() - previewHeight, screen_width, previewHeight};
+        int top = previewTop();
+        SDL_Rect previewRect = {0, top, screen_width, screen_height - status_bar_height() - top};
         SDL_RenderCopy(renderer, previewTexture, NULL, &previewRect);
     } catch (const exception& error) {
         cerr << "Error updating window: " << error.what() << endl;
     }
+}
+
+// Top edge of the preview, sized to the screen width and sitting on the status bar
+int FaceTracker::previewTop() const {
+    if (!previewTexture || previewTextureWidth == 0)
+        return -1;
+    int previewHeight = (screen_width * previewTextureHeight) / previewTextureWidth;
+    return screen_height - status_bar_height() - previewHeight;
 }
 
 // Print how many camera frames a second the screen is showing

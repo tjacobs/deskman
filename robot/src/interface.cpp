@@ -20,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -135,6 +136,20 @@ static const SDL_Color TALK_MODE_OFF_COLOR = {60, 60, 70, 255};
 static const SDL_Color TALK_MODE_UNAVAILABLE_COLOR = {40, 40, 45, 255};
 static const SDL_Color TALK_MODE_UNAVAILABLE_LABEL_COLOR = {120, 120, 130, 255};
 
+// Button for recording today's video
+static const char* ENTRY_PROMPT_TEXT = "Record today's entry";
+static const char* ENTRY_DATE_FORMAT = "%A, %B %-d, %Y";
+static const int ENTRY_DATE_SIZE = 64;
+static const int ENTRY_DATE_GAP = 12;
+static const SDL_Color ENTRY_DATE_COLOR = {0, 0, 0, 255};
+static const SDL_Color ENTRY_STOP_COLOR = {30, 140, 70, 255};
+
+// A recording whose file name starts with today's stamp counts as today's entry
+static const char* ENTRY_FILE_FORMAT = "video_%Y_%m_%d_";
+
+// Whether today's entry has been recorded
+static bool g_entry_recorded = false;
+
 // A warning with a link says it can be tapped, and a tap near it opens the link in the browser
 static const char* WARNING_LINK_HINT = ", tap to fix";
 static const int WARNING_TAP_MARGIN = 20;
@@ -248,6 +263,9 @@ static bool tap_in_rect(int x, int y, SDL_Rect rect);
 static void draw_bar_button(SDL_Rect rect, const char* label, SDL_Color fill, TTF_Font* font);
 static void draw_button(SDL_Rect rect, const char* label, SDL_Color fill, SDL_Color label_color, TTF_Font* font);
 static void draw_hamburger_icon(SDL_Rect rect);
+static SDL_Rect entry_prompt_rect();
+static bool find_today_entry();
+static string today_text(const char* format);
 static void send_to_clients(const string& line, int skip_fd);
 static void remove_client(int client_fd);
 static double seconds_since_start();
@@ -746,6 +764,64 @@ static void draw_button(SDL_Rect rect, const char* label, SDL_Color fill, SDL_Co
     draw_text(label, rect.x + (rect.w - text_width) / 2, rect.y + (rect.h - text_height) / 2, font, label_color);
 }
 
+// Position of today's video record button
+static SDL_Rect entry_prompt_rect() {
+    return {0, screen_height - status_bar_height(), screen_width, status_bar_height()};
+}
+
+// Record button in the status bar's place, only while that bar is hidden
+void draw_entry_prompt(TTF_Font* font, bool bar_kept) {
+    if (!font || bar_kept || status_bar_visible() || menu_open())
+        return;
+
+    // Green Stop while recording, which also counts as today's entry
+    if (recording()) {
+        g_entry_recorded = true;
+        draw_bar_button(entry_prompt_rect(), MENU_STOP_LABEL, ENTRY_STOP_COLOR, font);
+        return;
+    }
+
+    // Nothing to ask for once today's entry is recorded
+    if (g_entry_recorded)
+        return;
+    draw_bar_button(entry_prompt_rect(), ENTRY_PROMPT_TEXT, MENU_BUTTON_COLOR, font);
+}
+
+// True when a recording from today is in the recordings folder
+static bool find_today_entry() {
+    string prefix = today_text(ENTRY_FILE_FORMAT);
+    error_code error;
+    for (const auto& entry : filesystem::directory_iterator(g_recordings_path, error)) {
+        if (entry.path().filename().string().starts_with(prefix))
+            return true;
+    }
+    return false;
+}
+
+// Day and date centred just above the video while recording
+void draw_entry_date(TTF_Font* font, int video_top) {
+    if (!font || !recording() || video_top < 0)
+        return;
+
+    // Measure the date so it sits in the middle
+    string date = today_text(ENTRY_DATE_FORMAT);
+    int text_width = 0;
+    int text_height = 0;
+    if (TTF_SizeUTF8(font, date.c_str(), &text_width, &text_height) != 0)
+        return;
+    draw_text(date.c_str(), (screen_width - text_width) / 2, video_top - text_height - ENTRY_DATE_GAP, font, ENTRY_DATE_COLOR);
+}
+
+// Today's local date in the given strftime format
+static string today_text(const char* format) {
+    time_t now = time(nullptr);
+    tm local{};
+    localtime_r(&now, &local);
+    char text[ENTRY_DATE_SIZE];
+    strftime(text, sizeof(text), format, &local);
+    return text;
+}
+
 // Draw three horizontal lines in the menu button
 static void draw_hamburger_icon(SDL_Rect rect) {
     int line_width = rect.w / 2;
@@ -888,6 +964,7 @@ static bool handle_video_tap(int x, int y) {
                 return true;
             }
             delete_recording(path);
+            g_entry_recorded = find_today_entry();
             open_video_list();
             return true;
         }
@@ -1175,6 +1252,13 @@ void handle_call_event(const SDL_Event& event) {
     }
     if (g_overlay_open.load())
         return;
+
+    // The record button in the hidden status bar's place starts today's entry, and stops it
+    if (!bar_showing && (recording() || !g_entry_recorded) && tap_in_rect(x, y, entry_prompt_rect())) {
+        if (debounce_tap())
+            g_record_request = recording() ? RECORD_REQUEST_STOP : RECORD_REQUEST_START;
+        return;
+    }
     set_status_bar_visible(!bar_showing);
 }
 
