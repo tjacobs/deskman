@@ -48,6 +48,10 @@ bool video_list_open();
 void draw_wifi_list(TTF_Font* font);
 bool wifi_list_open();
 
+// Draw the volume levels, and say when that picker is up
+void draw_volume_list(TTF_Font* font);
+bool volume_list_open();
+
 // Camera, Move, and Audio presses since the last check, then clear them
 void take_menu_presses(bool& camera, bool& move, bool& audio);
 

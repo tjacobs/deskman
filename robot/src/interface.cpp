@@ -72,13 +72,14 @@ static const int MENU_CALL = 7;
 static const int MENU_EXIT = 8;
 static const int MENU_SETTINGS = 9;
 static const int MENU_BACK = 10;
-static const char* MENU_ITEM_LABELS[] = {"Listen", "Camera", "Record", "Videos", "Move", "Audio", "WiFi", "Call", "Exit", "Settings", "Back"};
+static const int MENU_VOLUME = 11;
+static const char* MENU_ITEM_LABELS[] = {"Listen", "Camera", "Record", "Videos", "Move", "Audio", "WiFi", "Call", "Exit", "Settings", "Back", "Volume"};
 
 // Items on the main page, and on the page Settings opens, top to bottom
 static const int MENU_MAIN_ITEMS[] = {MENU_LISTEN, MENU_CAMERA, MENU_RECORD, MENU_VIDEOS, MENU_CALL, MENU_SETTINGS};
 static const int MENU_MAIN_COUNT = 6;
-static const int MENU_SETTINGS_ITEMS[] = {MENU_MOVE, MENU_AUDIO, MENU_WIFI, MENU_EXIT, MENU_BACK};
-static const int MENU_SETTINGS_COUNT = 5;
+static const int MENU_SETTINGS_ITEMS[] = {MENU_MOVE, MENU_AUDIO, MENU_VOLUME, MENU_WIFI, MENU_EXIT, MENU_BACK};
+static const int MENU_SETTINGS_COUNT = 6;
 
 // The Record item says how to end the recording while one is running, and Listen says Quiet while talk listens
 static const char* MENU_STOP_LABEL = "Stop";
@@ -117,6 +118,15 @@ static const char* WIFI_DROP_LABEL = "Drop";
 // How long the open network list waits after a scan before scanning again
 static const int WIFI_REFRESH_MS = 10000;
 static const char* WIFI_CONNECTED_MARK = "Connected";
+
+// The volume picker, a column of levels a fifth apart with the loudest at the top, set through the talk volume script
+static const int VOLUME_STEP_PERCENT = 20;
+static const int VOLUME_LEVEL_COUNT = 6;
+static const int VOLUME_UNKNOWN = -1;
+static const char* VOLUME_SCRIPT_FROM_REPO = "talk/text/volume.py";
+static const char* VOLUME_PYTHON_FROM_REPO = "talk/.venv/bin/python";
+static const char* VOLUME_SAY_TEXT = "Hi";
+static const int VOLUME_OUTPUT_SIZE = 256;
 
 // Menu button colors
 static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
@@ -207,6 +217,10 @@ static string g_video_confirm_path;
 // The network whose Drop button was tapped once, a second tap forgets it
 static string g_wifi_confirm_name;
 
+// The volume picker, and the speaker level the volume script last reported
+static atomic<bool> g_volume_list_open{false};
+static atomic<int> g_volume_percent{VOLUME_UNKNOWN};
+
 // The wireless list
 static atomic<bool> g_wifi_list_open{false};
 static atomic<bool> g_menu_open{false};
@@ -260,6 +274,10 @@ static SDL_Rect video_delete_rect(int row);
 static SDL_Rect video_page_rect(bool older);
 static int video_rows_that_fit();
 static bool handle_wifi_tap(int x, int y);
+static void open_volume_list();
+static bool handle_volume_tap(int x, int y);
+static SDL_Rect volume_level_rect(int level);
+static void run_volume_script(int percent);
 static bool handle_warning_tap(int x, int y);
 static void open_link(const string& url);
 static void draw_list_backdrop();
@@ -1106,6 +1124,94 @@ bool wifi_list_open() {
     return g_wifi_list_open.load();
 }
 
+// Draw the volume levels, the one the speaker is at lit green
+void draw_volume_list(TTF_Font* font) {
+    if (!g_volume_list_open.load())
+        return;
+
+    // Darken the face behind the grid
+    draw_list_backdrop();
+
+    // Say the exact level, the speaker may sit between steps after a voice change
+    int current = g_volume_percent.load();
+    string header = current == VOLUME_UNKNOWN ? "Volume" : "Volume " + to_string(current) + "%";
+    draw_text(header.c_str(), VIDEO_LIST_PAD + VIDEO_TEXT_PAD, VIDEO_LIST_TOP, font, BUTTON_LABEL_COLOR);
+
+    // A button for each step, the one nearest the speaker's level lit
+    for (int level = 0; level < VOLUME_LEVEL_COUNT; level++) {
+        int percent = level * VOLUME_STEP_PERCENT;
+        bool nearest = current != VOLUME_UNKNOWN && abs(percent - current) * 2 < VOLUME_STEP_PERCENT;
+        SDL_Color fill = nearest ? WIFI_ACTIVE_COLOR : VIDEO_ROW_COLOR;
+        string label = to_string(percent) + "%";
+        draw_bar_button(volume_level_rect(level), label.c_str(), fill, font);
+    }
+}
+
+// Show the volume picker, and read the level the speaker is at
+static void open_volume_list() {
+    g_volume_list_open = true;
+    run_volume_script(VOLUME_UNKNOWN);
+}
+
+// Set the level that was tapped, and say whether the tap belonged to the picker
+static bool handle_volume_tap(int x, int y) {
+    if (!g_volume_list_open.load())
+        return false;
+
+    // Tapping a level sets it, the picker stays up so the lit button shows where it landed
+    for (int level = 0; level < VOLUME_LEVEL_COUNT; level++) {
+        if (!tap_in_rect(x, y, volume_level_rect(level)))
+            continue;
+        int percent = level * VOLUME_STEP_PERCENT;
+        g_volume_percent = percent;
+        run_volume_script(percent);
+        return true;
+    }
+
+    // A tap anywhere else closes the picker
+    g_volume_list_open = false;
+    return true;
+}
+
+// Place one level in a column filling the space from the header down to the status bar, loudest at the top
+static SDL_Rect volume_level_rect(int level) {
+    int top = VIDEO_LIST_TOP + VIDEO_ROW_HEIGHT + VIDEO_ROW_GAP;
+    int bottom = screen_height - status_bar_height() - VIDEO_ROW_GAP;
+    int slot = (bottom - top) / VOLUME_LEVEL_COUNT;
+    int row = VOLUME_LEVEL_COUNT - 1 - level;
+    return {VIDEO_LIST_PAD, top + row * slot, screen_width - VIDEO_LIST_PAD * 2, slot - VIDEO_ROW_GAP};
+}
+
+// Set the speaker to a percent and say Hi at it, or read it when unknown, on a worker so the face keeps drawing
+static void run_volume_script(int percent) {
+    // The script and the talk python sit beside the robot folder the recordings are kept in
+    filesystem::path repo = filesystem::path(g_recordings_path).parent_path().parent_path();
+    string command = "'" + (repo / VOLUME_PYTHON_FROM_REPO).string() + "' '" + (repo / VOLUME_SCRIPT_FROM_REPO).string() + "'";
+    if (percent != VOLUME_UNKNOWN)
+        command += " " + to_string(percent) + " --say " + VOLUME_SAY_TEXT;
+    command += " 2>&1";
+
+    // Print what the script says so it shows on the status bar, and keep the level it reports
+    thread([command]() {
+        FILE* pipe = popen(command.c_str(), "r");
+        if (!pipe)
+            return;
+        char line[VOLUME_OUTPUT_SIZE];
+        while (fgets(line, sizeof(line), pipe)) {
+            cout << line << flush;
+            int reported = 0;
+            if (sscanf(line, "Volume is %d", &reported) == 1 || sscanf(line, "Set to %d", &reported) == 1)
+                g_volume_percent = reported;
+        }
+        pclose(pipe);
+    }).detach();
+}
+
+// True while the volume picker is up
+bool volume_list_open() {
+    return g_volume_list_open.load();
+}
+
 // Dim the face so a list on top of it reads
 static void draw_list_backdrop() {
     SDL_Rect backdrop = {0, 0, screen_width, screen_height};
@@ -1155,6 +1261,8 @@ void handle_call_event(const SDL_Event& event) {
     if (!menu_open() && handle_video_tap(x, y))
         return;
     if (!menu_open() && handle_wifi_tap(x, y))
+        return;
+    if (!menu_open() && handle_volume_tap(x, y))
         return;
 
     // A warning with a link opens it, so the problem can be fixed from the screen
@@ -1253,6 +1361,10 @@ void handle_call_event(const SDL_Event& event) {
     if (item == MENU_WIFI) {
         refresh_networks();
         g_wifi_list_open = true;
+        return;
+    }
+    if (item == MENU_VOLUME) {
+        open_volume_list();
         return;
     }
     if (item == MENU_CALL) {

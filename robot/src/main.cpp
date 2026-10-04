@@ -461,10 +461,11 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         draw_recording_mark(face.font);
         draw_video_list(face.font);
         draw_wifi_list(face.font);
+        draw_volume_list(face.font);
         set_camera_showing(show_camera);
 
         // Status bar, or the record button in its place while the bar is hidden
-        bool keep_bar = menu_open() || call_overlay_open() || video_list_open() || wifi_list_open();
+        bool keep_bar = menu_open() || call_overlay_open() || video_list_open() || wifi_list_open() || volume_list_open();
         draw_status_bar(battery_text().c_str(), face.font, keep_bar);
         draw_entry_prompt(face.font, keep_bar);
         SDL_RenderPresent(renderer);
