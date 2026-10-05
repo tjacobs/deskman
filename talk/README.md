@@ -33,10 +33,10 @@ The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference.
 ## Setup
 
 ```bash
-./install.sh --listen --talk
+./install.sh
 ```
 
-Works on linux and mac. Installs [uv](https://docs.astral.sh/uv/) when missing, installs system requirements, then creates `.venv` and installs kokoro and torch into it.
+Works on linux and mac. Installs [uv](https://docs.astral.sh/uv/) when missing, installs system requirements, then creates `.venv` and installs kokoro and torch into it. It also installs speech to text for `listen.py`, and builds llama.cpp and downloads Gemma 4 E2B for `talk.py`.
 
 Pass `--listen --talk` to also install speech to text for `listen.py` and `talk.py`.
 
@@ -76,11 +76,11 @@ Pass `--test` to speak the first two preset phrases and exit.
 Live transcription from the microphone. Speak into your microphone, and text lines will print as you talk, CTRL-C to stop.
 
 ```bash
-./install.sh --listen
+./install.sh
 ./listen.py
 ```
 
-On a machine with the CUDA toolkit, `--listen` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.
+On a machine with the CUDA toolkit, `install.sh` clones and builds [CTranslate2](https://github.com/OpenNMT/CTranslate2) with CUDA for the Jetson GPU, then installs it and faster-whisper into `.venv`. Everywhere else it installs the CPU wheels from PyPI, plus sox on mac.
 
 Uses the whisper `base` model with voice activity detection, on GPU when available. Records with `arecord` from the USB microphone on linux, preferring a mic-only card over a speaker card's fallback mic, skipping camera cards that advertise capture with no mic, and with sox from the default input device on mac.
 
@@ -106,7 +106,7 @@ Use `--terminal` over SSH, it skips the browser and paste box and prompts on the
 Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop`.
 
 ```bash
-./install.sh --listen --talk
+./install.sh
 ./talk.py
 ./talk.py --cloud
 ```

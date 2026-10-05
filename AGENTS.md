@@ -59,7 +59,7 @@ The `talk/speak.py` and `talk/say.py` scripts detect the missing soundcard, prin
 
 The Kokoro model and voices download into `talk/cache/` on first run and need internet. Once cached, `HF_HUB_OFFLINE=1` works offline.
 
-The `talk/listen.py` and `talk/talk.py` scripts need a USB microphone that this VM does not have. `talk.py` also needs `./install.sh --listen` and `./install.sh --talk` from `talk/`, where `--talk` builds `llama.cpp` and downloads a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. With no flags, `talk.py` uses OpenAI when `1.1.1.1` pings and `OPENAI_API_KEY` or `talk/openai.env` is present, otherwise local Gemma. `--cloud` or `TALK_LLM=cloud` forces OpenAI, `--local` forces Gemma. `talk/text/tests.py` needs that server running. Stop `llama-server` when done.
+The `talk/listen.py` and `talk/talk.py` scripts need a USB microphone that this VM does not have. `talk.py` also needs speech to text and the local model, which `./install.sh` from `talk/` installs by default, building `llama.cpp` and downloading a ~3GB Gemma GGUF, and it starts `llama-server` on port 8080. With no flags, `talk.py` uses OpenAI when `1.1.1.1` pings and `OPENAI_API_KEY` or `talk/openai.env` is present, otherwise local Gemma. `--cloud` or `TALK_LLM=cloud` forces OpenAI, `--local` forces Gemma. `talk/text/tests.py` needs that server running. Stop `llama-server` when done.
 
 When you start or use `talk/text/server.sh` / `llama-server` for testing, benches, or debugging:
 

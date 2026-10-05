@@ -13,7 +13,7 @@ The voice interaction.
 
 ```bash
 cd talk
-./install.sh --listen --talk
+./install.sh
 ./talk.py
 ```
 
