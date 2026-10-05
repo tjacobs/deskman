@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install dependencies into .venv with uv, works on linux and mac.
-# Usage: ./install.sh [--listen] [--talk]
+# Usage: ./install.sh
 
 # WiFi connect: 
 # nmcli device wifi connect "NETWORK" password "PASSWORD"
@@ -13,7 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${SCRIPT_DIR}/.venv"
 PYTHON_VERSION="3.12"
 JETSON_PYTHON_VERSION="3.10"
-PYTHON_PACKAGES=(kokoro soundfile soco websocket-client)
+
+# Pin transformers so tokenizers comes from a wheel, 4.12 builds from source and needs Rust
+PYTHON_PACKAGES=(kokoro soundfile soco websocket-client 'transformers>=4.46,<5')
 SPACY_MODEL_URL="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 LISTEN_PACKAGES=(faster-whisper)
 BUILD_PACKAGES=(pybind11 wheel)
@@ -21,9 +23,12 @@ BUILD_PACKAGES=(pybind11 wheel)
 # Config torch, the default linux wheel pulls cuda libraries a raspberry pi cannot load
 TORCH_PACKAGES=(torch==2.9.1)
 TORCH_JETSON_PACKAGES=(torch==2.8.0 'numpy<2')
+TORCH_JETPACK7_PACKAGES=(torch==2.12.0)
 TORCH_CPU_INDEX_URL="https://download.pytorch.org/whl/cpu"
 TORCH_CUDA_INDEX_URL="https://download.pytorch.org/whl/cu126"
 TORCH_JETSON_INDEX_URL="https://pypi.jetson-ai-lab.io/jp6/cu126"
+TORCH_JETPACK7_INDEX_URL="https://download.pytorch.org/whl/cu132"
+JETPACK7_L4T_RELEASE=39
 CUDA_PACKAGE_PATTERN="^nvidia-"
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
@@ -66,9 +71,9 @@ TEXT_MODEL_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/
 LLAMA_SERVER="${LLAMA_CPP_DIR}/build/bin/llama-server"
 LLAMA_LIBRARY_DIR="${LLAMA_CPP_DIR}/build/bin"
 
-# State
-INSTALL_LISTEN=false
-INSTALL_TALK=false
+# State, speech to text and the local model install by default
+INSTALL_LISTEN=true
+INSTALL_TALK=true
 
 # Main
 main() {
@@ -113,9 +118,9 @@ parse_args() {
 # Print usage help
 print_usage() {
     echo "Usage: ./install.sh [--listen] [--talk]"
-    echo "  --listen  also install speech to text for listen.py and talk.py"
-    echo "  --talk    also install llama.cpp and Gemma 4 E2B for talk.py"
-    echo "  (no arg)  install text to speech for speak.py and say.py into .venv"
+    echo "  (no arg)  install text to speech, speech to text, llama.cpp, and Gemma 4 E2B"
+    echo "  --listen  install speech to text for listen.py and talk.py"
+    echo "  --talk    install llama.cpp and Gemma 4 E2B for talk.py"
 }
 
 # Install uv when missing
@@ -218,8 +223,15 @@ install_python_packages() {
     install_packages "${SPACY_MODEL_URL}"
 }
 
-# Install torch, Jetson Orin wheels, CPU on pi, CUDA 12.6 elsewhere
+# Install torch, JetPack 7 CUDA 13.2 wheels, JetPack 6 Orin wheels, CPU on pi, CUDA 12.6 elsewhere
 install_torch() {
+    # JetPack 7 has no system libcudart.so.12, so use the upstream wheel that ships CUDA 13.2
+    if is_jetpack7; then
+        echo "Installing torch ${TORCH_JETPACK7_PACKAGES[*]} from ${TORCH_JETPACK7_INDEX_URL}."
+        uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_JETPACK7_INDEX_URL}" "${TORCH_JETPACK7_PACKAGES[@]}"
+        return 0
+    fi
+
     # Use Jetson AI Lab wheels built for Orin sm_87, pytorch.org aarch64 skips that arch
     if is_jetson; then
         echo "Installing torch ${TORCH_JETSON_PACKAGES[*]} from ${TORCH_JETSON_INDEX_URL}."
@@ -503,6 +515,25 @@ venv_python_version() {
     else
         echo "${PYTHON_VERSION}"
     fi
+}
+
+# Return the L4T release number, empty when this is not a Jetson
+jetson_l4t_release() {
+    # First line starts with # R and the release number
+    if [[ ! -r "${JETSON_RELEASE_FILE}" ]]; then
+        return 0
+    fi
+    sed -n 's/^# R\([0-9][0-9]*\).*/\1/p' "${JETSON_RELEASE_FILE}" | head -n 1
+}
+
+# Return true on JetPack 7, L4T R39 and newer
+is_jetpack7() {
+    local release
+    release="$(jetson_l4t_release)"
+    if [[ -n "${release}" && "${release}" -ge "${JETPACK7_L4T_RELEASE}" ]]; then
+        return 0
+    fi
+    return 1
 }
 
 # Return true when running on a Jetson
