@@ -1436,7 +1436,7 @@ def check_ready():
         print(f'Audio playback unavailable: {player} not found.')
         sys.exit(1)
     if player == utils.LINUX_PLAYER and utils.find_usb_card() is None:
-        print('No USB speaker found. Plug one in and run ./tools/audio.sh.')
+        print('No USB speaker found. Plug one in and run ./tools/install_audio.sh.')
         sys.exit(1)
 
 # Start the local text model server when needed, return the process we started

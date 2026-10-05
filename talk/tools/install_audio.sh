@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Route audio to the USB soundcard and disable onboard HDMI audio, on a raspberry pi or a jetson.
-# Usage: ./tools/audio.sh
+# Usage: ./tools/install_audio.sh
 
 # Exit on error, undefined variables, and pipe failure
 set -euo pipefail
@@ -29,6 +29,11 @@ DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
 USB_AUDIO_DRIVER_PATH="/sys/bus/usb/drivers/snd-usb-audio"
 USB_VIDEO_CLASS="0e"
+
+# Config the jetson drivers that register HDMI and the APE card
+APE_DRIVER_NAME="tegra-audio-graph-card"
+APE_DEVICE_NAME="sound"
+JETSON_AUDIO_MODULES=(snd_hda_tegra snd_soc_tegra_machine_driver snd_soc_tegra_audio_graph_card)
 
 # State
 TARGET_USER=""
@@ -63,9 +68,9 @@ parse_args() {
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./tools/audio.sh"
+    echo "Usage: ./tools/install_audio.sh"
     echo "  Routes ALSA and pulse to the USB soundcard, for this user and for services."
-    echo "  Disables onboard HDMI audio, and sets audio up again when a card is replugged."
+    echo "  Disables onboard HDMI and APE audio, and sets audio up again when a card is replugged."
     echo "  Unbinds dummy USB audio on cameras, they have no speaker or mic."
     echo "  Asks for sudo, since it writes system config."
 }
@@ -184,7 +189,7 @@ configure_audio() {
     local card_index card_name
     card_index="$(find_usb_card || true)"
     if [[ -z "${card_index}" ]]; then
-        echo "No USB soundcard found. Plug one in and run ./tools/audio.sh again."
+        echo "No USB soundcard found. Plug one in and run ./tools/install_audio.sh again."
         exit 1
     fi
 
@@ -268,7 +273,7 @@ write_asound_config() {
     # Send everything through pulse when it runs, it owns the card and locks direct openers out
     if run_as_user pactl info >/dev/null 2>&1; then
         cat > "${output_path}" <<EOF
-# Written by speak tools/audio.sh, sends ALSA through pulse so programs share the USB soundcard
+# Written by speak tools/install_audio.sh, sends ALSA through pulse so programs share the USB soundcard
 pcm.!default {
     type pulse
 }
@@ -282,7 +287,7 @@ EOF
 
     # Name the card rather than number it, indexes shift when other cards come and go
     cat > "${output_path}" <<EOF
-# Written by speak tools/audio.sh, defaults ALSA to the USB soundcard
+# Written by speak tools/install_audio.sh, defaults ALSA to the USB soundcard
 # Playback goes through dmix and capture through dsnoop, so programs can share the card
 pcm.!default {
     type asym
@@ -324,7 +329,7 @@ write_pulse_default_pa() {
     # Keep the system defaults, then force the USB sink so aplay is not Dummy Output
     mkdir -p "${pulse_dir}"
     cat > "${output_path}" <<EOF
-# Written by speak tools/audio.sh
+# Written by speak tools/install_audio.sh
 .include /etc/pulse/default.pa
 
 .nofail
@@ -447,8 +452,8 @@ find_existing_pulse_usb_sink() {
 # Install the udev rule so a replugged card is set up again
 install_udev_rule() {
     # Link the script where udev can reach it
-    ln -sf "${SCRIPT_DIR}/audio.sh" "${SETUP_LINK_PATH}"
-    chmod 755 "${SCRIPT_DIR}/audio.sh"
+    ln -sf "${SCRIPT_DIR}/install_audio.sh" "${SETUP_LINK_PATH}"
+    chmod 755 "${SCRIPT_DIR}/install_audio.sh"
 
     # Run as root on plug, the script finds the login user and configures their pulse
     cat > "${UDEV_RULE_PATH}" <<EOF
@@ -515,23 +520,36 @@ find_boot_config() {
 
 # Blacklist the jetson internal audio drivers so only USB cards register
 install_blacklist() {
-    # Skip when already blacklisted
-    if [[ -f "${BLACKLIST_PATH}" ]]; then
-        return 0
-    fi
-
+    # Write HDMI, the older machine driver, and the Orin APE graph card
     cat > "${BLACKLIST_PATH}" <<EOF
-# Added by speak tools/audio.sh, keeps HDMI and APE audio out of ALSA
+# Added by speak tools/install_audio.sh, keeps HDMI and APE audio out of ALSA
 blacklist snd_hda_tegra
 install snd_hda_tegra /bin/false
 blacklist snd_soc_tegra_machine_driver
 install snd_soc_tegra_machine_driver /bin/false
+blacklist snd_soc_tegra_audio_graph_card
+install snd_soc_tegra_audio_graph_card /bin/false
 EOF
 
-    # Unload now so a reboot is not required
-    rmmod snd_hda_tegra 2>/dev/null || true
-    rmmod snd_soc_tegra_machine_driver 2>/dev/null || true
+    # Drop the cards now, the blacklist applies again on the next boot
+    unload_jetson_audio
     echo "Installed ${BLACKLIST_PATH}"
+}
+
+# Unload the jetson cards so they disappear from aplay
+unload_jetson_audio() {
+    local module_name driver_path
+
+    # Unbind APE first, the graph card stays registered when only the old modules are removed
+    driver_path="/sys/bus/platform/drivers/${APE_DRIVER_NAME}"
+    if [[ -e "${driver_path}/${APE_DEVICE_NAME}" ]]; then
+        echo "${APE_DEVICE_NAME}" > "${driver_path}/unbind"
+    fi
+
+    # Unload each internal driver, missing modules are already gone
+    for module_name in "${JETSON_AUDIO_MODULES[@]}"; do
+        rmmod "${module_name}" 2>/dev/null || true
+    done
 }
 
 # Print what to do next

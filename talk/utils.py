@@ -117,7 +117,7 @@ def check_audio_player():
         if result.returncode != 0:
             return False, 'no audio device found'
         if find_usb_card() is None:
-            return False, 'no USB audio device found, plug one in and run ./tools/audio.sh'
+            return False, 'no USB audio device found, plug one in and run ./tools/install_audio.sh'
     return True, None
 
 # Warn when audio playback is unavailable, generation still runs
