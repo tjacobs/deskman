@@ -14,8 +14,8 @@ from botocore.config import Config
 
 # Config paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_DIR = os.path.dirname(SCRIPT_DIR)
-DEFAULT_RECORDINGS_DIR = os.path.join(REPO_DIR, "robot", "recordings")
+ROBOT_DIR = os.path.dirname(SCRIPT_DIR)
+DEFAULT_RECORDINGS_DIR = os.path.join(ROBOT_DIR, "recordings")
 DEFAULT_ENV_FILE = os.path.join(SCRIPT_DIR, ".env.local")
 
 # Config bucket
