@@ -28,7 +28,8 @@ The face and servo control.
 ```bash
 cd robot
 ./install.sh
-mkdir build && cd build && cmake .. && make
+mkdir build && cd build && cmake ..
+make
 ./robot
 ```
 
@@ -43,7 +44,8 @@ The video call program.
 ```bash
 cd teleport
 ./install.sh
-mkdir build && cd build && cmake .. && make
+mkdir build && cd build && cmake ..
+make
 ./teleport
 ```
 
