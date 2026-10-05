@@ -62,7 +62,7 @@ main() {
         exit 1
     fi
     if [[ ! -x "${PROJECT_DIR}/build/robot" && ! -x "${PYTHON_BIN}" ]]; then
-        echo "Error: robot binary and ${PYTHON_BIN} not found. Build robot or run ../talk/install.sh --listen --talk first." >&2
+        echo "Error: robot binary and ${PYTHON_BIN} not found. Build robot or run ../talk/install.sh first." >&2
         exit 1
     fi
 
