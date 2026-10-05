@@ -1066,11 +1066,28 @@ install_browser() {
     # Jetson kernels lack what newer snapd needs to start apps, so pin the last snapd that works
     hold_working_snapd
 
-    # Ubuntu only ships Chromium as a snap, it wants its data folder and matchpathcon ready before first run
+    # Ubuntu only ships Chromium as a snap, and matchpathcon has to be ready before first run
     export DEBIAN_FRONTEND=noninteractive
     apt-get install -y selinux-utils
     snap list chromium >/dev/null 2>&1 || snap install chromium
-    sudo -u "${RUN_USER}" mkdir -p "${RUN_HOME}/snap"
+
+    # Keep per-user snap data in ~/.snap/data so a visible ~/snap folder is not created
+    snap set system experimental.hidden-snap-folder=true
+    sudo -u "${RUN_USER}" mkdir -p "${RUN_HOME}/.snap/data"
+    chmod 0700 "${RUN_HOME}/.snap" "${RUN_HOME}/.snap/data"
+
+    # Move a leftover ~/snap into the hidden folder
+    if [[ -d "${RUN_HOME}/snap" ]]; then
+        for snap_entry in "${RUN_HOME}/snap/"*; do
+            [[ -e "${snap_entry}" ]] || continue
+            entry_name="$(basename "${snap_entry}")"
+            if [[ -e "${RUN_HOME}/.snap/data/${entry_name}" ]]; then
+                continue
+            fi
+            mv "${snap_entry}" "${RUN_HOME}/.snap/data/"
+        done
+        rmdir "${RUN_HOME}/snap" 2>/dev/null || true
+    fi
 
     # Stock Ubuntu points links at Firefox, which is not installed
     run_as_user xdg-mime default "${JETSON_BROWSER_DESKTOP}" ${BROWSER_LINK_TYPES}
