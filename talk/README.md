@@ -38,8 +38,6 @@ The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference.
 
 Works on linux and mac. Installs [uv](https://docs.astral.sh/uv/) when missing, installs system requirements, then creates `.venv` and installs kokoro and torch into it. It also installs speech to text for `listen.py`, and builds llama.cpp and downloads Gemma 4 E2B for `talk.py`.
 
-Pass `--listen --talk` to also install speech to text for `listen.py` and `talk.py`.
-
 On first run, the model and all voices download into `cache/`.
 
 ## speak.py
