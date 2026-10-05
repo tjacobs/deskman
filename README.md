@@ -2,9 +2,10 @@
 
 Deskman is a desktop robot: a face on a screen that looks around, with an interactive voice assistant, that can make video calls. It runs on a Jetson Orin Nano or a Raspberry Pi 5. The main parts are:
 
-- `[talk](talk/README.md)` — Voice interaction. Wake word, speech to text, an LLM, and speech generation. Runs locally on Gemma, or on OpenAI when online. Written in Python.
-- `[robot](robot/README.md)` — The face, servo control, camera face tracking, and the on-screen menu. Written in C++.
-- `[teleport](teleport/README.md)` — Video calling, both robot to robot, and web to robot. Written in C++.
+- [`talk`](talk/README.md) — Voice interaction. Wake word, speech to text, an LLM, and speech generation. Runs locally on Gemma, or on OpenAI when online. Written in Python.
+- [`robot`](robot/README.md) — The face, servo control, camera face tracking, and the on-screen menu. Written in C++.
+- [`teleport`](teleport/README.md) — Video calling, both robot to robot, and web to robot. Written in C++.
+- `cloud` — Uploads the robot's recordings to a public Neon bucket, for the recordings page on the website. Written in Python.
 
 ## Talk
 
@@ -48,16 +49,28 @@ mkdir build && cd build && cmake .. && make
 
 See [teleport/README.md](teleport/README.md).
 
-## Setup
+## Cloud
 
-Install talk, robot, and teleport, then run this to configure the machine so it boots straight to the face:
+The recordings sync.
 
 ```bash
-cd robot
-./install_system.sh
-./install_robot_service.sh
-cd ../teleport
-./install_teleport_service.sh
+cd cloud
+./install.sh
+./sync.py
+```
+
+The `sync.py` script uploads new videos from `robot/recordings/` to the Neon `recordings` bucket, then rewrites the `index.json` the recordings page reads. It reads the Neon S3 keys from `cloud/.env.local`. Use `--dry-run` to see what would upload.
+
+## Setup
+
+Run the installer from the repo root to install robot, talk, and teleport, enable the robot and teleport services, and configure the machine so it boots straight to the face:
+
+```bash
+./install.sh
 sudo reboot
 ```
+
+## Website
+
+The Deskman website is at [teleportconnect.com](https://teleportconnect.com/), with daily videos on the [recordings page](https://teleportconnect.com/recordings/). The old [tjacobs.github.io/deskman](https://tjacobs.github.io/deskman/) address redirects there, from the page in `pages/`.
 
