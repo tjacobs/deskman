@@ -12,8 +12,7 @@ if [ "$OS" = "Darwin" ]; then
         echo "Homebrew is required on macOS: https://brew.sh"
         exit 1
     fi
-    brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav json-glib libnice libnice-gstreamer x264
-    exit 0
+    brew install cmake gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav json-glib libnice libnice-gstreamer x264
 fi
 
 # Install Linux packages
@@ -23,9 +22,15 @@ if [ "$OS" = "Linux" ]; then
     if apt-cache show nvidia-l4t-gstreamer >/dev/null 2>&1; then
         sudo apt install -y nvidia-l4t-gstreamer nvidia-l4t-multimedia nvidia-l4t-multimedia-utils
     fi
-    exit 0
 fi
 
 # Unsupported OS
-echo "Unsupported OS: $OS"
-exit 1
+if [ "$OS" != "Darwin" ] && [ "$OS" != "Linux" ]; then
+    echo "Unsupported OS: $OS"
+    exit 1
+fi
+
+# Configure and compile into build
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cmake -S "${SCRIPT_DIR}" -B "${SCRIPT_DIR}/build"
+cmake --build "${SCRIPT_DIR}/build"
