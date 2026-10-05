@@ -308,7 +308,7 @@ ctl.!default {
 EOF
 }
 
-# Set the USB card volume to full
+# Set the speaker full, and the mic to the standard capture level
 set_usb_volume() {
     local card_index="$1"
 
@@ -317,6 +317,9 @@ set_usb_volume() {
         amixer -c "${card_index}" set Speaker 100% unmute >/dev/null 2>&1 || true
         amixer -c "${card_index}" set PCM 100% unmute >/dev/null 2>&1 || true
         amixer -c "${card_index}" set Master 100% unmute >/dev/null 2>&1 || true
+
+        # Same mic level volume.py sets, alsamixer draws that percent on a log curve
+        python3 -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}/../text'); import volume; volume.set_microphone()" >/dev/null 2>&1 || true
     fi
 }
 

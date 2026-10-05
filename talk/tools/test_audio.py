@@ -20,7 +20,6 @@ if os.path.realpath(sys.prefix) != os.path.realpath(VENV_DIR):
 
 # Imports that live in the venv
 import wave
-import time
 import subprocess
 import numpy
 import soundfile
@@ -57,17 +56,18 @@ RECORD_FORMAT = 'S16_LE'
 # Channels to record when the card does not say what it has
 CHANNELS_FALLBACK = 1
 
+# install_audio leaves one speaker and one mic, anything else is an onboard card still registered
+EXPECTED_DEVICE_COUNT = 1
+
 # Pass this as the duration to record until stopped
 RECORD_UNLIMITED = 0
 
 # Wait this much longer than the recording before giving up on arecord
 RECORD_GRACE_SECONDS = 5
 
-# Count down before recording so the person is ready
-COUNTDOWN_SECONDS = 3
-
 # Config the live meter, one bar redraw per block of samples read
-METER_WIDTH = 40
+# Stay under 80 columns, a full row wraps and the carriage return stops redrawing in place
+METER_LINE_MAX = 79
 METER_FLOOR_DBFS = -60.0
 METER_BLOCK_SECONDS = 0.05
 METER_FILLED = '#'
@@ -92,9 +92,9 @@ SILENCE_DBFS = -50.0
 # A recording peaking over this is close to clipping
 LOUD_DBFS = -1.0
 
-# Speech rises and falls, a mic hissing into an empty jack holds one flat level
+# Speech rises and falls a little, auto gain keeps a voice inside a few dB and hiss sits flatter
 LEVEL_BLOCK_SECONDS = 0.2
-LEVEL_SWING_MINIMUM_DB = 6.0
+LEVEL_SWING_MINIMUM_DB = 3.0
 
 # Speech energy lives in this band, hiss piles up above it
 SPEECH_BAND_HZ = (100, 4000)
@@ -146,6 +146,10 @@ def main():
     # Play it back so the speaker and the recording are both confirmed by ear
     print('Playing your recording back...', flush=True)
     results.append(('recording plays back', play_wav(capture_path)))
+
+    # Count the hardware devices last, so a leftover onboard card is reported with the other failures
+    results.append(check_one_device('playback', utils.LINUX_PLAYER))
+    results.append(check_one_device('record', utils.LINUX_RECORDER))
 
     # Report and fail the exit code when anything did not pass
     print_summary(results, capture_path)
@@ -254,11 +258,8 @@ def struck_note(samples, frequency, delay_seconds):
 def record_wav(microphone_card, channels, chime_path):
     capture_path = os.path.join(utils.AUDIO_DIR, 'test_capture.wav')
 
-    # Count down first, recording the moment the command runs catches nobody ready
+    # Start straight away, the prompt is enough warning
     print(f'Listen for the chime, then talk for {SPEECH_SECONDS} seconds', flush=True)
-    for remaining in range(COUNTDOWN_SECONDS, 0, -1):
-        print(f'  {remaining}...', flush=True)
-        time.sleep(1)
 
     # Stream the audio past the meter and keep it, one recorder feeds both
     blocks, chime_played = run_meter(microphone_card, channels, RECORD_SECONDS, chime_path)
@@ -337,19 +338,44 @@ def read_exact(stream, wanted):
 
 # Build the meter line, one labelled bar per channel
 def format_meter(levels, held):
-    labels = CHANNEL_LABELS_STEREO if len(levels) == 2 else CHANNEL_LABELS_MONO
+    # Pick labels, then shrink the bars so the whole line stays on one row
+    labels = meter_labels(levels)
+    bar_width = meter_bar_width(labels)
+
+    # One labelled bar per channel
     bars = []
     for index, level in enumerate(levels):
-        label = labels[index] if index < len(labels) else str(index + 1)
-        bars.append(f'{label} {level:6.1f} dBFS [{format_bar(level, held[index])}]')
+        bars.append(f'{labels[index]} {level:6.1f} dBFS [{format_bar(level, held[index], bar_width)}]')
     return '  '.join(bars)
 
+# Return a label for each channel
+def meter_labels(levels):
+    if len(levels) == 1:
+        return CHANNEL_LABELS_MONO
+    if len(levels) == 2:
+        return CHANNEL_LABELS_STEREO
+    return tuple(str(index + 1) for index in range(len(levels)))
+
+# Return a bar width that keeps every channel on one terminal row
+def meter_bar_width(labels):
+    # Text around one bar is the label, the level, and the dBFS brackets
+    around = 0
+    for label in labels:
+        around += len(label) + 1 + 6 + len(' dBFS []')
+
+    # Two spaces separate the bars
+    gaps = 2 * max(0, len(labels) - 1)
+    room = METER_LINE_MAX - around - gaps
+    if not labels:
+        return 1
+    return max(1, room // len(labels))
+
 # Fill a bar up to the level, marking the loudest seen so far
-def format_bar(level, hold):
-    filled = scale_to_bar(level)
-    marker = scale_to_bar(hold)
+def format_bar(level, hold, bar_width):
+    filled = scale_to_bar(level, bar_width)
+    marker = scale_to_bar(hold, bar_width)
     cells = []
-    for index in range(METER_WIDTH):
+    for index in range(bar_width):
         if index < filled:
             cells.append(METER_FILLED)
         elif index == marker:
@@ -359,9 +385,9 @@ def format_bar(level, hold):
     return ''.join(cells)
 
 # Map a level in dBFS onto a position along the bar
-def scale_to_bar(level):
+def scale_to_bar(level, bar_width):
     share = (level - METER_FLOOR_DBFS) / (0.0 - METER_FLOOR_DBFS)
-    return int(max(0.0, min(1.0, share)) * METER_WIDTH)
+    return int(max(0.0, min(1.0, share)) * bar_width)
 
 # Stop the recorder and say why it quit when it failed
 def report_recorder_error(recorder):
@@ -538,6 +564,42 @@ def check_speech(samples):
 # Convert an amplitude to dBFS, guarding the log against zero
 def to_dbfs(amplitude):
     return 20.0 * numpy.log10(max(amplitude, 1e-9))
+
+# Return a pass when this direction exposes one hardware device
+def check_one_device(kind, command):
+    devices = list_hardware_devices(command)
+
+    # One speaker and one mic is what install_audio leaves behind
+    if len(devices) == EXPECTED_DEVICE_COUNT:
+        return f'exactly one {kind} device', True
+
+    # Name the cards so an extra onboard device is obvious in the summary
+    if not devices:
+        return f'exactly one {kind} device, found 0', False
+    names = ', '.join(device_card_names(devices))
+    return f'exactly one {kind} device, found {len(devices)}: {names}', False
+
+# Return the card lines from aplay -l or arecord -l
+def list_hardware_devices(command):
+    # aplay and arecord print one card line per hardware device
+    result = subprocess.run([command, '-l'], capture_output=True, text=True)
+    devices = []
+    for line in result.stdout.splitlines():
+        if line.startswith('card '):
+            devices.append(line.strip())
+    return devices
+
+# Return each card name once, in the order the devices were listed
+def device_card_names(devices):
+    # The name in brackets is the card, many device lines can share one card
+    names = []
+    for line in devices:
+        name = line.partition('[')[2].partition(']')[0]
+        if not name:
+            name = line.partition(',')[0]
+        if name not in names:
+            names.append(name)
+    return names
 
 # Print the pass or fail lines and exit non zero when something failed
 def print_summary(results, capture_path):

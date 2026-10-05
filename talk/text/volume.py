@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 
-# Speaker volume control through amixer
+# Speaker volume through amixer, plus a fixed microphone level and auto gain
 
 # Imports
 import argparse
+import math
 import os
 import re
 import subprocess
 
 # Config
 VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
+AGC_CONTROL = "Auto Gain Control"
+MIC_CAPTURE_PERCENT = 80
+MIC_PLAYBACK_VOLUME = "Mic Playback Volume"
+MIC_CAPTURE_VOLUME = "Mic Capture Volume"
+MIC_PLAYBACK_SWITCH = "Mic Playback Switch"
+MIC_CAPTURE_SWITCH = "Mic Capture Switch"
+
+# Alsamixer switches to a log curve once the dB span is wider than this
+MIC_LINEAR_DB_SPAN = 24.0
 VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested percent, then answer using only the tool result."
 GET_VOLUME_RETRY_PROMPT = "Do not guess. Call get_volume now, then answer using only the tool result."
 VOLUME_SET_REPLY = "Set to {percent} percent."
@@ -176,6 +186,9 @@ def force_set_volume(prompt, messages, message, already_retried, record_tool):
 # Set speaker volume from tool arguments
 def run_set_volume(arguments):
     global last_volume_percent
+
+    # Mic stays at the standard level no matter where the speaker is set
+    set_microphone()
     if "percent" not in arguments:
         return "Volume percent is required."
     try:
@@ -193,6 +206,8 @@ def run_set_volume(arguments):
 
 # Read speaker volume for the tool
 def run_get_volume(arguments=None):
+    # Opening the volume picker applies the mic level too
+    set_microphone()
     percent = read_speaker_volume()
     if isinstance(percent, str):
         return percent
@@ -223,6 +238,75 @@ def set_speaker_volume(percent):
     if result.returncode == 0:
         return None
     return command_error(result, f"amixer set failed on card {card} {control}.")
+
+# Bring both mic sliders to the level alsamixer draws as the standard percent
+def set_microphone():
+    # Same card as the speaker
+    card = find_volume_card()
+    if card is None:
+        return
+
+    # Playback is the slider alsamixer opens on, capture is the recording gain
+    set_displayed_volume(card, MIC_PLAYBACK_VOLUME)
+    set_displayed_volume(card, MIC_CAPTURE_VOLUME)
+
+    # Playback switch is sidetone, capture switch is the mic itself
+    set_switch(card, MIC_PLAYBACK_SWITCH, "off")
+    set_switch(card, MIC_CAPTURE_SWITCH, "on")
+    set_auto_gain(card)
+
+# Set one volume so alsamixer shows MIC_CAPTURE_PERCENT
+def set_displayed_volume(card, name):
+    raw = raw_for_displayed_percent(card, name)
+    if raw is None:
+        return
+    subprocess.run(["amixer", "-c", str(card), "cset", f"name={name}", str(raw)], capture_output=True, text=True)
+
+# Set a mixer switch, missing controls are ignored
+def set_switch(card, name, value):
+    subprocess.run(["amixer", "-c", str(card), "cset", f"name={name}", value], capture_output=True, text=True)
+
+# Return the raw step whose log curve lands on the standard percent
+def raw_for_displayed_percent(card, name):
+    limits = control_limits(card, name)
+    if limits is None:
+        return None
+    raw_min, raw_max, db_min, db_max = limits
+
+    # No dB range, the raw step is already the percent alsamixer shows
+    if db_min is None or db_max is None or db_max <= db_min:
+        return int(round(raw_min + (MIC_CAPTURE_PERCENT / 100.0) * (raw_max - raw_min)))
+
+    # Narrow spans are a straight line, wide ones are the alsamixer log curve
+    if db_max - db_min <= MIC_LINEAR_DB_SPAN:
+        db = db_min + (MIC_CAPTURE_PERCENT / 100.0) * (db_max - db_min)
+    else:
+        minimum_norm = 10 ** ((db_min - db_max) / 60.0)
+        mapped = (MIC_CAPTURE_PERCENT / 100.0) * (1 - minimum_norm) + minimum_norm
+        db = 60.0 * math.log10(mapped) + db_max
+    share = (db - db_min) / (db_max - db_min)
+    return int(round(raw_min + share * (raw_max - raw_min)))
+
+# Return raw min, raw max, dB min, dB max for one mixer control
+def control_limits(card, name):
+    result = subprocess.run(["amixer", "-c", str(card), "contents"], capture_output=True, text=True)
+    for block in result.stdout.split("numid="):
+        if f"name='{name}'" not in block:
+            continue
+        minimum = re.search(r"min=(-?\d+),max=(-?\d+)", block)
+        if not minimum:
+            return None
+        raw_min = int(minimum.group(1))
+        raw_max = int(minimum.group(2))
+        decibels = re.search(r"dBminmax-min=(-?[0-9.]+)dB,max=(-?[0-9.]+)dB", block)
+        if not decibels:
+            return raw_min, raw_max, None, None
+        return raw_min, raw_max, float(decibels.group(1)), float(decibels.group(2))
+    return None
+
+# Turn on the dongle auto gain switch when the card has one
+def set_auto_gain(card):
+    subprocess.run(["amixer", "-c", str(card), "set", AGC_CONTROL, "on"], capture_output=True, text=True)
 
 # Read the current USB speaker volume percent, or an error string
 def read_speaker_volume():

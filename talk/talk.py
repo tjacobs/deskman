@@ -165,6 +165,7 @@ import client as text_client
 import move
 import reminders
 import robot_move
+import volume
 text_ask.set_talk_module(sys.modules[__name__])
 
 # Import the realtime helper on its own, only --realtime needs websocket-client
@@ -1438,6 +1439,10 @@ def check_ready():
     if player == utils.LINUX_PLAYER and utils.find_usb_card() is None:
         print('No USB speaker found. Plug one in and run ./tools/install_audio.sh.')
         sys.exit(1)
+
+    # Standard mic level and auto gain, the speaker slider does not change these
+    if player == utils.LINUX_PLAYER:
+        volume.set_microphone()
 
 # Start the local text model server when needed, return the process we started
 def start_text_server(require_success=True):
