@@ -918,7 +918,7 @@ install_touch_keyboard() {
 
     # Our layout, digits and web punctuation over the stock letters
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    install -m 0644 "${script_dir}/keyboard/keyboard-deskman.xml" "${MATCHBOX_LAYOUT_DIR}/keyboard-deskman.xml"
+    install -m 0644 "${script_dir}/src/keyboard/keyboard-deskman.xml" "${MATCHBOX_LAYOUT_DIR}/keyboard-deskman.xml"
 
     # Dock it, keep it above the browser, and leave typing focus with the text field
     add_openbox_keyboard_rule
