@@ -980,7 +980,9 @@ static bool handle_video_tap(int x, int y) {
             break;
         string path = g_recordings[index].path;
         if (tap_in_rect(x, y, video_delete_rect(row))) {
-            // Ask first, then delete on the second tap
+            // Ask first, then delete on the second tap, one touch can arrive as two taps
+            if (!debounce_tap())
+                return true;
             if (g_video_confirm_path != path) {
                 g_video_confirm_path = path;
                 return true;
@@ -1095,8 +1097,10 @@ static bool handle_wifi_tap(int x, int y) {
         const Network& network = networks[row];
         bool remembered = network.remembered || network.active;
 
-        // Drop asks first, then forgets on the second tap
+        // Drop asks first, then forgets on the second tap, one touch can arrive as two taps
         if (remembered && tap_in_rect(x, y, video_delete_rect(row + 1))) {
+            if (!debounce_tap())
+                return true;
             if (g_wifi_confirm_name != network.name) {
                 g_wifi_confirm_name = network.name;
                 return true;
