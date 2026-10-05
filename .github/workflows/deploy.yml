@@ -3,7 +3,7 @@ name: Deploy redirect to teleportconnect.com on GitHub Pages
 on:
   push:
     branches: [main]
-    paths: [pages/**, .github/workflows/deploy.yml]
+    paths: [.github/workflows/deploy.yml]
   workflow_dispatch:
 
 permissions:
@@ -22,10 +22,30 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Write redirect page
+        run: |
+          mkdir site
+          cat > site/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <title>Deskman has moved to teleportconnect.com</title>
+            <link rel="canonical" href="https://teleportconnect.com/" />
+            <meta http-equiv="refresh" content="0; url=https://teleportconnect.com/" />
+            <script>
+              location.replace("https://teleportconnect.com" + location.pathname.replace(/^\/deskman/, "") + location.search + location.hash);
+            </script>
+          </head>
+          <body>
+            <p>Deskman has moved to <a href="https://teleportconnect.com/">teleportconnect.com</a>.</p>
+          </body>
+          </html>
+          EOF
+          cp site/index.html site/404.html
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: ./pages
+          path: ./site
       - id: deployment
         uses: actions/deploy-pages@v4
