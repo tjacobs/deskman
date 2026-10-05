@@ -848,7 +848,7 @@ install_robot_eyes_icon() {
 
     # Copy from the repo when present, else write the drawing here
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    source_icon="${script_dir}/icons/robot-eyes.svg"
+    source_icon="${script_dir}/src/icons/robot-eyes.svg"
     if [[ -f "${source_icon}" ]]; then
         cp "${source_icon}" "${icon_file}"
     else
