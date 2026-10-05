@@ -5,7 +5,7 @@ Deskman is a desktop robot: a face on a screen that looks around, with an intera
 - [`talk`](talk/README.md) — Voice interaction. Wake word, speech to text, an LLM, and speech generation. Runs locally on Gemma, or on OpenAI when online. Written in Python.
 - [`robot`](robot/README.md) — The face, servo control, camera face tracking, and the on-screen menu. Written in C++.
 - [`teleport`](teleport/README.md) — Video calling, both robot to robot, and web to robot. Written in C++.
-- `cloud` — Uploads the robot's recordings to a public Neon bucket, for the recordings page on the website. Written in Python.
+- `cloud` — Uploads the robot's recordings, for the recordings page on the website. Written in Python.
 
 ## Talk
 
@@ -72,5 +72,5 @@ sudo reboot
 
 ## Website
 
-The Deskman website is at [teleportconnect.com](https://teleportconnect.com/), with daily videos on the [recordings page](https://teleportconnect.com/recordings/). The old [tjacobs.github.io/deskman](https://tjacobs.github.io/deskman/) address redirects there, from the page in `pages/`.
+The Deskman website is at [teleportconnect.com](https://teleportconnect.com/).
 
