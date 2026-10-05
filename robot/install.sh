@@ -26,6 +26,9 @@ install_linux() {
 
     # Install SDL, OpenCV, GStreamer, and the compiler
     sudo apt-get install -y build-essential cmake pkg-config libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libjpeg-dev libpng-dev libwebp-dev libcurl4-openssl-dev libopencv-dev libgstreamer1.0-dev i2c-tools
+
+    # Let this user open the servo serial port
+    sudo usermod -aG dialout "${SUDO_USER:-$(id -un)}"
 }
 
 # Install macOS packages with Homebrew
