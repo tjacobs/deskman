@@ -2,3 +2,5 @@
 .env.local
 node_modules/
 .venv/
+.agents/
+skills-lock.json

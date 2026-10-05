@@ -147,7 +147,8 @@ static const SDL_Color TALK_MODE_OFF_COLOR = {60, 60, 70, 255};
 static const SDL_Color TALK_MODE_UNAVAILABLE_COLOR = {40, 40, 45, 255};
 static const SDL_Color TALK_MODE_UNAVAILABLE_LABEL_COLOR = {120, 120, 130, 255};
 
-// Button for recording today's video
+// Button for recording today's video, hidden unless shown
+static const bool ENTRY_PROMPT_SHOWN = false;
 static const char* ENTRY_PROMPT_TEXT = "Record today's entry";
 static const char* ENTRY_DATE_FORMAT = "%A, %B %-d, %Y";
 static const int ENTRY_DATE_SIZE = 64;
@@ -803,8 +804,8 @@ void draw_entry_prompt(TTF_Font* font, bool bar_kept) {
         return;
     }
 
-    // Nothing to ask for once today's entry is recorded
-    if (g_entry_recorded)
+    // Nothing to ask for once today's entry is recorded, or while the prompt is hidden
+    if (g_entry_recorded || !ENTRY_PROMPT_SHOWN)
         return;
     draw_bar_button(entry_prompt_rect(), ENTRY_PROMPT_TEXT, MENU_BUTTON_COLOR, font);
 }
@@ -980,7 +981,9 @@ static bool handle_video_tap(int x, int y) {
             break;
         string path = g_recordings[index].path;
         if (tap_in_rect(x, y, video_delete_rect(row))) {
-            // Ask first, then delete on the second tap
+            // Ask first, then delete on the second tap, one touch can arrive as two taps
+            if (!debounce_tap())
+                return true;
             if (g_video_confirm_path != path) {
                 g_video_confirm_path = path;
                 return true;
@@ -1095,8 +1098,10 @@ static bool handle_wifi_tap(int x, int y) {
         const Network& network = networks[row];
         bool remembered = network.remembered || network.active;
 
-        // Drop asks first, then forgets on the second tap
+        // Drop asks first, then forgets on the second tap, one touch can arrive as two taps
         if (remembered && tap_in_rect(x, y, video_delete_rect(row + 1))) {
+            if (!debounce_tap())
+                return true;
             if (g_wifi_confirm_name != network.name) {
                 g_wifi_confirm_name = network.name;
                 return true;
@@ -1395,7 +1400,7 @@ void handle_call_event(const SDL_Event& event) {
         return;
 
     // The record button in the hidden status bar's place starts today's entry, and stops it
-    if (!bar_showing && (recording() || !g_entry_recorded) && tap_in_rect(x, y, entry_prompt_rect())) {
+    if (!bar_showing && (recording() || (ENTRY_PROMPT_SHOWN && !g_entry_recorded)) && tap_in_rect(x, y, entry_prompt_rect())) {
         if (debounce_tap())
             g_record_request = recording() ? RECORD_REQUEST_STOP : RECORD_REQUEST_START;
         return;
