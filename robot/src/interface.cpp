@@ -222,6 +222,12 @@ static string g_wifi_confirm_name;
 static atomic<bool> g_volume_list_open{false};
 static atomic<int> g_volume_percent{VOLUME_UNKNOWN};
 
+// One volume script at a time, a tap while it runs is kept and run after it
+static mutex g_volume_script_mutex;
+static bool g_volume_script_running = false;
+static bool g_volume_script_waiting = false;
+static int g_volume_script_next = VOLUME_UNKNOWN;
+
 // The wireless list
 static atomic<bool> g_wifi_list_open{false};
 static atomic<bool> g_menu_open{false};
@@ -279,6 +285,7 @@ static void open_volume_list();
 static bool handle_volume_tap(int x, int y);
 static SDL_Rect volume_level_rect(int level);
 static void run_volume_script(int percent);
+static void run_volume_command(int percent);
 static bool handle_warning_tap(int x, int y);
 static void open_link(const string& url);
 static void draw_list_backdrop();
@@ -1189,6 +1196,37 @@ static SDL_Rect volume_level_rect(int level) {
 
 // Set the speaker to a percent and say Hi at it, or read it when unknown, on a worker so the face keeps drawing
 static void run_volume_script(int percent) {
+    // Keep only the newest tap while a script is running, each one loads python
+    {
+        lock_guard<mutex> lock(g_volume_script_mutex);
+        if (g_volume_script_running) {
+            g_volume_script_waiting = true;
+            g_volume_script_next = percent;
+            return;
+        }
+        g_volume_script_running = true;
+    }
+
+    // Run scripts one after another until no tap is waiting
+    thread([percent]() {
+        int next = percent;
+        while (true) {
+            run_volume_command(next);
+
+            // Take the waiting tap, or finish
+            lock_guard<mutex> lock(g_volume_script_mutex);
+            if (!g_volume_script_waiting) {
+                g_volume_script_running = false;
+                return;
+            }
+            g_volume_script_waiting = false;
+            next = g_volume_script_next;
+        }
+    }).detach();
+}
+
+// Run volume.py once, print what it says so it shows on the status bar, and keep the level it reports
+static void run_volume_command(int percent) {
     // The script and the talk python sit beside the robot folder the recordings are kept in
     filesystem::path repo = filesystem::path(g_recordings_path).parent_path().parent_path();
     string command = "'" + (repo / VOLUME_PYTHON_FROM_REPO).string() + "' '" + (repo / VOLUME_SCRIPT_FROM_REPO).string() + "'";
@@ -1196,20 +1234,18 @@ static void run_volume_script(int percent) {
         command += " " + to_string(percent) + " --say " + VOLUME_SAY_TEXT;
     command += " 2>&1";
 
-    // Print what the script says so it shows on the status bar, and keep the level it reports
-    thread([command]() {
-        FILE* pipe = popen(command.c_str(), "r");
-        if (!pipe)
-            return;
-        char line[VOLUME_OUTPUT_SIZE];
-        while (fgets(line, sizeof(line), pipe)) {
-            cout << line << flush;
-            int reported = 0;
-            if (sscanf(line, "Volume is %d", &reported) == 1 || sscanf(line, "Set to %d", &reported) == 1)
-                g_volume_percent = reported;
-        }
-        pclose(pipe);
-    }).detach();
+    // Read each line the script prints
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe)
+        return;
+    char line[VOLUME_OUTPUT_SIZE];
+    while (fgets(line, sizeof(line), pipe)) {
+        cout << line << flush;
+        int reported = 0;
+        if (sscanf(line, "Volume is %d", &reported) == 1 || sscanf(line, "Set to %d", &reported) == 1)
+            g_volume_percent = reported;
+    }
+    pclose(pipe);
 }
 
 // True while the volume picker is up

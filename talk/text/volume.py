@@ -24,11 +24,10 @@ VOLUME_RETRY_PROMPT = "Do not guess. Call set_volume now with the requested perc
 GET_VOLUME_RETRY_PROMPT = "Do not guess. Call get_volume now, then answer using only the tool result."
 VOLUME_SET_REPLY = "Set to {percent} percent."
 
-# Config spoken check, cached as a wav per phrase so later taps play at once
+# Config spoken check, a wav per phrase that talk saves and taps play
 TALK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAY_WAV_PREFIX = "say_"
-SAY_SAMPLE_RATE = 24000
-SAY_SPEED = 1.2
+VOLUME_SAY_TEXT = "Hi"
 
 # Tools the local model can call for volume
 TOOLS = [
@@ -83,37 +82,25 @@ def parse_args():
     parser.add_argument("--say", default="", help="Phrase to speak afterwards, like Hi")
     return parser.parse_args()
 
-# Play a phrase in the talk voice, making its wav with kokoro the first time
+# Play a phrase from its saved wav, skipped when missing so a tap never loads kokoro
 def say_phrase(text):
     import sys
     sys.path.insert(0, TALK_DIR)
     import utils
 
-    # Make the wav once, then reuse it
-    name = SAY_WAV_PREFIX + re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") + ".wav"
-    wav_path = os.path.join(utils.AUDIO_DIR, name)
+    # Talk saves the wav, a tap only plays it
+    wav_path = phrase_wav_path(text)
     if not os.path.isfile(wav_path):
-        make_phrase_wav(utils, text, wav_path)
+        print(f"No {os.path.basename(wav_path)}, skipping {text}.")
+        return
 
     # Play through the shared speaker device so talk can still speak
     subprocess.run(utils.play_wav_command(wav_path), capture_output=True)
 
-# Generate one phrase with kokoro on the cpu and write it as a wav
-def make_phrase_wav(utils, text, wav_path):
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    utils.enable_offline_if_cached(utils.DEFAULT_VOICE)
-    utils.configure_torch_threads()
-    utils.suppress_torch_warnings()
-    import kokoro
-    import numpy
-    import soundfile
-
-    # Load the voice, then join every chunk the pipeline yields
-    model = kokoro.KModel(repo_id=utils.REPO_ID, disable_complex=True).eval()
-    pipeline = kokoro.KPipeline(lang_code=utils.DEFAULT_VOICE[0], repo_id=utils.REPO_ID, model=model)
-    chunks = [audio for _, _, audio in pipeline(text, voice=utils.DEFAULT_VOICE, speed=SAY_SPEED)]
-    os.makedirs(os.path.dirname(wav_path), exist_ok=True)
-    soundfile.write(wav_path, numpy.concatenate(chunks), SAY_SAMPLE_RATE)
+# Return where the wav for a phrase is kept
+def phrase_wav_path(text):
+    name = SAY_WAV_PREFIX + re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") + ".wav"
+    return os.path.join(TALK_DIR, "audio", name)
 
 # Spoken confirmation after a successful volume set
 def confirm_volume_set():

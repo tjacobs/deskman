@@ -25,6 +25,7 @@ import utils
 
 # Config voice
 SPEECH_SPEED = 1.2
+SPEECH_SAMPLE_RATE = 24000
 
 # Config wake words and phrases, desk man is how whisper often writes deskman
 WAKE_WORDS = ('robot', 'deskman', 'desk man')
@@ -746,6 +747,9 @@ def load_speech_models():
     if REALTIME_MODE:
         return whisper_model, vad_model, None
     kokoro_pipeline = load_kokoro_pipeline()
+
+    # Save the volume picker Hi while kokoro is loaded, taps only play it
+    save_volume_phrase()
     return whisper_model, vad_model, kokoro_pipeline
 
 # Load whisper model on gpu when available
@@ -815,6 +819,19 @@ def get_kokoro_pipeline(lang_code):
     pipeline = kokoro.KPipeline(lang_code=lang_code, repo_id=utils.REPO_ID, model=kokoro_model)
     kokoro_pipelines[lang_code] = pipeline
     return pipeline
+
+# Save the phrase the volume picker plays, once
+def save_volume_phrase():
+    wav_path = volume.phrase_wav_path(volume.VOLUME_SAY_TEXT)
+    if os.path.isfile(wav_path):
+        return
+
+    # Join every chunk kokoro yields into one wav
+    pipeline = get_kokoro_pipeline(VOICE[0])
+    chunks = [audio for _, _, audio in pipeline(volume.VOLUME_SAY_TEXT, voice=VOICE, speed=SPEECH_SPEED)]
+    os.makedirs(os.path.dirname(wav_path), exist_ok=True)
+    soundfile.write(wav_path, np.concatenate(chunks), SPEECH_SAMPLE_RATE)
+    print(f'Saved {os.path.basename(wav_path)}', flush=True)
 
 # Change the speaking voice used by talk
 def set_voice(voice_name):
@@ -1138,7 +1155,7 @@ def speak(kokoro_pipeline, text):
     generator = pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
     for index, (graphemes, phonemes, audio) in enumerate(generator):
         wav_path = os.path.join(utils.AUDIO_DIR, SPOKEN_WAV)
-        soundfile.write(wav_path, audio, 24000)
+        soundfile.write(wav_path, audio, SPEECH_SAMPLE_RATE)
         play_wav(wav_path)
 
 # Start a background thread that speaks due daily reminders
