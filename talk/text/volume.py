@@ -12,7 +12,7 @@ import subprocess
 # Config
 VOLUME_CONTROLS = ("Speaker", "PCM", "Master")
 AGC_CONTROL = "Auto Gain Control"
-MIC_CAPTURE_PERCENT = 80
+MIC_CAPTURE_PERCENT = 100
 MIC_PLAYBACK_VOLUME = "Mic Playback Volume"
 MIC_CAPTURE_VOLUME = "Mic Capture Volume"
 MIC_PLAYBACK_SWITCH = "Mic Playback Switch"

@@ -35,6 +35,11 @@ LINUX_PLAYER = 'aplay'
 MAC_RECORDER = 'rec'
 LINUX_RECORDER = 'arecord'
 SAMPLE_RATE = 16000
+CAPTURE_CHANNELS = 1
+
+# Gain the one mic capture
+CAPTURE_GAIN_DB = 12
+CAPTURE_BUFFER_BYTES = '256'
 CARDS_PATH = '/proc/asound/cards'
 VIDEO_DIR = '/sys/class/video4linux'
 CPU_SCALING_DIR = '/sys/devices/system/cpu'
@@ -244,7 +249,50 @@ def shared_playback_device(card):
 
 # Start the recorder streaming raw audio to stdout
 def start_recorder(command):
-    return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    recorder = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return wrap_capture_gain(recorder, SAMPLE_RATE, CAPTURE_CHANNELS)
+
+# Raise the voice on the capture stream
+def wrap_capture_gain(recorder, rate, channels):
+    # A Mac recorder, or a machine with no sox, stays as recorded
+    if platform.system() == 'Darwin' or shutil.which('sox') is None:
+        return recorder
+
+    # Sox reads the recorder, the caller reads sox
+    booster = subprocess.Popen(capture_gain_command(rate, channels), stdin=recorder.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    recorder.stdout.close()
+    return CapturePipe(recorder, booster)
+
+# Build the sox boost for one raw stream, the limiter stops a loud voice wrapping
+def capture_gain_command(rate, channels):
+    return ['sox', '--buffer', CAPTURE_BUFFER_BYTES, '-q', '-t', 'raw', '-r', str(rate), '-e', 'signed', '-b', '16', '-L', '-c', str(channels), '-', '-t', 'raw', '-e', 'signed', '-b', '16', '-L', '-c', str(channels), '-', 'gain', '-l', str(CAPTURE_GAIN_DB)]
+
+# A recorder whose stdout is the boosted stream, stopped as one process
+class CapturePipe:
+    # Keep both ends so stopping the boost also stops the microphone
+    def __init__(self, recorder, booster):
+        self.recorder = recorder
+        self.booster = booster
+        self.stdout = booster.stdout
+        self.stderr = recorder.stderr
+
+    # Stop the microphone, then the boost, so neither side is left running
+    def terminate(self):
+        self.recorder.terminate()
+        self.booster.terminate()
+
+    # Force both ends off when terminate did not finish
+    def kill(self):
+        self.recorder.kill()
+        self.booster.kill()
+
+    # The microphone exiting is what ends the recording
+    def poll(self):
+        return self.recorder.poll()
+
+    # Wait for the microphone to exit
+    def wait(self, timeout):
+        return self.recorder.wait(timeout=timeout)
 
 # Import onnxruntime with stderr muted, it warns during gpu discovery on jetson
 def import_onnxruntime_quietly():

@@ -277,6 +277,9 @@ def run_meter(microphone_card, channels, seconds, chime_path):
     command = record_command(microphone_card, channels, seconds)
     recorder = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
+    # Raise the voice before the meter and the saved wav
+    recorder = utils.wrap_capture_gain(recorder, RECORD_RATE_HZ, channels)
+
     # Start the chime straight away, it has to land inside the opening window
     chime = None
     if chime_path:
