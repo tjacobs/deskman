@@ -3,6 +3,7 @@ cache/
 libs/
 __pycache__/
 *.wav
+!audio/say_hi.wav
 .DS_Store
 log.txt
 monitor.log
