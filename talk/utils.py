@@ -1,3 +1,4 @@
+#!.venv/bin/python
 # Shared helpers for speak.py, say.py, talk.py, and listen.py.
 
 # Imports
