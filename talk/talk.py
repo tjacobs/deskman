@@ -117,7 +117,7 @@ CLOUD_UNAVAILABLE = "Sorry, I can't reach OpenAI right now."
 LOW_BATTERY_UNSAID = 'Please plug me in.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
-TEXT_SERVER_LOG = os.path.join(utils.SCRIPT_DIR, 'text_server.log')
+TEXT_SERVER_LOG = os.path.join(TEXT_DIR, 'server.log')
 TEXT_SERVER_PROGRESS_WIDTH = 120
 TEXT_SERVER_RESTART_TRIES = 3
 

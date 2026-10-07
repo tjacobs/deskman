@@ -1,3 +1,4 @@
 llama.cpp/
 models/
 cache/
+server.log

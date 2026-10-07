@@ -127,7 +127,7 @@ Say `remind me at dinner time` or `remind me at 10 PM for bedtime` to schedule a
 
 When it nearly hears its name, a transcription with `rob` or `rub` in it but not `robot`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
 
-On an 8 GB machine the text server, whisper, and kokoro together need a few GB of RAM. Talk loads whisper and kokoro first, then the text server, so a tight memory load does not kill an already-running Gemma. It warns when free RAM is below the expected cost before loading. If the text server dies later, often from out of memory, talk prints that and tries to restart it a few times before giving up. Startup failures are logged to `text_server.log`.
+On an 8 GB machine the text server, whisper, and kokoro together need a few GB of RAM. Talk loads whisper and kokoro first, then the text server, so a tight memory load does not kill an already-running Gemma. It warns when free RAM is below the expected cost before loading. If the text server dies later, often from out of memory, talk prints that and tries to restart it a few times before giving up. Startup failures are logged to `text/server.log`.
 
 Pass `--test` to run one exchange and exit. It skips the wake word, speaks `What is the time?` so it hears itself through the mic, then answers. When the mic cannot hear the speaker it falls back to the question text.
 
