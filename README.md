@@ -5,6 +5,12 @@ Deskman is a desktop robot: a face on a screen that looks around, with an intera
 - [`talk`](talk/README.md) — Voice interaction. Wake word, speech to text, an LLM, and speech generation. Runs locally on Gemma, or on OpenAI when online. Written in Python.
 - [`robot`](robot/README.md) — The face, servo control, camera face tracking, and the on-screen menu. Written in C++.
 - [`teleport`](teleport/README.md) — Video calling, both robot to robot, and web to robot. Written in C++.
+
+The three main modes are: Local, Cloud, Realtime. These can be chosen on screen.
+Local: Runs with no WiFi internet needed.
+Cloud: OpenAI LLM.
+Realtime: OpenAI audio.
+
 ## Talk
 
 The voice interaction.
