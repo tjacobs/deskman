@@ -49,6 +49,7 @@ main() {
     keep_wifi_awake
     allow_network_control
     fix_mdns_name
+    hide_builtin_usb
     echo "Done."
 }
 
@@ -100,6 +101,9 @@ AVAHI_DROP_IN="${AVAHI_DROP_IN_DIR}/wait-for-network.conf"
 # Jetson network ports, Wi-Fi and wired carry mDNS, the rest are virtual and only cause name clashes
 AVAHI_ALLOW_INTERFACES="wlP1p1s0,enP8p1s0"
 AVAHI_DENY_INTERFACES="docker0,l4tbr0,usb0,usb1"
+
+# USB hubs and radio built into the Jetson, lsusb in the login shell leaves them out
+BUILTIN_USB_IDS="1d6b:0002|1d6b:0003|0bda:5489|0bda:0489|13d3:3549"
 
 # Keep Files on the dash, leave Help, Software, and Firefox off
 FAVORITE_APPS="['org.gnome.Nautilus.desktop']"
@@ -1240,6 +1244,26 @@ EOF
     # Pick up the drop-in and republish under the right name
     systemctl daemon-reload
     systemctl restart avahi-daemon.service
+}
+
+# Wrap lsusb in the user's bashrc so only plugged in devices show, the built in ones keep working
+hide_builtin_usb() {
+    bashrc="${RUN_HOME}/.bashrc"
+
+    # Add it once, a rerun leaves the bashrc alone
+    if [[ -f "${bashrc}" ]] && grep -q '^lsusb()' "${bashrc}"; then
+        echo "lsusb already hides built in devices"
+        return
+    fi
+    echo "Hiding built in USB devices from lsusb"
+    cat >> "${bashrc}" <<EOF
+
+# List USB devices, leaving out the hubs and radio built into the Jetson
+lsusb() {
+    command lsusb "\$@" | grep -v -E 'ID (${BUILTIN_USB_IDS}) '
+}
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${bashrc}"
 }
 
 # Skip Connect your online accounts and first-login setup
