@@ -149,7 +149,7 @@ static int degrees_to_servo(const Servo &servo, float degrees);
 static void probe_known_servos();
 static bool detect_servo(Servo &servo);
 static void standardize_servo_tuning(Servo &servo);
-static void print_servo_tuning(Servo &servo);
+[[maybe_unused]] static void print_servo_tuning(Servo &servo);
 static bool reopen_servo_port();
 static bool servo_answers();
 static int clamp_to_range(int value, int min_value, int max_value);
@@ -370,7 +370,6 @@ static bool detect_servo(Servo &servo) {
         if (position != -1) {
             printf("Servo ID %d %-*s OK at position %d\n", servo.id, SERVO_NAME_WIDTH, servo.name, position);
             standardize_servo_tuning(servo);
-            print_servo_tuning(servo);
             fflush(stdout);
             return true;
         }
@@ -394,7 +393,7 @@ static void standardize_servo_tuning(Servo &servo) {
     servo_bus.LockEprom(servo.id);
 }
 
-// Print the position loop gains and dead zones the servo keeps in its own memory
+// Print the position loop gains and dead zones the servo keeps in its own memory, left uncalled until tuning needs checking
 static void print_servo_tuning(Servo &servo) {
     int p = servo_bus.readByte(servo.id, SERVO_P_GAIN_REGISTER);
     int d = servo_bus.readByte(servo.id, SERVO_D_GAIN_REGISTER);
