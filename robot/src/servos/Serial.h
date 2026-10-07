@@ -199,15 +199,17 @@ public:
         return nLen;
     }
 
+    // Write quietly while closed, so an unplugged adapter logs once rather than every frame
     bool writeData(const string &data) {
         if (serial_fd == -1) {
-            cerr << "Serial port not open." << endl;
             return false;
         }
 
+        // Close on the first failed write so the caller can reopen once the adapter is back
         int bytes_written = write(serial_fd, data.c_str(), data.length());
         if (bytes_written < 0) {
-            cerr << "Failed to write to serial port." << endl;
+            cerr << "Error: Servo serial port " << port_name << " lost, " << strerror(errno) << endl;
+            closePort();
             return false;
         }
 
@@ -216,7 +218,6 @@ public:
 
     string readData(size_t max_length = 256) {
         if (serial_fd == -1) {
-            cerr << "Serial port not open." << endl;
             return "";
         }
 

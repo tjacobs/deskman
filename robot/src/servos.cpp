@@ -62,6 +62,9 @@ static const int SERVO_D_GAIN_REGISTER = 22;
 static const int SERVO_I_GAIN_REGISTER = 23;
 static const int SERVO_MIN_STARTUP_REGISTER = 24;
 
+// How often to try the servo port again after its adapter was unplugged
+static const int SERVO_REOPEN_MS = 1000;
+
 // Softer position gain than the factory one, which makes the head shake around its target
 static const int SERVO_P_GAIN = 16;
 
@@ -147,6 +150,8 @@ static void probe_known_servos();
 static bool detect_servo(Servo &servo);
 static void standardize_servo_tuning(Servo &servo);
 static void print_servo_tuning(Servo &servo);
+static bool reopen_servo_port();
+static bool servo_answers();
 static int clamp_to_range(int value, int min_value, int max_value);
 static bool open_first_servo_port();
 void print_servo_positions();
@@ -413,12 +418,61 @@ void move_servos() {
         return;
     }
 
+    // Hold writes while an unplugged adapter is gone, and pick it back up once it returns
+    if (!serial.isOpen() && !reopen_servo_port())
+        return;
+
     // Clamp and write only the servos that answered at open
     for (Servo &servo : servos) {
         servo.position = clamp_to_range(servo.position, servo.min_limit, servo.max_limit);
         if (servo.found)
             servo_bus.WritePosEx(servo.id, servo.position, SERVO_SPEED, SERVO_ACCELERATION);
     }
+}
+
+// Reopen the servo port that was lost, trying at most once per interval, and turn torque back on
+static bool reopen_servo_port() {
+    static steady_clock::time_point last_try{};
+    auto now = steady_clock::now();
+    if (now - last_try < milliseconds(SERVO_REOPEN_MS))
+        return false;
+    last_try = now;
+
+    // A replugged USB adapter can come back under another name, an onboard UART keeps its own
+    bool onboard = port_name == SERVO_PORT_JETSON || port_name == SERVO_PORT_PI;
+    for (int index = 0; index < SERVO_PORT_CANDIDATE_COUNT; index++) {
+        string path = SERVO_PORT_CANDIDATES[index];
+        bool candidate_onboard = path == SERVO_PORT_JETSON || path == SERVO_PORT_PI;
+        if (candidate_onboard != onboard || (onboard && path != port_name) || access(path.c_str(), F_OK) != 0)
+            continue;
+
+        // Keep the first port where a known servo answers
+        serial.setPort(path);
+        if (!serial.openPort())
+            continue;
+        serial.setBaudRate(SERVO_BAUD_RATE);
+        if (!servo_answers())
+            continue;
+        port_name = path;
+        for (Servo &servo : servos) {
+            if (servo.found)
+                servo_bus.EnableTorque(servo.id, 1);
+        }
+        printf("Servo bus reconnected: %s\n", port_name.c_str());
+        fflush(stdout);
+        return true;
+    }
+    serial.closePort();
+    return false;
+}
+
+// True when any servo found at open answers a ping
+static bool servo_answers() {
+    for (Servo &servo : servos) {
+        if (servo.found && servo_bus.Ping(servo.id) != -1)
+            return true;
+    }
+    return false;
 }
 
 // Keep a value inside a travel range, whichever way round it is given
