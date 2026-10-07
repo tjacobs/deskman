@@ -25,6 +25,9 @@ MAX_CONTEXT_SIZE="${MAX_CONTEXT_SIZE:-16384}"
 GPU_LAYERS="all"
 PARALLEL_REQUESTS="1"
 
+# Keep the embeddings left on the cpu mapped from the file, a pinned host copy is memory the Jetson can never reclaim
+GPU_LOAD_MODE="mmap"
+
 # Generating is memory bound so extra threads only add contention, reading the prompt is compute bound so it wants every core
 THREADS="2"
 THREADS_BATCH="4"
@@ -80,7 +83,7 @@ run_server_instance() {
     server_args=(--model "${MODEL_PATH}" --alias "${MODEL_ALIAS}" --host "${HOST}" --port "${PORT}" --api-key "${API_KEY}" --ctx-size "${CONTEXT_SIZE}" --threads "${THREADS}" --threads-batch "${THREADS_BATCH}" --parallel "${PARALLEL_REQUESTS}" --slot-save-path "${CACHE_PATH}" --reasoning off --reasoning-format none --verbosity 1)
     if [[ -e "${CUDA_LIBRARY}" ]]; then
         echo "Device: GPU"
-        server_args+=(--gpu-layers "${GPU_LAYERS}")
+        server_args+=(--gpu-layers "${GPU_LAYERS}" --no-host --load-mode "${GPU_LOAD_MODE}")
     else
         echo "Device: CPU"
     fi
