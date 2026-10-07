@@ -143,6 +143,16 @@ PANEL_BACKLIGHT_SERVICE="panel-backlight.service"
 PANEL_BACKLIGHT_UNIT="/etc/systemd/system/panel-backlight.service"
 PANEL_BACKLIGHT_SCRIPT="/usr/local/sbin/panel-backlight"
 
+# Jetson USB touch panel and the udev rule that maps it back onto the rotated output whenever it is plugged in
+JETSON_OUTPUT="DP-1"
+JETSON_TOUCH_NAME="WaveShare WS170120"
+JETSON_TOUCH_VENDOR="0eef"
+JETSON_TOUCH_PRODUCT="0005"
+TOUCH_MAP_RULE="/etc/udev/rules.d/90-deskman-touch-map.rules"
+TOUCH_MAP_SERVICE_NAME="deskman-touch-map.service"
+TOUCH_MAP_SERVICE="/etc/systemd/system/${TOUCH_MAP_SERVICE_NAME}"
+TOUCH_MAP_TRIES=10
+
 # Panel output, mode, and rotation
 PANEL_OUTPUT="DSI-2"
 PANEL_MODE="1280x800"
@@ -614,6 +624,36 @@ persist_display_rotation() {
     mkdir -p /var/lib/gdm3/.config
     write_monitors_xml /var/lib/gdm3/.config/monitors.xml
     chown gdm:gdm /var/lib/gdm3/.config/monitors.xml 2>/dev/null || true
+
+    # Map touch onto the rotated output again whenever the panel is replugged
+    remap_touch_on_plug
+}
+
+# Run a mapping service from udev each time the touch panel appears, X takes a moment to add it so the service retries
+remap_touch_on_plug() {
+    echo "Remapping ${JETSON_TOUCH_NAME} touch whenever it is plugged in"
+
+    # Write the service that maps touch as the desktop user on the running X display
+    cat > "${TOUCH_MAP_SERVICE}" <<EOF
+[Unit]
+Description=Map the ${JETSON_TOUCH_NAME} touch panel onto ${JETSON_OUTPUT}
+
+[Service]
+Type=oneshot
+User=${RUN_USER}
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/run/user/${RUN_UID}/gdm/Xauthority
+ExecStart=/bin/sh -c 'for try in \$(seq ${TOUCH_MAP_TRIES}); do xinput map-to-output "${JETSON_TOUCH_NAME}" ${JETSON_OUTPUT} 2>/dev/null && exit 0; sleep 1; done; exit 1'
+EOF
+
+    # Start the service when the panel's input device is added
+    cat > "${TOUCH_MAP_RULE}" <<EOF
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="${JETSON_TOUCH_VENDOR}", ATTRS{idProduct}=="${JETSON_TOUCH_PRODUCT}", TAG+="systemd", ENV{SYSTEMD_WANTS}+="${TOUCH_MAP_SERVICE_NAME}"
+EOF
+
+    # Load both now
+    systemctl daemon-reload
+    udevadm control --reload-rules
 }
 
 # Draw nothing where the pointer is, the face should never show a cursor
