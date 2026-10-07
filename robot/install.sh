@@ -4,6 +4,11 @@
 # Stop on errors
 set -euo pipefail
 
+# Prefer Ubuntu's ffmpeg on a Jetson, the NVIDIA repo build has no camera or microphone input, a priority over 1000 lets apt replace it
+JETSON_RELEASE_FILE="/etc/nv_tegra_release"
+FFMPEG_PIN_PATH="/etc/apt/preferences.d/deskman-ffmpeg"
+FFMPEG_PIN_PRIORITY=1001
+
 # Main
 main() {
     os_name="$(uname -s)"
@@ -21,14 +26,23 @@ main() {
 install_linux() {
     export DEBIAN_FRONTEND=noninteractive
 
-    # Refresh package lists
+    # Keep the ffmpeg that can record, then refresh package lists
+    prefer_ubuntu_ffmpeg
     sudo apt-get update -y
 
-    # Install SDL, OpenCV, GStreamer, and the compiler
-    sudo apt-get install -y build-essential cmake pkg-config libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libjpeg-dev libpng-dev libwebp-dev libcurl4-openssl-dev libopencv-dev libgstreamer1.0-dev i2c-tools
+    # Install SDL, OpenCV, GStreamer, the compiler, and ffmpeg for video recording
+    sudo apt-get install -y --allow-downgrades build-essential cmake pkg-config libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libjpeg-dev libpng-dev libwebp-dev libcurl4-openssl-dev libopencv-dev libgstreamer1.0-dev i2c-tools ffmpeg
 
     # Let this user open the servo serial port
     sudo usermod -aG dialout "${SUDO_USER:-$(id -un)}"
+}
+
+# Pin ffmpeg to Ubuntu on a Jetson, so recording gets the v4l2 camera and alsa microphone inputs
+prefer_ubuntu_ffmpeg() {
+    if [[ ! -f "${JETSON_RELEASE_FILE}" ]]; then
+        return
+    fi
+    sudo bash -c "printf '%s\n' 'Package: ffmpeg' 'Pin: release o=Ubuntu' 'Pin-Priority: ${FFMPEG_PIN_PRIORITY}' > '${FFMPEG_PIN_PATH}'"
 }
 
 # Install macOS packages with Homebrew
@@ -38,8 +52,8 @@ install_mac() {
         exit 1
     fi
 
-    # Install SDL, OpenCV, and the compiler
-    brew install cmake pkg-config sdl2 sdl2_image sdl2_ttf opencv jpeg libpng webp curl
+    # Install SDL, OpenCV, the compiler, and ffmpeg for video recording
+    brew install cmake pkg-config sdl2 sdl2_image sdl2_ttf opencv jpeg libpng webp curl ffmpeg
 }
 
 # Configure and compile into build
