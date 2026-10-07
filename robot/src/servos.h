@@ -31,6 +31,7 @@ void sweep_servos(bool scan_bus);
 // Read and write the head pose in degrees
 void get_degrees(int &pan, int &tilt, int &hat);
 void set_degrees(int pan, int tilt, int hat);
+void set_hat_degrees(int hat);
 void move_degrees(float pan_delta, float tilt_delta, float hat_delta);
 
 // Turn a count nudge into degrees

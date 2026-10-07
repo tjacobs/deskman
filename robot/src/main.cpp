@@ -85,6 +85,10 @@ static const int HEALTH_LOG_SECONDS = 60;
 static const int FACE_TRACK_COUNTS = 20;
 static const int FACE_LOOK_TILT_DEGREES = 30;
 
+// Hat down to level while talk is idle, all the way up while it listens
+static const int HAT_IDLE_DEGREES = 0;
+static const int HAT_LISTEN_DEGREES = -40;
+
 // Process and script names to match
 static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
@@ -163,6 +167,7 @@ static void show_face();
 static void draw_face();
 static int start_servos();
 static int sweep_servo_test(bool no_servos);
+static void apply_listen_hat();
 static void apply_record_request(FaceTracker& faceTracker);
 static void play_last_recording();
 static void toggle_recording(FaceTracker& faceTracker);
@@ -363,6 +368,9 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             start_servo_sweep();
         if (audio_pressed)
             start_audio_test();
+
+        // Raise the hat while talk listens, lower it when talk goes idle
+        apply_listen_hat();
 
         // Record and play, from the popup or from a voice command
         apply_record_request(faceTracker);
@@ -743,6 +751,18 @@ static int sweep_servo_test(bool no_servos) {
     }
     sweep_servos(SWEEP_SCAN_BUS);
     return 0;
+}
+
+// Move the hat once each time talk starts or stops listening, a sweep keeps the hat to itself
+static void apply_listen_hat() {
+    static bool hat_set = false;
+    static bool hat_listening = false;
+    bool listening = listen_open();
+    if (sweeping() || (hat_set && listening == hat_listening))
+        return;
+    hat_set = true;
+    hat_listening = listening;
+    set_hat_degrees(listening ? HAT_LISTEN_DEGREES : HAT_IDLE_DEGREES);
 }
 
 // Act on the Record button, or on a start or stop asked for by voice

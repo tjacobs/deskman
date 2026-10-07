@@ -56,6 +56,15 @@ static const int SERVO_DEFAULT_DEGREES_HIGH = 90;
 static const int SERVO_SPEED = 1800;
 static const int SERVO_ACCELERATION = 20;
 
+// Where each servo keeps its position loop gains and the least torque it starts moving with
+static const int SERVO_P_GAIN_REGISTER = 21;
+static const int SERVO_D_GAIN_REGISTER = 22;
+static const int SERVO_I_GAIN_REGISTER = 23;
+static const int SERVO_MIN_STARTUP_REGISTER = 24;
+
+// Softer position gain than the factory one, which makes the head shake around its target
+static const int SERVO_P_GAIN = 16;
+
 // Sweep around center, narrow first then wide, and slower than normal
 static const int SWEEP_NUDGE_PERCENT = 20;
 static const int SWEEP_RANGE_PERCENT = 80;
@@ -136,6 +145,8 @@ static void swap_inverted_limits(Servo &servo);
 static int degrees_to_servo(const Servo &servo, float degrees);
 static void probe_known_servos();
 static bool detect_servo(Servo &servo);
+static void standardize_servo_tuning(Servo &servo);
+static void print_servo_tuning(Servo &servo);
 static int clamp_to_range(int value, int min_value, int max_value);
 static bool open_first_servo_port();
 void print_servo_positions();
@@ -353,6 +364,8 @@ static bool detect_servo(Servo &servo) {
         int position = servo_bus.ReadPos(servo.id);
         if (position != -1) {
             printf("Servo ID %d %-*s OK at position %d\n", servo.id, SERVO_NAME_WIDTH, servo.name, position);
+            standardize_servo_tuning(servo);
+            print_servo_tuning(servo);
             fflush(stdout);
             return true;
         }
@@ -365,6 +378,27 @@ static bool detect_servo(Servo &servo) {
     printf("Servo ID %d %-*s OK, answers ping but not position reads\n", servo.id, SERVO_NAME_WIDTH, servo.name);
     fflush(stdout);
     return true;
+}
+
+// Give every servo the same position gain, written only when it differs so the servo memory is not worn
+static void standardize_servo_tuning(Servo &servo) {
+    if (servo_bus.readByte(servo.id, SERVO_P_GAIN_REGISTER) == SERVO_P_GAIN)
+        return;
+    servo_bus.unLockEprom(servo.id);
+    servo_bus.writeByte(servo.id, SERVO_P_GAIN_REGISTER, SERVO_P_GAIN);
+    servo_bus.LockEprom(servo.id);
+}
+
+// Print the position loop gains and dead zones the servo keeps in its own memory
+static void print_servo_tuning(Servo &servo) {
+    int p = servo_bus.readByte(servo.id, SERVO_P_GAIN_REGISTER);
+    int d = servo_bus.readByte(servo.id, SERVO_D_GAIN_REGISTER);
+    int i = servo_bus.readByte(servo.id, SERVO_I_GAIN_REGISTER);
+    int startup = servo_bus.readByte(servo.id, SERVO_MIN_STARTUP_REGISTER);
+    int clockwiseDead = servo_bus.readByte(servo.id, SMS_STS_CW_DEAD);
+    int counterDead = servo_bus.readByte(servo.id, SMS_STS_CCW_DEAD);
+    int acceleration = servo_bus.readByte(servo.id, SMS_STS_ACC);
+    printf("Servo ID %d %-*s P %d, I %d, D %d, startup %d, dead zone %d and %d, acceleration %d\n", servo.id, SERVO_NAME_WIDTH, servo.name, p, i, d, startup, clockwiseDead, counterDead, acceleration);
 }
 
 // Write the commanded position of every servo out to the bus
@@ -786,6 +820,13 @@ void set_degrees(int pan, int tilt, int hat) {
     face.lookTiltY = 0.0f;
     printf("Move head to pan %d, tilt %d, hat %d\n", pan, tilt, hat);
     fflush(stdout);
+    move_servos();
+}
+
+// Set only the hat from degrees, leaving the head and the drawn face where they are
+void set_hat_degrees(int hat) {
+    lock_guard<recursive_mutex> lock(servo_mutex);
+    servos[2].position = degrees_to_servo(servos[2], hat);
     move_servos();
 }
 
