@@ -42,6 +42,9 @@ LINUX_PLAYER="aplay"
 MAC_PLAYER="afplay"
 BREW_PATHS=(/opt/homebrew/bin/brew /usr/local/bin/brew)
 
+# Config the JetPack cuda toolkit, cudnn, and openblas, nvcc builds llama.cpp and ctranslate2 for the gpu
+JETSON_CUDA_PACKAGES=(nvidia-cuda-dev nvidia-cudnn-dev libopenblas-dev)
+
 # Config uv
 UV_INSTALL_URL="https://astral.sh/uv/install.sh"
 UV_BIN_DIR="${HOME}/.local/bin"
@@ -70,6 +73,7 @@ TEXT_MODEL_PART="${TEXT_MODEL_PATH}.part"
 TEXT_MODEL_URL="https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/${TEXT_MODEL_NAME}"
 LLAMA_SERVER="${LLAMA_CPP_DIR}/build/bin/llama-server"
 LLAMA_LIBRARY_DIR="${LLAMA_CPP_DIR}/build/bin"
+LLAMA_CUDA_LIBRARY="${LLAMA_LIBRARY_DIR}/libggml-cuda.so"
 
 # State, speech to text and the local model install by default
 INSTALL_LISTEN=true
@@ -145,6 +149,21 @@ install_system_packages() {
     else
         install_linux_packages "${LINUX_PACKAGES[@]}"
     fi
+
+    # Install the cuda toolkit on a Jetson so the builds use the gpu
+    if is_jetson; then
+        install_jetson_cuda
+    fi
+}
+
+# Install the JetPack cuda toolkit and quit when nvcc is still missing
+install_jetson_cuda() {
+    install_linux_packages "${JETSON_CUDA_PACKAGES[@]}"
+    if [[ ! -x "${CUDA_BIN}/nvcc" ]]; then
+        echo "CUDA toolkit install failed, ${CUDA_BIN}/nvcc not found."
+        exit 1
+    fi
+    echo "CUDA toolkit OK, $("${CUDA_BIN}/nvcc" --version | tail -n 1)."
 }
 
 # Install mac packages with homebrew
@@ -429,15 +448,15 @@ download_text_model() {
 
 # Build llama.cpp for CUDA when available, else CPU
 build_llama_cpp() {
-    # Skip when llama-server is already built
-    if [[ -x "${LLAMA_SERVER}" ]]; then
+    # Skip when llama-server is built, a Jetson also needs the cuda library so a cpu build is redone
+    if [[ -x "${LLAMA_SERVER}" ]] && { ! is_jetson || [[ -e "${LLAMA_CUDA_LIBRARY}" ]]; }; then
         echo "llama.cpp already built."
         return 0
     fi
 
     # Configure CUDA on Jetson or CPU elsewhere
     if [[ -x "${CUDA_BIN}/nvcc" ]] && ! is_raspberry_pi; then
-        PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+        PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER="${CUDA_BIN}/nvcc" -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
     else
         cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
     fi
@@ -451,6 +470,12 @@ verify_text() {
     # Check runtime and model
     if [[ ! -x "${LLAMA_SERVER}" || ! -f "${TEXT_MODEL_PATH}" ]]; then
         echo "Text install failed, llama-server or model missing."
+        exit 1
+    fi
+
+    # Check a Jetson build has the cuda library, else the model runs slowly on the cpu
+    if is_jetson && [[ ! -e "${LLAMA_CUDA_LIBRARY}" ]]; then
+        echo "Text install failed, llama.cpp built without CUDA, ${LLAMA_CUDA_LIBRARY} missing."
         exit 1
     fi
 
