@@ -763,13 +763,20 @@ def load_whisper_model():
         from faster_whisper import WhisperModel
         device = 'cuda' if ctranslate2.get_cuda_device_count() > 0 else 'cpu'
         compute_type = 'float16' if device == 'cuda' else 'float32'
-        model = WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
+        model = load_cached_whisper_model(WhisperModel, device, compute_type)
     except Exception as error:
         print_error('whisper load failed', error)
         raise
     print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec', flush=True)
     print_memory('after whisper')
     return model
+
+# Load whisper from the cache first, an online check fails at boot before the clock syncs
+def load_cached_whisper_model(WhisperModel, device, compute_type):
+    try:
+        return WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type, local_files_only=True)
+    except Exception:
+        return WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
 
 # Load the silero speech detector bundled with faster-whisper
 def load_vad_model():
@@ -1157,6 +1164,9 @@ def speak(kokoro_pipeline, text):
         wav_path = os.path.join(utils.AUDIO_DIR, SPOKEN_WAV)
         soundfile.write(wav_path, audio, SPEECH_SAMPLE_RATE)
         play_wav(wav_path)
+
+    # Hand torch's cached gpu blocks back, the Jetson gpu shares memory with llama and the desktop
+    torch.cuda.empty_cache()
 
 # Start a background thread that speaks due daily reminders
 def start_reminder_checker(listener, kokoro_pipeline):
