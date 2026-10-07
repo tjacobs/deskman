@@ -1491,6 +1491,13 @@ bool listen_open() {
     return g_listen_open.load();
 }
 
+// Show a warning from inside the robot, with no link to tap
+void show_warning(const string& text) {
+    lock_guard<mutex> lock(g_warning_mutex);
+    g_warning = text;
+    g_warning_url = "";
+}
+
 // Draw the warning, saying it can be tapped when it has a link, and keep where it landed
 void draw_warning(TTF_Font* font, int x, int y, SDL_Color color) {
     // Copy the warning out, the socket thread may be setting a new one

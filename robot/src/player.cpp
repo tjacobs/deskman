@@ -2,6 +2,7 @@
 
 // Local
 #include "player.h"
+#include "recorder.h"
 #include "screen.h"
 
 // System
@@ -211,6 +212,10 @@ bool delete_recording(const string& path) {
 bool start_playback(const string& path) {
     if (playerPid > 0)
         stop_playback();
+
+    // Stop before forking when ffmpeg is missing, a failed exec in the child cannot reach the face
+    if (!ffmpeg_installed())
+        return false;
 
     // Read at the speed it was recorded, so it plays rather than races
     vector<string> arguments = {

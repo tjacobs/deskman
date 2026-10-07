@@ -3,10 +3,12 @@
 // Local
 #include "camera.h"
 #include "config.h"
+#include "interface.h"
 #include "recorder.h"
 
 // System
 #include <chrono>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -65,6 +67,10 @@ static const char* RECORD_MAX_SECONDS = "3600";
 
 // Refuse to start without this much room, an hour at this quality needs about two
 static const long long RECORD_FREE_BYTES_NEEDED = 2LL * 1024 * 1024 * 1024;
+
+// Program that records and plays, and the warning on the face when it is missing
+static const char* FFMPEG_PROGRAM = "ffmpeg";
+static const char* FFMPEG_MISSING_WARNING = "Error: ffmpeg not installed, run robot/install.sh";
 
 // Give ffmpeg this long to close the file cleanly after the stop signal
 static const int RECORD_STOP_WAIT_MS = 5000;
@@ -126,6 +132,10 @@ bool start_recording(const string& directory, int cameraIndex) {
         cout << "Already recording" << endl;
         return false;
     }
+
+    // Stop before forking when ffmpeg is missing, a failed exec in the child cannot reach the face
+    if (!ffmpeg_installed())
+        return false;
 
     // Make the folder, and leave the card enough room to keep working
     error_code error;
@@ -210,6 +220,28 @@ bool start_recording(const string& directory, int cameraIndex) {
     previewThread = thread(readPreviewFrames);
     cout << "Recording " << shortPath(path) << endl;
     return true;
+}
+
+// Say whether ffmpeg is on the path, warning on the face and in the log when it is not
+bool ffmpeg_installed() {
+    // Look for the program in each folder on the path
+    const char* pathVariable = getenv("PATH");
+    string folders = pathVariable ? pathVariable : "";
+    size_t start = 0;
+    while (start <= folders.size()) {
+        size_t end = folders.find(':', start);
+        if (end == string::npos)
+            end = folders.size();
+        string program = folders.substr(start, end - start) + "/" + FFMPEG_PROGRAM;
+        if (access(program.c_str(), X_OK) == 0)
+            return true;
+        start = end + 1;
+    }
+
+    // Log the error exec would have, and put it in red at the top of the face
+    cerr << "Error: ffmpeg: " << strerror(ENOENT) << endl;
+    show_warning(FFMPEG_MISSING_WARNING);
+    return false;
 }
 
 // Pull frames off the pipe for as long as ffmpeg sends them
