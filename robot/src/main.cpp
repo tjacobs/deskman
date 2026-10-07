@@ -77,6 +77,13 @@ static const int TALK_STOP_WAIT_MS = 5000;
 static const int TALK_STOP_POLL_MS = 50;
 static const int TALK_EXEC_FAILED = 127;
 
+// Wait this long before starting talk again after it stops on its own, so a missing sound card is retried rather than spun on
+static const int TALK_RESTART_SECONDS = 5;
+
+// Give up after this many quick exits in a row, a talk that ran this long starts the count over
+static const int TALK_MAX_RESTARTS = 5;
+static const int TALK_HEALTHY_SECONDS = 60;
+
 // Turn on to print memory, threads, and open files once a minute
 static const bool LOG_HEALTH = false;
 static const int HEALTH_LOG_SECONDS = 60;
@@ -133,6 +140,12 @@ volatile bool g_quit = false;
 // Talk child process and the call handoff state
 static pid_t g_talk_pid = -1;
 static bool g_no_talk = false;
+
+// When talk stopped on its own and is due to start again
+static bool g_talk_restart_pending = false;
+static steady_clock::time_point g_talk_restart_at;
+static steady_clock::time_point g_talk_started_at;
+static int g_talk_restarts = 0;
 static bool g_call_paused = false;
 static bool g_call_had_talk = false;
 
@@ -184,6 +197,7 @@ static pid_t find_talk_pid();
 static string repo_path(const char* relative);
 static void apply_call_handoff(FaceTracker& faceTracker);
 static void reap_talk_process();
+static void restart_talk_when_due();
 static void stop_robot(FaceTracker& faceTracker);
 static void stop_talk_process();
 static void log_robot_health();
@@ -344,6 +358,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
     SDL_Event event;
     while (!quit && !g_quit) {
         reap_talk_process();
+        restart_talk_when_due();
         reap_audio_test();
 
         // Take the camera back when a recording stopped at the length cap on its own
@@ -385,6 +400,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Restart talk when a client asks, a new key only loads at startup
         if (take_talk_restart_request() && !g_no_talk) {
             cout << "Restarting talk.py..." << endl;
+            g_talk_restarts = 0;
             stop_talk_process();
             start_talk_process();
         }
@@ -1023,6 +1039,7 @@ static bool start_talk_process() {
 
     // Parent, remember the child so it can be reaped and stopped
     g_talk_pid = pid;
+    g_talk_started_at = steady_clock::now();
     cout << "Starting talk.py..." << endl;
     return true;
 }
@@ -1173,6 +1190,34 @@ static void reap_talk_process() {
         cout << "talk.py exited" << endl;
     }
     g_talk_pid = -1;
+
+    // Count quick exits in a row, and stop retrying once talk keeps failing
+    if (g_quit || g_no_talk)
+        return;
+    if (steady_clock::now() - g_talk_started_at > seconds(TALK_HEALTHY_SECONDS))
+        g_talk_restarts = 0;
+    if (g_talk_restarts >= TALK_MAX_RESTARTS) {
+        cout << "Error: talk.py keeps stopping, gave up after " << TALK_MAX_RESTARTS << " restarts" << endl;
+        show_voice_warning();
+        return;
+    }
+
+    // Bring talk back after a pause, and say so on the face meanwhile
+    g_talk_restarts++;
+    show_voice_warning();
+    g_talk_restart_pending = true;
+    g_talk_restart_at = steady_clock::now() + seconds(TALK_RESTART_SECONDS);
+}
+
+// Start talk again once its pause is over, unless something else already started it
+static void restart_talk_when_due() {
+    if (!g_talk_restart_pending || steady_clock::now() < g_talk_restart_at)
+        return;
+    g_talk_restart_pending = false;
+    if (g_talk_pid <= 0 && !g_no_talk) {
+        cout << "Restarting talk.py" << endl;
+        start_talk_process();
+    }
 }
 
 // Stop child talk, sockets, tracking, then drop torque

@@ -525,8 +525,11 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             # Wait for the wake word, then take the rest of what was said
             else:
                 command = hear_wake_command(whisper_model, kokoro_pipeline, listener)
+
+            # The recorder only ends when the microphone goes, so quit with an error the robot restarts on
             if command is None:
-                break
+                print('Error: Microphone disconnected, the USB sound card was unplugged.', flush=True)
+                sys.exit(1)
             print(f'Command: {command}', flush=True)
 
             # Stop talking and go back to ready
@@ -1394,11 +1397,18 @@ class Listener:
                 try:
                     block = self.blocks.get(timeout=remaining)
                 except queue.Empty:
+                    if not self.reader.is_alive():
+                        return None
                     continue
             else:
-                block = self.blocks.get()
+                try:
+                    block = self.blocks.get(timeout=BLOCK_SECONDS)
+                except queue.Empty:
+                    if not self.reader.is_alive():
+                        return None
+                    continue
 
-            # Stop when the recorder has gone away
+            # Stop when the recorder has gone away, the reader check above covers a drained end marker
             if block is None:
                 return None
 
@@ -1464,7 +1474,7 @@ def check_ready():
         print(f'Audio playback unavailable: {player} not found.')
         sys.exit(1)
     if player == utils.LINUX_PLAYER and utils.find_usb_card() is None:
-        print('No USB speaker found. Plug one in and run ./tools/install_audio.sh.')
+        print('No USB speaker found.')
         sys.exit(1)
 
     # Standard mic level and auto gain, the speaker slider does not change these

@@ -164,6 +164,9 @@ static bool g_entry_recorded = false;
 
 // A warning with a link says it can be tapped, and a tap near it opens the link in the browser
 static const char* WARNING_LINK_HINT = ", tap to fix";
+
+// Shown while the robot brings voice back, an unplugged sound card is the usual cause
+static const char* VOICE_WARNING = "Voice restarting";
 static const int WARNING_TAP_MARGIN = 20;
 static const char* OPEN_LINK_COMMANDS[] = {"/snap/bin/chromium", "chromium", "chromium-browser", "firefox", "xdg-open"};
 static const int OPEN_LINK_MAX_DESCRIPTORS = 1024;
@@ -254,6 +257,7 @@ static void serve_client_thread(int client_fd);
 static void add_client(int client_fd);
 static void serve_client(int client_fd);
 static string handle_request(const string& line, int from_fd);
+static void clear_voice_warning();
 static json position_reply();
 static int request_int(const json& request, const char* key, int fallback);
 static int talk_mode_from_name(const string& name);
@@ -526,6 +530,7 @@ static string handle_request(const string& line, int from_fd) {
         // Follow a face while talk is listening, and while an overlay is up
         } else if (command == "listen") {
             g_listen_open = request.value("open", false);
+            clear_voice_warning();
             reply = {{"ok", true}};
         } else if (command == "overlay") {
             g_overlay_open = request.value("open", false);
@@ -1495,6 +1500,20 @@ bool listen_open() {
 void show_warning(const string& text) {
     lock_guard<mutex> lock(g_warning_mutex);
     g_warning = text;
+    g_warning_url = "";
+}
+
+// Say voice is restarting
+void show_voice_warning() {
+    show_warning(VOICE_WARNING);
+}
+
+// Take the voice warning off once voice is listening again, leaving any other warning up
+static void clear_voice_warning() {
+    lock_guard<mutex> lock(g_warning_mutex);
+    if (g_warning != VOICE_WARNING)
+        return;
+    g_warning = "";
     g_warning_url = "";
 }
 
