@@ -39,6 +39,9 @@ static const int PLAY_HEIGHT = 360;
 static const char* PLAY_SIZE = "640x360";
 static const char* PLAY_PIXEL_FORMAT = "bgr24";
 
+// Shrink then mirror, so playback matches the mirrored preview it was watched on while the file stays as the camera saw it
+static const string PLAY_FILTER = string("scale=size=") + PLAY_SIZE + ",hflip";
+
 // Play through the software mixer, so a playback cannot lock the speaker away from talk
 static const char* SHARED_PLAYBACK_PREFIX = "plug:\"dmix:";
 static const char* SHARED_PLAYBACK_SUFFIX = ",0\"";
@@ -220,7 +223,7 @@ bool start_playback(const string& path) {
     // Read at the speed it was recorded, so it plays rather than races
     vector<string> arguments = {
         "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-re", "-i", path,
-        "-map", "0:v", "-s", PLAY_SIZE, "-f", "rawvideo", "-pix_fmt", PLAY_PIXEL_FORMAT, "pipe:1",
+        "-map", "0:v", "-vf", PLAY_FILTER, "-f", "rawvideo", "-pix_fmt", PLAY_PIXEL_FORMAT, "pipe:1",
         "-map", "0:a?", "-af", "aresample=async=1", "-f", "alsa", speakerDevice()
     };
 

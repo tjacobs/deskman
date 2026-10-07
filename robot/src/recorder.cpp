@@ -42,9 +42,6 @@ static const int PI_RECORD_HEIGHT = 720;
 // Camera format the recording reads
 static const char* RECORD_INPUT_FORMAT = "mjpeg";
 
-// Mirror the file as it is written, so a playback matches the preview it was watched on
-static const char* RECORD_FLIP = "hflip";
-
 // Software H264, the Pi has no encoder in hardware, and quality against file size
 static const char* RECORD_VIDEO_CODEC = "libx264";
 static const char* RECORD_PRESET = "ultrafast";
@@ -165,7 +162,7 @@ bool start_recording(const string& directory, int cameraIndex) {
         "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", cameraDevice,
         "-f", "alsa", "-ac", "1", "-ar", RECORD_AUDIO_RATE,
         "-thread_queue_size", RECORD_THREAD_QUEUE, "-use_wallclock_as_timestamps", "1", "-i", microphone,
-        "-map", "0:v", "-map", "1:a", "-vf", RECORD_FLIP, "-vsync", "vfr",
+        "-map", "0:v", "-map", "1:a", "-vsync", "vfr",
         "-c:v", RECORD_VIDEO_CODEC, "-preset", RECORD_PRESET, "-threads", RECORD_ENCODER_THREADS, "-crf", RECORD_QUALITY, "-pix_fmt", RECORD_PIXEL_FORMAT,
         "-af", RECORD_AUDIO_FILTER, "-c:a", RECORD_AUDIO_CODEC, "-max_muxing_queue_size", RECORD_MUX_QUEUE, "-t", RECORD_MAX_SECONDS, "-y", path,
         "-map", "0:v", "-s", PREVIEW_SIZE, "-f", "rawvideo", "-pix_fmt", PREVIEW_PIXEL_FORMAT, "pipe:1"
