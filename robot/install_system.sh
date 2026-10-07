@@ -50,6 +50,8 @@ main() {
     allow_network_control
     fix_mdns_name
     hide_builtin_usb
+    enable_zram_swap
+    enable_earlyoom
     echo "Done."
 }
 
@@ -104,6 +106,19 @@ AVAHI_DENY_INTERFACES="docker0,l4tbr0,usb0,usb1"
 
 # USB hubs and radio built into the Jetson, lsusb in the login shell leaves them out
 BUILTIN_USB_IDS="1d6b:0002|1d6b:0003|0bda:5489|0bda:0489|13d3:3549"
+
+# Compressed swap in RAM, the Jetson has no swap and the gpu shares its memory, so idle pages squeeze instead of the model being killed
+ZRAM_CONF="/etc/systemd/zram-generator.conf"
+ZRAM_SIZE="ram / 2"
+ZRAM_COMPRESSION="zstd"
+
+# Kill a process before memory runs out and the board freezes, llama goes first since talk restarts it, swap is ignored so zram filling still counts
+EARLYOOM_CONF="/etc/default/earlyoom"
+EARLYOOM_MEMORY_PERCENT=3
+EARLYOOM_SWAP_PERCENT=100
+EARLYOOM_REPORT_SECONDS=3600
+EARLYOOM_PREFER="(^|/)llama-server$"
+EARLYOOM_AVOID="(^|/)(Xorg|gnome-shell|robot|sshd|systemd)$"
 
 # Keep Files on the dash, leave Help, Software, and Firefox off
 FAVORITE_APPS="['org.gnome.Nautilus.desktop']"
@@ -1264,6 +1279,50 @@ lsusb() {
 }
 EOF
     chown "${RUN_USER}:${RUN_USER}" "${bashrc}"
+}
+
+# Add compressed swap in RAM on the Jetson, the Pi OS sets up its own
+enable_zram_swap() {
+    if [[ "${MACHINE}" != "jetson" ]]; then
+        return
+    fi
+    echo "Enabling zram swap"
+
+    # Install the systemd generator that makes the zram device at boot
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y systemd-zram-generator
+
+    # Size and compress the device
+    cat > "${ZRAM_CONF}" <<EOF
+# Written by robot/install_system.sh, compressed swap for the shared cpu and gpu memory
+[zram0]
+zram-size = ${ZRAM_SIZE}
+compression-algorithm = ${ZRAM_COMPRESSION}
+EOF
+
+    # Start it now so this run has swap without a reboot
+    systemctl daemon-reload
+    systemctl restart systemd-zram-setup@zram0.service
+    systemctl start dev-zram0.swap
+}
+
+# Kill the biggest preferred process when memory runs low, the kernel waits too long and the board locks up
+enable_earlyoom() {
+    echo "Enabling earlyoom"
+
+    # Install the daemon
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get install -y earlyoom
+
+    # Set when it acts and which processes it picks or spares
+    cat > "${EARLYOOM_CONF}" <<EOF
+# Written by robot/install_system.sh, kills before the board freezes from low memory
+EARLYOOM_ARGS="-m ${EARLYOOM_MEMORY_PERCENT} -s ${EARLYOOM_SWAP_PERCENT} -r ${EARLYOOM_REPORT_SECONDS} --prefer '${EARLYOOM_PREFER}' --avoid '${EARLYOOM_AVOID}'"
+EOF
+
+    # Start it now and at every boot
+    systemctl enable earlyoom.service
+    systemctl restart earlyoom.service
 }
 
 # Skip Connect your online accounts and first-login setup
