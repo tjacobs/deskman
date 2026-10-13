@@ -66,7 +66,7 @@ REMINDER_CHECK_SECONDS = 20.0
 # Config low battery voice
 LOW_BATTERY_PERCENT = 10
 LOW_BATTERY_SECONDS = 60
-LOW_BATTERY_DROP_VOLTS = 0.02
+LOW_BATTERY_DROP_VOLTS = 0.01
 LOW_BATTERY_ASK = "Invent one new short spoken line, eight words or fewer, that I have low battery. Soft and polite, a gentle request, not a command. In the spirit of I'm tired, could you plug me in, low battery, I'm sleepy, so hungry."
 LOW_BATTERY_FALLBACKS = ("Low battery", "Could you plug me in?", "I'm sleepy.", "So hungry.")
 
@@ -151,7 +151,7 @@ LOCAL_REASON_SHOWN = False
 KEY_SETUP_OFFERED = False
 LAST_ASK_AT = 0.0
 LAST_BATTERY_CHECK_AT = 0.0
-LAST_BATTERY_VOLTAGE = 0.0
+LOW_BATTERY_BASELINE_VOLTAGE = 0.0
 LOW_BATTERY_FALLBACK_INDEX = 0
 kokoro_model = None
 kokoro_pipelines = {}
@@ -1186,9 +1186,9 @@ def reminder_loop(listener, kokoro_pipeline):
             print(f'Reminder check failed: {error}', flush=True)
         time.sleep(REMINDER_CHECK_SECONDS)
 
-# Sample the pack once a minute, and ask to be plugged in only while the voltage keeps falling
+# Sample the pack once a minute, and ask to be plugged in once the voltage has fallen below where it first went low
 def speak_low_battery(listener, kokoro_pipeline):
-    global LAST_BATTERY_CHECK_AT, LAST_BATTERY_VOLTAGE
+    global LAST_BATTERY_CHECK_AT, LOW_BATTERY_BASELINE_VOLTAGE
 
     # Sample on the minute so two readings sit a minute apart
     now = time.time()
@@ -1196,36 +1196,41 @@ def speak_low_battery(listener, kokoro_pipeline):
         return
     LAST_BATTERY_CHECK_AT = now
 
-    # Read the pack and keep this voltage to compare against next minute
+    # Read the pack
     percent, voltage = robot_move.battery_reading()
     if percent is None or voltage is None or voltage <= 0:
         return
-    previous = LAST_BATTERY_VOLTAGE
-    LAST_BATTERY_VOLTAGE = voltage
 
-    # Still plenty of charge
+    # Still plenty of charge, so forget any baseline from an earlier low spell
     if percent >= LOW_BATTERY_PERCENT:
+        LOW_BATTERY_BASELINE_VOLTAGE = 0.0
         return
 
-    # Charging shows up as a rise, so wait for a second reading to compare
+    # Keep the first low reading as the baseline, a slow drain is measured from there rather than minute to minute
+    previous = LOW_BATTERY_BASELINE_VOLTAGE
     if previous <= 0.0:
-        print(f'Low battery {percent}%, {voltage:.2f} V', flush=True)
+        LOW_BATTERY_BASELINE_VOLTAGE = voltage
+        print(f'Low battery: {percent}%, {voltage:.2f} V', flush=True)
         return
 
-    # Voltage held or rose, or the drop is just meter noise
+    # Charging lifts the voltage, so start the baseline again from there
+    if voltage - previous >= LOW_BATTERY_DROP_VOLTS:
+        LOW_BATTERY_BASELINE_VOLTAGE = voltage
+        print(f'Low battery: {percent}%, {voltage:.2f} V up from {previous:.2f} V, charging', flush=True)
+        return
+
+    # Not far enough below the baseline yet, the difference is meter noise
     if previous - voltage < LOW_BATTERY_DROP_VOLTS:
-        if voltage >= previous:
-            print(f'Low battery {percent}%, {voltage:.2f} V up from {previous:.2f} V, charging', flush=True)
         return
 
     # Log it without asking at bedtime, a line nobody hears is not worth an OpenAI call each minute
     if utils.is_bedtime():
-        print(f'Low battery {percent}%, {voltage:.2f} V down from {previous:.2f} V, bedtime so not asking', flush=True)
+        print(f'Low battery: {percent}%, {voltage:.2f} V down from {previous:.2f} V, bedtime so not asking', flush=True)
         return
 
     # Still draining, so ask
     line = ask_to_be_plugged_in(listener, kokoro_pipeline)
-    print(f'Low battery {percent}%, {voltage:.2f} V down from {previous:.2f} V: {line}', flush=True)
+    print(f'Low battery: {percent}%, {voltage:.2f} V down from {previous:.2f} V: {line}', flush=True)
 
 # Ask to be plugged in out loud, and return the words that were said
 def ask_to_be_plugged_in(listener, kokoro_pipeline):
