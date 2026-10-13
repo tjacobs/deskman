@@ -279,7 +279,7 @@ static void load_servo_limits() {
     for (Servo &servo : servos) {
         limits += separator;
         limits += servo.name;
-        limits += " " + to_string(servo.min_limit) + "-" + to_string(servo.max_limit);
+        limits += " " + to_string(min(servo.min_limit, servo.max_limit)) + "-" + to_string(max(servo.min_limit, servo.max_limit));
         separator = ", ";
     }
     printf("%s\n", limits.c_str());
