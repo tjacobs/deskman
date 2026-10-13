@@ -10,6 +10,7 @@
 #include <climits>
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -93,6 +94,10 @@ bool remoteDescriptionSet = false;
 guint candidateDropTimerId = 0;
 int candidateDropSessionId = 0;
 int videoSessionId = 0;
+
+// State callbacks run on different threads, so lines take turns and a failed call closes once
+mutex videoLogMutex;
+bool videoCloseRequested = false;
 gint64 remoteVideoBufferTimeUs = 0;
 guint remoteVideoTimerId = 0;
 bool remoteVideoShowing = false;
@@ -214,6 +219,12 @@ gboolean hideRemoteVideoWhenIdle(gpointer userData);
 void showRemoteVideoWindow();
 void hideRemoteVideoWindow();
 void logVideoCandidateState(GObject* object, GParamSpec* spec, gpointer userData);
+void logVideoGatheringState(GObject* object, GParamSpec* spec, gpointer userData);
+void noteVideoState(const char* kind, const char* name, bool ending);
+void requestVideoFailureStats();
+void logVideoFailureStats(GstPromise* promise, gpointer userData);
+string videoStatText(const GstStructure* structure, const char* field);
+string videoCandidateDescription(const GstStructure* structure);
 gboolean candidateDropHangup(gpointer userData);
 void cancelCandidateDropTimer();
 void logVideoSignalingState(GObject* object, GParamSpec* spec, gpointer userData);
@@ -223,6 +234,7 @@ void onVideoOfferCreated(GstPromise* promise, gpointer userData);
 void onVideoAnswerSet(GstPromise* promise, gpointer userData);
 const char* videoConnectionStateName(GstWebRTCPeerConnectionState state);
 const char* videoConnectionStateName(GstWebRTCICEConnectionState state);
+const char* videoGatheringStateName(GstWebRTCICEGatheringState state);
 const char* videoSignalingStateName(GstWebRTCSignalingState state);
 string encodeJson(JsonObject* object);
 JsonObject* decodeJson(string payload);
@@ -553,6 +565,7 @@ bool startParsedVideoPipeline(string pipelineString) {
         return false;
     }
     videoSessionId++;
+    videoCloseRequested = false;
 
     // Log pipeline messages, and catch prepare-window-handle for fullscreen
     GstBus* bus = gst_pipeline_get_bus(GST_PIPELINE(videoPipeline));
@@ -567,6 +580,7 @@ bool startParsedVideoPipeline(string pipelineString) {
     g_signal_connect(videoWebrtc, "on-ice-candidate", G_CALLBACK(sendVideoAddress), NULL);
     g_signal_connect(videoWebrtc, "notify::connection-state", G_CALLBACK(logVideoConnectionState), NULL);
     g_signal_connect(videoWebrtc, "notify::ice-connection-state", G_CALLBACK(logVideoCandidateState), NULL);
+    g_signal_connect(videoWebrtc, "notify::ice-gathering-state", G_CALLBACK(logVideoGatheringState), NULL);
     g_signal_connect(videoWebrtc, "notify::signaling-state", G_CALLBACK(logVideoSignalingState), NULL);
 
     // Receive remote audio from the web client, and remote video on robot calls
@@ -964,6 +978,7 @@ void cancelCandidateDropTimer() {
 void stopVideoPipeline() {
     // Ignore hangups from the webrtcbin we are about to drop
     videoSessionId++;
+    videoCloseRequested = false;
     cancelCandidateDropTimer();
 
     // Stop watching remote frames, the window goes away with the pipeline
@@ -1808,15 +1823,128 @@ gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userDa
     return TRUE;
 }
 
-// Stop video from the GStreamer main loop after the peer drops
+// Write one whole line, the state callbacks run on different threads
+void logVideoLine(const string& line) {
+    lock_guard<mutex> lock(videoLogMutex);
+    cout << line << endl;
+}
+
+// Read one string field, empty when the stats object does not have it
+string videoStatText(const GstStructure* structure, const char* field) {
+    const char* value = gst_structure_get_string(structure, field);
+    if (!value) return "";
+    return value;
+}
+
+// Describe one local or remote candidate from its stats
+string videoCandidateDescription(const GstStructure* structure) {
+    string kind = videoStatText(structure, "candidate-type");
+    string address = videoStatText(structure, "address");
+    if (kind.empty()) kind = "candidate";
+    if (address.empty()) return kind;
+
+    // Port is a number, the stats object uses either signed or unsigned
+    gint port = 0;
+    guint portValue = 0;
+    if (gst_structure_get_int(structure, "port", &port))
+        return kind + " " + address + ":" + to_string(port);
+    if (gst_structure_get_uint(structure, "port", &portValue))
+        return kind + " " + address + ":" + to_string(portValue);
+    return kind + " " + address;
+}
+
+// Print the candidate pairs that were checked, so a failed call shows which paths died
+void logVideoFailureStats(GstPromise* promise, gpointer userData) {
+    (void)userData;
+    const GstStructure* reply = gst_promise_get_reply(promise);
+    if (!reply) {
+        logVideoLine("WebRTC stats unavailable.");
+        return;
+    }
+
+    // Keep candidates and pairs apart, a pair only names its candidates by id
+    struct CandidateRecord { string identifier; string description; };
+    struct PairRecord { string state; bool nominated; string localIdentifier; string remoteIdentifier; };
+    vector<CandidateRecord> candidates;
+    vector<PairRecord> pairs;
+    int fieldCount = gst_structure_n_fields(reply);
+    for (int index = 0; index < fieldCount; index++) {
+        const char* fieldName = gst_structure_nth_field_name(reply, index);
+        const GValue* value = gst_structure_get_value(reply, fieldName);
+        if (!value || !GST_VALUE_HOLDS_STRUCTURE(value)) continue;
+        const GstStructure* stat = gst_value_get_structure(value);
+        string type = videoStatText(stat, "type");
+        if (type == "local-candidate" || type == "remote-candidate") {
+            candidates.push_back({videoStatText(stat, "id"), videoCandidateDescription(stat)});
+            continue;
+        }
+        if (type != "candidate-pair") continue;
+        gboolean nominated = FALSE;
+        gst_structure_get_boolean(stat, "nominated", &nominated);
+        string state = videoStatText(stat, "state");
+        if (state.empty()) state = "unknown";
+        pairs.push_back({state, nominated == TRUE, videoStatText(stat, "local-candidate-id"), videoStatText(stat, "remote-candidate-id")});
+    }
+
+    // Nothing to compare means gathering never produced a pair
+    if (pairs.empty()) {
+        logVideoLine("WebRTC stats had no candidate pairs.");
+        return;
+    }
+
+    // Skip pairs that were never tried
+    int reported = 0;
+    for (const PairRecord& pair : pairs) {
+        if (pair.state == "frozen" || pair.state == "waiting") continue;
+        string localDescription = "unknown";
+        string remoteDescription = "unknown";
+        for (const CandidateRecord& candidate : candidates) {
+            if (candidate.identifier == pair.localIdentifier) localDescription = candidate.description;
+            if (candidate.identifier == pair.remoteIdentifier) remoteDescription = candidate.description;
+        }
+        string nominatedText = pair.nominated ? "nominated" : "not nominated";
+        logVideoLine("WebRTC candidate pair " + pair.state + ", " + nominatedText + ", local " + localDescription + ", remote " + remoteDescription);
+        reported++;
+    }
+    if (reported == 0)
+        logVideoLine("WebRTC stats: " + to_string(pairs.size()) + " candidate pairs, none had started checking.");
+}
+
+// Ask webrtcbin for stats once, the reply lands in logVideoFailureStats
+void requestVideoFailureStats() {
+    if (!videoWebrtc) return;
+    GstPromise* promise = gst_promise_new_with_change_func(logVideoFailureStats, NULL, NULL);
+    g_signal_emit_by_name(videoWebrtc, "get-stats", NULL, promise);
+    gst_promise_unref(promise);
+}
+
+// Log one connection or ICE state, and close the call on the first failed or closed state
+void noteVideoState(const char* kind, const char* name, bool ending) {
+    bool closeNow = false;
+    bool statsNow = false;
+    string line = string("WebRTC ") + kind + " " + name;
+    {
+        lock_guard<mutex> lock(videoLogMutex);
+        if (ending && !videoCloseRequested) {
+            videoCloseRequested = true;
+            closeNow = true;
+            statsNow = strcmp(name, "failed") == 0;
+            line += ", closing video.";
+        }
+        cout << line << endl;
+    }
+    if (statsNow) requestVideoFailureStats();
+    if (closeNow) g_idle_add(stopVideoFromMainLoop, GINT_TO_POINTER(videoSessionId));
+}
+
+// Stop video from the GStreamer main loop after the connection ends
 gboolean stopVideoFromMainLoop(gpointer userData) {
     int sessionId = GPOINTER_TO_INT(userData);
     if (sessionId != videoSessionId) {
-        cout << "Ignoring disconnect from old WebRTC session " << sessionId << "." << endl;
+        logVideoLine("Ignoring disconnect from old WebRTC session " + to_string(sessionId) + ".");
         return G_SOURCE_REMOVE;
     }
     if (!videoRunning) return G_SOURCE_REMOVE;
-    cout << "Remote peer disconnected, closing video." << endl;
     stopVideo();
     return G_SOURCE_REMOVE;
 }
@@ -1827,14 +1955,11 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
     (void)spec;
     (void)userData;
 
-    // Read state
+    // Read state, failed and closed end the call
     GstWebRTCPeerConnectionState state;
     g_object_get(object, "connection-state", &state, NULL);
-    cout << "WebRTC connection " << videoConnectionStateName(state) << endl;
-    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED ||
-        state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED) {
-        g_idle_add(stopVideoFromMainLoop, GINT_TO_POINTER(videoSessionId));
-    }
+    bool ending = state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED || state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED;
+    noteVideoState("connection", videoConnectionStateName(state), ending);
 }
 
 // Hang up once the connection has stayed dropped
@@ -1846,7 +1971,12 @@ gboolean candidateDropHangup(gpointer userData) {
         return G_SOURCE_REMOVE;
     }
     if (!videoRunning) return G_SOURCE_REMOVE;
-    cout << "WebRTC connection disconnected, closing video." << endl;
+    {
+        lock_guard<mutex> lock(videoLogMutex);
+        if (videoCloseRequested) return G_SOURCE_REMOVE;
+        videoCloseRequested = true;
+        cout << "WebRTC connection disconnected, closing video." << endl;
+    }
     stopVideo();
     return G_SOURCE_REMOVE;
 }
@@ -1857,18 +1987,16 @@ void logVideoCandidateState(GObject* object, GParamSpec* spec, gpointer userData
 
     GstWebRTCICEConnectionState state;
     g_object_get(object, "ice-connection-state", &state, NULL);
+    bool ending = state == GST_WEBRTC_ICE_CONNECTION_STATE_FAILED || state == GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED;
+    noteVideoState("ICE", videoConnectionStateName(state), ending);
 
+    // A working path cancels the hangup that a brief disconnect would start
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED ||
         state == GST_WEBRTC_ICE_CONNECTION_STATE_COMPLETED) {
         cancelCandidateDropTimer();
         return;
     }
-
-    if (state == GST_WEBRTC_ICE_CONNECTION_STATE_FAILED ||
-        state == GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED) {
-        g_idle_add(stopVideoFromMainLoop, GINT_TO_POINTER(videoSessionId));
-        return;
-    }
+    if (ending) return;
 
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED && videoRunning && videoLoop && !candidateDropTimerId) {
         candidateDropSessionId = videoSessionId;
@@ -1877,6 +2005,15 @@ void logVideoCandidateState(GObject* object, GParamSpec* spec, gpointer userData
         candidateDropTimerId = g_source_attach(source, g_main_loop_get_context(videoLoop));
         g_source_unref(source);
     }
+}
+
+// Log whether local candidates are still being gathered
+void logVideoGatheringState(GObject* object, GParamSpec* spec, gpointer userData) {
+    (void)spec;
+    (void)userData;
+    GstWebRTCICEGatheringState state;
+    g_object_get(object, "ice-gathering-state", &state, NULL);
+    logVideoLine(string("WebRTC ICE gathering ") + videoGatheringStateName(state));
 }
 
 // Log signaling state
@@ -1888,7 +2025,7 @@ void logVideoSignalingState(GObject* object, GParamSpec* spec, gpointer userData
     // Read state
     GstWebRTCSignalingState state;
     g_object_get(object, "signaling-state", &state, NULL);
-    cout << "WebRTC signaling " << videoSignalingStateName(state) << endl;
+    logVideoLine(string("WebRTC signaling ") + videoSignalingStateName(state));
 }
 
 // Name peer connection state
@@ -1913,6 +2050,14 @@ const char* videoConnectionStateName(GstWebRTCICEConnectionState state) {
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_FAILED) return "failed";
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_DISCONNECTED) return "disconnected";
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED) return "closed";
+    return "unknown";
+}
+
+// Name ICE gathering state
+const char* videoGatheringStateName(GstWebRTCICEGatheringState state) {
+    if (state == GST_WEBRTC_ICE_GATHERING_STATE_NEW) return "new";
+    if (state == GST_WEBRTC_ICE_GATHERING_STATE_GATHERING) return "gathering";
+    if (state == GST_WEBRTC_ICE_GATHERING_STATE_COMPLETE) return "complete";
     return "unknown";
 }
 
