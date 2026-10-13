@@ -12,7 +12,7 @@ if [ "$OS" = "Darwin" ]; then
         echo "Homebrew is required on macOS: https://brew.sh"
         exit 1
     fi
-    brew install cmake gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav json-glib libnice libnice-gstreamer x264
+    brew install cmake gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav json-glib libnice libnice-gstreamer x264 sdl2 sdl2_ttf
 fi
 
 # Install Linux packages

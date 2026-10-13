@@ -23,6 +23,10 @@ if(NOT PKG_CONFIG_FOUND)
   message(FATAL_ERROR "GStreamer WebRTC not found. Run teleport/install.sh to install it.")
 endif()
 
+# Ask pkg-config again each configure, Homebrew paths name the version and go stale after an upgrade
+unset(__pkg_config_checked_GST_WEBRTC CACHE)
+unset(__pkg_config_checked_SDL2 CACHE)
+
 # Find the GStreamer WebRTC packages
 pkg_check_modules(GST_WEBRTC QUIET gstreamer-1.0 gstreamer-app-1.0 gstreamer-webrtc-1.0 gstreamer-sdp-1.0 gstreamer-video-1.0 gstreamer-fft-1.0 json-glib-1.0)
 if(NOT GST_WEBRTC_FOUND)
@@ -65,12 +69,14 @@ if(UNIX AND NOT APPLE)
   endif()
 endif()
 
-# Call overlay on the local HDMI screen
+# Call overlay on the local screen
+pkg_check_modules(SDL2 REQUIRED sdl2 SDL2_ttf)
+target_include_directories(teleport PRIVATE ${SDL2_INCLUDE_DIRS})
+target_compile_options(teleport PRIVATE ${SDL2_CFLAGS_OTHER})
+target_link_libraries(teleport ${SDL2_LDFLAGS})
+
+# Keep the overlay above the video window on Linux X11
 if(UNIX AND NOT APPLE)
-  pkg_check_modules(SDL2 REQUIRED sdl2 SDL2_ttf)
-  target_include_directories(teleport PRIVATE ${SDL2_INCLUDE_DIRS})
-  target_compile_options(teleport PRIVATE ${SDL2_CFLAGS_OTHER})
-  target_link_libraries(teleport ${SDL2_LDFLAGS} ${SDL2_LIBRARIES})
   find_package(X11)
   if(X11_FOUND)
     target_include_directories(teleport PRIVATE ${X11_INCLUDE_DIR})
