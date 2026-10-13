@@ -55,11 +55,14 @@ Set `GST_PLUGIN_PATH=/usr/local/lib/deskman-gstreamer-1.0` to pick up AEC3 echo 
 ```json
 {
   "deviceId": 4,
-  "autoAnswer": 5
+  "autoAnswer": 5,
+  "key": "..."
 }
 ```
 
 The `deviceId` defaults to the number on the end of the hostname. An incoming call rings the speaker and shows a bar along the bottom of the screen. The `autoAnswer` is how many seconds to ring before answering by itself, and `0` makes it ring until someone taps Accept or Decline.
+
+The `key` is made on first run and is this robot's login to the server. The first login with a key claims the robot's name, and after that the server refuses that name with any other key. Keep it, since a new key cannot log in until the old one is cleared from the server's `robot_keys.json`. The file is readable only by its owner.
 
 ## Service
 

@@ -401,7 +401,7 @@ void handleWebSocketMessage(const WebSocketMessagePtr& message) {
     if (message->type == WebSocketMessageType::Open) {
         lastConnectionError.clear();
         cout << "Connected." << endl;
-        webSocket.send(deviceName + " LOGIN teleport teleport");
+        webSocket.send(deviceName + " LOGIN robot " + settings.key);
     }
 
     // Log close
@@ -473,6 +473,11 @@ void handleCommand(const string& command, const string& commandArgument, const s
             if (startCall(cameraPath)) showCallInProgress();
             else showCallFailed("Call not sent");
         }
+    }
+
+    // Say why login failed, another robot already holds this name with a different key
+    else if (command == "LOGIN_FAILED") {
+        cout << "Login refused, the server has a different key for " << deviceName << "." << endl;
     }
 
     // Reply to latency check

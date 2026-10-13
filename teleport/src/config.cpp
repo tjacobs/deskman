@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 
 // Namespace
@@ -27,8 +28,16 @@ static const char* CONFIG_PATH = "config.json";
 // The device number used to live here, it is folded into config.json on first run
 static const char* DEVICE_ID_PATH = "device.id";
 
+// Source of the random key bytes
+static const char* RANDOM_PATH = "/dev/urandom";
+
+// Only this user may read the file, it holds the key
+static const mode_t CONFIG_MODE = 0600;
+
 static void migrateDeviceIdFile(TeleportConfig& config);
 static int hostnameDeviceId();
+static void ensureKey(TeleportConfig& config);
+static string makeKey();
 
 // Config sits in the project directory, one level above the binary in build
 static string configFilePath() {
@@ -53,6 +62,7 @@ TeleportConfig loadConfig() {
     // Create the file the first time so the settings are easy to find
     ifstream in(path);
     if (!in.good()) {
+        config.key = makeKey();
         migrateDeviceIdFile(config);
         saveConfig(config);
         cout << "Created " << path << " from defaults" << endl;
@@ -65,6 +75,7 @@ TeleportConfig loadConfig() {
         in >> settings;
         if (settings.contains("autoAnswer")) config.autoAnswer = settings["autoAnswer"].get<int>();
         if (settings.contains("deviceId")) config.deviceId = settings["deviceId"].get<int>();
+        if (settings.contains("key")) config.key = settings["key"].get<string>();
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
         config.loaded = false;
@@ -74,10 +85,44 @@ TeleportConfig loadConfig() {
     in.close();
     migrateDeviceIdFile(config);
 
+    // Give a robot from before keys one now
+    ensureKey(config);
+
     // Treat a negative wait as waiting for Accept
     if (config.autoAnswer < 0) config.autoAnswer = 0;
     if (config.deviceId < 1) config.deviceId = hostnameDeviceId();
     return config;
+}
+
+// Make and save a key when the file has none, a robot keeps its key for good after that
+static void ensureKey(TeleportConfig& config) {
+    if (config.key.size() == static_cast<size_t>(ROBOT_KEY_BYTES * 2)) return;
+
+    // Leave a file that failed to parse alone, saving would wipe its other settings
+    if (!config.loaded) return;
+    config.key = makeKey();
+    saveConfig(config);
+    cout << "Made this robot's login key" << endl;
+}
+
+// Read random bytes and write them out as hex
+static string makeKey() {
+    ifstream random(RANDOM_PATH, ios::binary);
+    unsigned char bytes[ROBOT_KEY_BYTES];
+    random.read(reinterpret_cast<char*>(bytes), sizeof(bytes));
+    if (random.gcount() != ROBOT_KEY_BYTES) {
+        cerr << "Could not read " << RANDOM_PATH << endl;
+        return "";
+    }
+
+    // Two hex digits per byte
+    static const char* HEX_DIGITS = "0123456789abcdef";
+    string key;
+    for (unsigned char byte : bytes) {
+        key += HEX_DIGITS[byte >> 4];
+        key += HEX_DIGITS[byte & 0x0f];
+    }
+    return key;
 }
 
 // Take the number off the end of the hostname, deskman4 becomes 4
@@ -126,7 +171,7 @@ static void migrateDeviceIdFile(TeleportConfig& config) {
 // Write config.json in the project directory
 void saveConfig(const TeleportConfig& config) {
     try {
-        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}};
+        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}, {"key", config.key}};
         string path = configFilePath();
         string temporaryPath = path + ".tmp";
         ofstream out(temporaryPath);
@@ -134,6 +179,7 @@ void saveConfig(const TeleportConfig& config) {
             cerr << "Failed to write config.json" << endl;
             return;
         }
+        chmod(temporaryPath.c_str(), CONFIG_MODE);
         out << settings.dump(2) << '\n';
         if (!out.good()) {
             cerr << "Failed to write config.json" << endl;
