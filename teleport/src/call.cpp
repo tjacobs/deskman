@@ -54,6 +54,7 @@ static CallInterfaceView shownView = CALL_INTERFACE_IDLE;
 static vector<string> callPeers;
 static string incomingPeer;
 static string callStatus;
+static bool acceptingCall = false;
 static string pendingAction;
 static string pendingPeer;
 
@@ -182,6 +183,7 @@ void showIncomingCall(string peer) {
     lock_guard<mutex> lock(callInterfaceMutex);
     incomingPeer = peer;
     callStatus.clear();
+    acceptingCall = false;
     requestedView = CALL_INTERFACE_INCOMING;
 }
 
@@ -189,6 +191,7 @@ void showCallInProgress() {
     // Show the in-call bar, and put the mic back to the --mute default
     lock_guard<mutex> lock(callInterfaceMutex);
     callStatus.clear();
+    acceptingCall = false;
     requestedView = CALL_INTERFACE_IN_CALL;
     applyCallMicMuteDefault();
 }
@@ -196,6 +199,7 @@ void showCallInProgress() {
 void showCallIdle() {
     lock_guard<mutex> lock(callInterfaceMutex);
     incomingPeer.clear();
+    acceptingCall = false;
     requestedView = CALL_INTERFACE_IDLE;
 }
 
@@ -520,8 +524,16 @@ static void layoutButtons() {
     muteButton = {0, 0, muteWidth, height};
     hangupButton = {muteWidth, 0, windowWidth - muteWidth, height};
 
-    // Incoming bar, accept on the left, decline on the right
-    if (shownView == CALL_INTERFACE_INCOMING) {
+    // Incoming bar, accept on the left, decline on the right, Connecting fills the bar once Accept is tapped
+    bool connecting = false;
+    {
+        lock_guard<mutex> lock(callInterfaceMutex);
+        connecting = acceptingCall;
+    }
+    if (shownView == CALL_INTERFACE_INCOMING && connecting) {
+        acceptButton = {0, 0, windowWidth, height};
+        declineButton = {0, 0, 0, 0};
+    } else if (shownView == CALL_INTERFACE_INCOMING) {
         int declineWidth = windowWidth / 3;
         acceptButton = {0, 0, windowWidth - declineWidth, height};
         declineButton = {windowWidth - declineWidth, 0, declineWidth, height};
@@ -545,12 +557,14 @@ static void drawOverlay() {
     vector<string> peers;
     string incoming;
     string status;
+    bool connecting = false;
     {
         lock_guard<mutex> lock(callInterfaceMutex);
         view = requestedView;
         peers = callPeers;
         incoming = incomingPeer;
         status = callStatus;
+        connecting = acceptingCall;
     }
     SDL_Color white = {255, 255, 255, 255};
     SDL_Color black = {0, 0, 0, 255};
@@ -570,6 +584,8 @@ static void drawOverlay() {
         }
         if (peers.empty() && !status.empty()) drawLabel(status.c_str(), 30, 20 + CALL_BUTTON_HEIGHT + 20, black);
         else if (!status.empty()) drawLabel(status.c_str(), 30, windowHeight - DIRECTORY_BOTTOM_GAP - 40, black);
+    } else if (view == CALL_INTERFACE_INCOMING && connecting) {
+        drawButton(acceptButton, "Connecting...", green, white);
     } else if (view == CALL_INTERFACE_INCOMING) {
         string title = incomingCallTitle(incoming);
         drawButton(acceptButton, title, green, white);
@@ -709,10 +725,15 @@ static void handleTap(int x, int y) {
     layoutButtons();
     CallInterfaceView view;
     vector<string> peers;
+    bool connecting = false;
     {
         lock_guard<mutex> lock(callInterfaceMutex);
         view = requestedView;
         peers = callPeers;
+        connecting = acceptingCall;
+    }
+    if (view == CALL_INTERFACE_INCOMING && connecting) {
+        return;
     }
     if (view == CALL_INTERFACE_DIRECTORY && hitRect(backButton, x, y)) {
         showCallIdle();
@@ -727,6 +748,10 @@ static void handleTap(int x, int y) {
         }
     }
     if (view == CALL_INTERFACE_INCOMING && hitRect(acceptButton, x, y)) {
+        {
+            lock_guard<mutex> lock(callInterfaceMutex);
+            acceptingCall = true;
+        }
         queueAction("accept", "");
         return;
     }
