@@ -319,7 +319,6 @@ void set_camera_settings(int camera_index) {
             continue;
         for (const CameraControl& control : cameraModel.controls)
             set_control(fd, control.id, control.value);
-        cout << "Camera: " << cameraModel.nameMatch << endl;
     }
     close(fd);
 #endif
