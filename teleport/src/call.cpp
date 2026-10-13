@@ -32,8 +32,8 @@ const int CAMERA_ICON_WIDTH = 78;
 const int CAMERA_ICON_HEIGHT = 58;
 const int CAMERA_ICON_PAD = 16;
 
-// Incoming call bar is the bottom 10 percent of the screen
-const int INCOMING_STRIP_PERCENT = 10;
+// Caller name sits above the Accept and Decline buttons
+const int INCOMING_TITLE_HEIGHT = 56;
 
 // Browsers log in with a name like web57152
 const char* WEB_PEER_PREFIX = "web";
@@ -92,6 +92,7 @@ static void drawCameraOverlay();
 static void layoutButtons();
 static int incomingStripHeight();
 static string incomingCallTitle(const string& peer);
+static void drawIncomingTitle(const string& title);
 static void drawOverlay();
 static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill, SDL_Color text);
 static void drawLabel(const char* text, int x, int y, SDL_Color color);
@@ -498,18 +499,16 @@ static void destroyOverlayWindow() {
 }
 
 static int incomingStripHeight() {
-    int height = windowHeight * INCOMING_STRIP_PERCENT / 100;
-    if (height < CALL_BUTTON_HEIGHT) height = CALL_BUTTON_HEIGHT;
-    return height;
+    return INCOMING_TITLE_HEIGHT + CALL_BUTTON_HEIGHT;
 }
 
 // Name the caller, browsers log in as webNNNNNN
 static string incomingCallTitle(const string& peer) {
     string lower;
     for (unsigned char character : peer) lower.push_back((char)tolower(character));
-    if (lower.find(WEB_PEER_PREFIX) == 0) return "Web calling...";
+    if (lower.find(WEB_PEER_PREFIX) == 0) return "Web calling";
     if (peer.empty()) return "Incoming call";
-    return peer + " calling...";
+    return peer + " calling";
 }
 
 static void layoutButtons() {
@@ -524,7 +523,7 @@ static void layoutButtons() {
     muteButton = {0, 0, muteWidth, height};
     hangupButton = {muteWidth, 0, windowWidth - muteWidth, height};
 
-    // Incoming bar, accept on the left, decline on the right, Connecting fills the bar once Accept is tapped
+    // Incoming bar, caller name on top, Accept on the left, Decline on the right
     bool connecting = false;
     {
         lock_guard<mutex> lock(callInterfaceMutex);
@@ -535,8 +534,9 @@ static void layoutButtons() {
         declineButton = {0, 0, 0, 0};
     } else if (shownView == CALL_INTERFACE_INCOMING) {
         int declineWidth = windowWidth / 3;
-        acceptButton = {0, 0, windowWidth - declineWidth, height};
-        declineButton = {windowWidth - declineWidth, 0, declineWidth, height};
+        int buttonTop = INCOMING_TITLE_HEIGHT;
+        acceptButton = {0, buttonTop, windowWidth - declineWidth, CALL_BUTTON_HEIGHT};
+        declineButton = {windowWidth - declineWidth, buttonTop, declineWidth, CALL_BUTTON_HEIGHT};
     } else {
         acceptButton = {20, height / 2, windowWidth - 40, CALL_BUTTON_HEIGHT};
         declineButton = {20, height / 2 + CALL_BUTTON_HEIGHT + 16, windowWidth - 40, CALL_BUTTON_HEIGHT};
@@ -574,7 +574,7 @@ static void drawOverlay() {
     SDL_Color gray = {60, 60, 60, 255};
     SDL_Color lightBlue = {173, 216, 230, 255};
     if (view == CALL_INTERFACE_IN_CALL) SDL_SetRenderDrawColor(callRenderer, lightBlue.r, lightBlue.g, lightBlue.b, lightBlue.a);
-    else if (view == CALL_INTERFACE_INCOMING) SDL_SetRenderDrawColor(callRenderer, 30, 140, 70, 255);
+    else if (view == CALL_INTERFACE_INCOMING) SDL_SetRenderDrawColor(callRenderer, 16, 78, 42, 255);
     else SDL_SetRenderDrawColor(callRenderer, 245, 245, 245, 255);
     SDL_RenderClear(callRenderer);
     if (view == CALL_INTERFACE_DIRECTORY) {
@@ -587,8 +587,8 @@ static void drawOverlay() {
     } else if (view == CALL_INTERFACE_INCOMING && connecting) {
         drawButton(acceptButton, "Connecting...", green, white);
     } else if (view == CALL_INTERFACE_INCOMING) {
-        string title = incomingCallTitle(incoming);
-        drawButton(acceptButton, title, green, white);
+        drawIncomingTitle(incomingCallTitle(incoming));
+        drawButton(acceptButton, "Accept", green, white);
         drawButton(declineButton, "Decline", red, white);
     } else if (view == CALL_INTERFACE_IN_CALL) {
         bool muted = isCallMicMuted();
@@ -609,6 +609,24 @@ static void drawCameraOverlay() {
     SDL_RenderClear(cameraRenderer);
     drawCameraIcon(CAMERA_ICON_PAD, CAMERA_ICON_PAD / 2, isVideoRunning());
     SDL_RenderPresent(cameraRenderer);
+}
+
+// Center the caller name in the band above Accept
+static void drawIncomingTitle(const string& title) {
+    if (!callFont || title.empty()) return;
+    int textWidth = 0;
+    int textHeight = 0;
+    if (TTF_SizeUTF8(callFont, title.c_str(), &textWidth, &textHeight) != 0) return;
+    int x = (windowWidth - textWidth) / 2;
+    int y = (INCOMING_TITLE_HEIGHT - textHeight) / 2;
+    if (x < 8) {
+        x = 8;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+    SDL_Color white = {255, 255, 255, 255};
+    drawLabel(title.c_str(), x, y, white);
 }
 
 static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill, SDL_Color text) {
