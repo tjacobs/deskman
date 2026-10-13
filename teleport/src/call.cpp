@@ -38,7 +38,13 @@ const int INCOMING_TITLE_HEIGHT = 56;
 // Browsers log in with a name like web57152
 const char* WEB_PEER_PREFIX = "web";
 const int CALL_FONT_SIZE = 32;
+
+// Call text font, macOS has no DejaVu so use Verdana, the closest match it ships
+#ifdef __APPLE__
+const char* CALL_FONT_PATH = "/System/Library/Fonts/Supplemental/Verdana.ttf";
+#else
 const char* CALL_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+#endif
 
 enum CallInterfaceView {
     CALL_INTERFACE_IDLE,
