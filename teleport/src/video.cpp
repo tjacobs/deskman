@@ -77,6 +77,9 @@ string getCameraView(string cameraView);
 // The encoder only makes constrained baseline, so declare that until an offer names another
 const char* CONSTRAINED_BASELINE_PROFILE = "42e01f";
 
+// nvvidconv compute-hw value for the GPU, the VIC path rejects RGB and BGR
+static const int REMOTE_CONVERT_GPU = 1;
+
 // Candidates wait here for a remote description, through ringing and pipeline rebuilds, until the call ends
 vector<string> pendingVideoAddresses;
 
@@ -1466,6 +1469,19 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
             cout << "Failed to create remote video sink." << endl;
             return;
         }
+
+        // The converter errors after the first frames unless the picture format is named, and the GPU path is what can produce it
+        GstElement* formatFilter = NULL;
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(convert), "compute-hw")) {
+            g_object_set(convert, "compute-hw", REMOTE_CONVERT_GPU, NULL);
+            formatFilter = gst_element_factory_make("capsfilter", NULL);
+            if (formatFilter) {
+                GstCaps* caps = gst_caps_from_string("video/x-raw,format=RGBA");
+                g_object_set(formatFilter, "caps", caps, NULL);
+                gst_caps_unref(caps);
+            }
+            cout << "Remote video conversion on GPU." << endl;
+        }
         g_object_set(queue, "max-size-buffers", 2, "max-size-time", 0, "max-size-bytes", 0, "leaky", 2, NULL);
         g_object_set(sink, "sync", FALSE, NULL);
         if (g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "force-aspect-ratio")) {
@@ -1481,10 +1497,18 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
             gst_object_unref(overlayPad);
         }
         gst_bin_add_many(GST_BIN(videoPipeline), queue, convert, sink, NULL);
+        if (formatFilter) {
+            gst_bin_add(GST_BIN(videoPipeline), formatFilter);
+        }
         gst_element_sync_state_with_parent(queue);
         gst_element_sync_state_with_parent(convert);
         gst_element_sync_state_with_parent(sink);
-        gst_element_link_many(queue, convert, sink, NULL);
+        if (formatFilter) {
+            gst_element_sync_state_with_parent(formatFilter);
+            gst_element_link_many(queue, convert, formatFilter, sink, NULL);
+        } else {
+            gst_element_link_many(queue, convert, sink, NULL);
+        }
         GstPad* sinkPad = gst_element_get_static_pad(queue, "sink");
         gst_pad_link(pad, sinkPad);
         gst_object_unref(sinkPad);
