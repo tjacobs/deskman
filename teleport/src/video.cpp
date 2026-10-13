@@ -190,6 +190,8 @@ void chooseAudioCodec(const char* sdpText);
 int findPayloadType(string sdp, string codec);
 string summarizeSdp(const char* sdpText);
 void logGStreamerError(const string& message);
+void logVideoLine(const string& line);
+void logGStreamerLines(const string& prefix, const string& text, bool asError);
 bool waitForSenderCaps();
 void sendNoCamera();
 void prepareSenderTransceivers();
@@ -1795,6 +1797,25 @@ void logGStreamerError(const string& message) {
     cerr << "\033[1;31m" << message << "\033[0m" << endl;
 }
 
+// Print every line of a GStreamer message, a newline would otherwise leave the reason on an unlabeled line
+void logGStreamerLines(const string& prefix, const string& text, bool asError) {
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == string::npos) end = text.size();
+        string line = text.substr(start, end - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) {
+            if (asError) {
+                logGStreamerError(prefix + line);
+            } else {
+                logVideoLine(prefix + line);
+            }
+        }
+        start = end + 1;
+    }
+}
+
 // Handle video bus message
 gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData) {
     // Ignore unused values
@@ -1819,8 +1840,8 @@ gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userDa
             logGStreamerError("No camera connected.");
             printCameraFormats();
         } else {
-            logGStreamerError("GStreamer error: " + errorMessage);
-            if (debug) logGStreamerError(string("GStreamer debug: ") + debug);
+            logGStreamerLines("GStreamer error: ", errorMessage, true);
+            if (debug) logGStreamerLines("GStreamer debug: ", debug, true);
         }
         g_clear_error(&error);
         g_free(debug);
@@ -1836,8 +1857,8 @@ gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userDa
         bool skipWarning = warningMessage.find("Can't record audio fast enough") != string::npos ||
             isCallAudioDisconnectMessage(warningMessage, debugMessage);
         if (!skipWarning) {
-            cout << "GStreamer warning: " << warningMessage << endl;
-            if (debug) cout << "GStreamer debug: " << debug << endl;
+            logGStreamerLines("GStreamer warning: ", warningMessage, false);
+            if (debug) logGStreamerLines("GStreamer debug: ", debug, false);
         }
         g_clear_error(&error);
         g_free(debug);
