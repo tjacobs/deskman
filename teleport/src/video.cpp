@@ -2005,6 +2005,9 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
     g_object_get(object, "connection-state", &state, NULL);
     bool ending = state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED || state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED;
     noteVideoState("connection", videoConnectionStateName(state), ending);
+    if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED) {
+        setCallConnected(true);
+    }
 }
 
 // Hang up once the connection has stayed dropped

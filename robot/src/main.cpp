@@ -92,7 +92,7 @@ static const int HEALTH_LOG_SECONDS = 60;
 static const int FACE_TRACK_COUNTS = 20;
 static const int FACE_LOOK_TILT_DEGREES = 30;
 
-// Hat down to level while talk is idle, all the way up while it listens
+// Hat down to level while idle, all the way up while talk listens or a call is connected
 static const int HAT_IDLE_DEGREES = 0;
 static const int HAT_LISTEN_DEGREES = -40;
 
@@ -769,16 +769,17 @@ static int sweep_servo_test(bool no_servos) {
     return 0;
 }
 
-// Move the hat once each time talk starts or stops listening, a sweep keeps the hat to itself
+// Move the hat once when talk starts or stops listening, or a call connects or ends
 static void apply_listen_hat() {
     static bool hat_set = false;
-    static bool hat_listening = false;
-    bool listening = listen_open();
-    if (sweeping() || (hat_set && listening == hat_listening))
+    static bool hat_raised = false;
+    bool raised = listen_open() || call_open();
+    if (sweeping() || (hat_set && raised == hat_raised)) {
         return;
+    }
     hat_set = true;
-    hat_listening = listening;
-    set_hat_degrees(listening ? HAT_LISTEN_DEGREES : HAT_IDLE_DEGREES);
+    hat_raised = raised;
+    set_hat_degrees(raised ? HAT_LISTEN_DEGREES : HAT_IDLE_DEGREES);
 }
 
 // Act on the Record button, or on a start or stop asked for by voice

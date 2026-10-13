@@ -73,6 +73,21 @@ void setRobotOverlayOpen(bool open) {
     writeInterfaceLine(line);
 }
 
+// Ask the robot to raise the hat for a connected call, and lower it when the call ends
+void setCallConnected(bool connected) {
+    static bool raised = false;
+    if (connected == raised) {
+        return;
+    }
+    raised = connected;
+    string line = connected ? "{\"command\":\"call\",\"open\":true}" : "{\"command\":\"call\",\"open\":false}";
+    if (!writeInterfaceLine(line)) {
+        raised = !connected;
+        return;
+    }
+    cout << (connected ? "Hat up." : "Hat down.") << endl;
+}
+
 static void logError(const string& message) {
     if (isatty(STDERR_FILENO)) {
         cerr << "\033[1;31m*** ERROR *** : " << message << "\033[0m" << endl;
@@ -100,6 +115,7 @@ void pauseInterfaceForCall() {
 
 void resumeInterfaceAfterCall() {
     if (!interfacePaused) return;
+    setCallConnected(false);
     if (!writeInterfaceLine("{\"command\":\"resume\"}")) cout << "Interface resume failed." << endl;
     else if (!waitInterfaceOk()) cout << "Interface resume failed." << endl;
     interfacePaused = false;

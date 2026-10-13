@@ -203,6 +203,7 @@ static SDL_Rect g_warning_rect = {0, 0, 0, 0};
 // Overlay and listen state the face and tracker read
 static atomic<bool> g_overlay_open{false};
 static atomic<bool> g_listen_open{false};
+static atomic<bool> g_call_open{false};
 static atomic<bool> g_camera_toggle{false};
 static atomic<bool> g_camera_showing{false};
 static atomic<bool> g_move_request{false};
@@ -531,6 +532,11 @@ static string handle_request(const string& line, int from_fd) {
         } else if (command == "listen") {
             g_listen_open = request.value("open", false);
             clear_voice_warning();
+            reply = {{"ok", true}};
+
+        // Hold the hat up for a connected call, talk listening still wins when the call ends
+        } else if (command == "call") {
+            g_call_open = request.value("open", false);
             reply = {{"ok", true}};
         } else if (command == "overlay") {
             g_overlay_open = request.value("open", false);
@@ -1494,6 +1500,11 @@ bool take_talk_restart_request() {
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open() {
     return g_listen_open.load();
+}
+
+// True while a call is connected, so the hat stays up until the call ends
+bool call_open() {
+    return g_call_open.load();
 }
 
 // Show a warning from inside the robot, with no link to tap

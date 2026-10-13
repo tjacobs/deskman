@@ -71,6 +71,9 @@ bool take_talk_restart_request();
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
 
+// True while a call is connected
+bool call_open();
+
 // Show a warning from inside the robot, the same red line the socket sets
 void show_warning(const string& text);
 
