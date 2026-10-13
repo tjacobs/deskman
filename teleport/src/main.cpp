@@ -57,6 +57,9 @@ const int PING_INTERVAL_SECONDS = 1;
 const int SOCKET_PING_SECONDS = 10;
 const uint32_t RECONNECT_WAIT_MILLISECONDS = 10000;
 
+// Repeat an unchanged connection error only after this wait, retries are much more often
+const int CONNECTION_ERROR_REPEAT_SECONDS = 300;
+
 // Give up and decline when a call rings this long with nobody answering
 const int RING_TIMEOUT_SECONDS = 60;
 
@@ -89,6 +92,8 @@ vector<string> listedPeers;
 WebSocket webSocket;
 time_t lastPing = 0;
 bool running = true;
+string lastConnectionError;
+steady_clock::time_point lastConnectionErrorAt{};
 
 // Declare functions
 int main(int argumentCount, char** argumentValues);
@@ -103,6 +108,7 @@ void signalHandler(int signalNumber);
 void connectWebSocket();
 void runMainLoop();
 void sendPing();
+void logConnectionError(const string& reason);
 void handleWebSocketMessage(const WebSocketMessagePtr& message);
 void handleTextMessage(const string& text);
 void handleCommand(const string& command, const string& commandArgument, const string& secondCommandArgument, const string& target);
@@ -373,10 +379,27 @@ void sendPing() {
     lastPing = now;
 }
 
+// Log a connection error, and skip repeats of the same one until the wait has passed
+void logConnectionError(const string& reason) {
+    auto now = steady_clock::now();
+    bool same = reason == lastConnectionError;
+    if (same && now - lastConnectionErrorAt < seconds(CONNECTION_ERROR_REPEAT_SECONDS)) {
+        return;
+    }
+    lastConnectionError = reason;
+    lastConnectionErrorAt = now;
+    if (same) {
+        cout << "Connection error, still failing: " << reason << endl;
+        return;
+    }
+    cout << "Connection error: " << reason << endl;
+}
+
 // Handle websocket messages
 void handleWebSocketMessage(const WebSocketMessagePtr& message) {
-    // Log in on open
+    // Log in on open, and allow the next outage to be logged again
     if (message->type == WebSocketMessageType::Open) {
+        lastConnectionError.clear();
         cout << "Connected." << endl;
         webSocket.send(deviceName + " LOGIN teleport teleport");
     }
@@ -388,7 +411,7 @@ void handleWebSocketMessage(const WebSocketMessagePtr& message) {
 
     // Log errors
     else if (message->type == WebSocketMessageType::Error) {
-        cout << "Connection error: " << message->errorInfo.reason << endl;
+        logConnectionError(message->errorInfo.reason);
     }
 
     // Route text messages
