@@ -1988,7 +1988,7 @@ void logVideoCandidateState(GObject* object, GParamSpec* spec, gpointer userData
     GstWebRTCICEConnectionState state;
     g_object_get(object, "ice-connection-state", &state, NULL);
     bool ending = state == GST_WEBRTC_ICE_CONNECTION_STATE_FAILED || state == GST_WEBRTC_ICE_CONNECTION_STATE_CLOSED;
-    noteVideoState("ICE", videoConnectionStateName(state), ending);
+    noteVideoState("connection", videoConnectionStateName(state), ending);
 
     // A working path cancels the hangup that a brief disconnect would start
     if (state == GST_WEBRTC_ICE_CONNECTION_STATE_CONNECTED ||
@@ -2013,7 +2013,14 @@ void logVideoGatheringState(GObject* object, GParamSpec* spec, gpointer userData
     (void)userData;
     GstWebRTCICEGatheringState state;
     g_object_get(object, "ice-gathering-state", &state, NULL);
-    logVideoLine(string("WebRTC ICE gathering ") + videoGatheringStateName(state));
+
+    // The gathering state is already named gathering, so that line stays a single word
+    string name = videoGatheringStateName(state);
+    if (name == "gathering") {
+        logVideoLine("WebRTC connection gathering");
+        return;
+    }
+    logVideoLine("WebRTC connection gathering " + name);
 }
 
 // Log signaling state
