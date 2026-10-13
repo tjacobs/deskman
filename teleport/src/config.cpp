@@ -21,7 +21,7 @@
 using namespace std;
 using json = nlohmann::json;
 
-// Settings sit next to the binary, in the working directory
+// Fallback when the binary path cannot be read
 static const char* CONFIG_PATH = "config.json";
 
 // The device number used to live here, it is folded into config.json on first run
@@ -30,17 +30,32 @@ static const char* DEVICE_ID_PATH = "device.id";
 static void migrateDeviceIdFile(TeleportConfig& config);
 static int hostnameDeviceId();
 
-// Load ./config.json, write the defaults out when it is missing
+// Config sits in the project directory, one level above the binary in build
+static string configFilePath() {
+    char executablePath[4096];
+    ssize_t length = readlink("/proc/self/exe", executablePath, sizeof(executablePath) - 1);
+    if (length <= 0) return CONFIG_PATH;
+    executablePath[length] = '\0';
+
+    // Drop the binary name, then step up out of build
+    string path = executablePath;
+    size_t slash = path.find_last_of('/');
+    if (slash == string::npos) return CONFIG_PATH;
+    return path.substr(0, slash) + "/../config.json";
+}
+
+// Load config.json from the project directory, write the defaults out when it is missing
 TeleportConfig loadConfig() {
     TeleportConfig config;
     config.deviceId = hostnameDeviceId();
+    string path = configFilePath();
 
     // Create the file the first time so the settings are easy to find
-    ifstream in(CONFIG_PATH);
+    ifstream in(path);
     if (!in.good()) {
         migrateDeviceIdFile(config);
         saveConfig(config);
-        cout << "Created " << CONFIG_PATH << " from defaults" << endl;
+        cout << "Created " << path << " from defaults" << endl;
         return config;
     }
 
@@ -108,11 +123,13 @@ static void migrateDeviceIdFile(TeleportConfig& config) {
     else cout << "Moved device " << fileDeviceId << " from " << DEVICE_ID_PATH << " into " << CONFIG_PATH << endl;
 }
 
-// Write ./config.json
+// Write config.json in the project directory
 void saveConfig(const TeleportConfig& config) {
     try {
         json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}};
-        ofstream out("config.json.tmp");
+        string path = configFilePath();
+        string temporaryPath = path + ".tmp";
+        ofstream out(temporaryPath);
         if (!out.good()) {
             cerr << "Failed to write config.json" << endl;
             return;
@@ -123,7 +140,7 @@ void saveConfig(const TeleportConfig& config) {
             return;
         }
         out.close();
-        if (rename("config.json.tmp", CONFIG_PATH) != 0) {
+        if (rename(temporaryPath.c_str(), path.c_str()) != 0) {
             cerr << "Failed to replace config.json" << endl;
         }
     } catch (const exception& error) {

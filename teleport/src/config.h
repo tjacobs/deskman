@@ -17,6 +17,6 @@ struct TeleportConfig {
     bool loaded = true;
 };
 
-// Read and write ./config.json
+// Read and write config.json in the project directory, one level above the binary
 TeleportConfig loadConfig();
 void saveConfig(const TeleportConfig& config);

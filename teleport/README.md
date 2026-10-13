@@ -50,7 +50,7 @@ Set `GST_PLUGIN_PATH=/usr/local/lib/deskman-gstreamer-1.0` to pick up AEC3 echo 
 
 ## Settings
 
-`config.json` is read from the working directory, and written with defaults on first run.
+`config.json` is read from the project directory, one level above the binary in `build`, and written with defaults on first run.
 
 ```json
 {
