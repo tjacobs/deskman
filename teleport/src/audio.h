@@ -26,8 +26,6 @@ void stopRingtone();
 string findUSBALSADevice();
 string findUSBMicDevice();
 string findUSBSpeakerDevice();
-string findUSBPulseSource();
-string findUSBPulseSink();
 
 #ifdef HAVE_GSTREAMER_WEBRTC
 void quietCallAudioLog();

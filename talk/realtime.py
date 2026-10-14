@@ -888,16 +888,17 @@ class Microphone:
     def __init__(self):
         self.blocks = queue.Queue()
         self.muted = False
-        self.recorder = utils.start_recorder(utils.record_command())
+        self.record = utils.record_command()
+        self.recorder = utils.start_recorder(self.record)
         self.reader = threading.Thread(target=self.read_blocks, daemon=True)
         self.reader.start()
 
-    # Read blocks until the recorder stops, dropping them while muted
+    # Read blocks until the recorder keeps failing, dropping them while muted
     def read_blocks(self):
         block_bytes = utils.SAMPLE_RATE * 2 // BLOCKS_PER_SECOND
         while True:
-            data = self.recorder.stdout.read(block_bytes)
-            if len(data) < block_bytes:
+            data = utils.read_capture_block(self, block_bytes)
+            if data is None:
                 self.blocks.put(None)
                 return
             if self.muted:

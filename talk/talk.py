@@ -1333,15 +1333,16 @@ class Listener:
         self.blocks = queue.Queue(maxsize=MAX_QUEUED_BLOCKS)
         self.muted = False
         self.discard_utterance = False
+        self.record = record
         self.recorder = utils.start_recorder(record)
         self.reader = threading.Thread(target=self.read_blocks, daemon=True)
         self.reader.start()
 
-    # Read blocks until the recorder stops, dropping them while muted
+    # Read blocks until the recorder keeps failing, dropping them while muted
     def read_blocks(self):
         while True:
-            data = self.recorder.stdout.read(BLOCK_BYTES)
-            if len(data) < BLOCK_BYTES:
+            data = utils.read_capture_block(self, BLOCK_BYTES)
+            if data is None:
                 self.put_block(None)
                 return
             if self.muted:

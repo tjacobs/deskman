@@ -165,12 +165,10 @@ int main(int argumentCount, char** argumentValues) {
 
     // Prefer separate USB mic and speaker when using the default ALSA device
     if (audioDevice == DEFAULT_AUDIO_DEVICE) {
-        string usbMic = findUSBPulseSource();
-        string usbSpeaker = findUSBPulseSink();
-        if (usbMic.empty()) usbMic = findUSBMicDevice();
-        if (usbSpeaker.empty()) usbSpeaker = findUSBSpeakerDevice();
+        string usbMic = findUSBMicDevice();
+        string usbSpeaker = findUSBSpeakerDevice();
         if (usbMic.empty()) usbMic = audioDevice;
-        if (usbSpeaker.empty()) usbSpeaker = usbMic;
+        if (usbSpeaker.empty()) usbSpeaker = audioDevice;
         setVideoAudioDevices(usbMic, usbSpeaker);
     } else {
         setVideoAudioDevices(audioDevice, audioDevice);

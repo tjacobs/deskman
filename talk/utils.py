@@ -41,6 +41,10 @@ CAPTURE_CHANNELS = 1
 # Gain the one mic capture
 CAPTURE_GAIN_DB = 12
 CAPTURE_BUFFER_BYTES = '256'
+
+# Retry a microphone that dies, the sound card can be busy for a few seconds after a call
+MIC_RESTART_ATTEMPTS = 8
+MIC_RESTART_SECONDS = 1.0
 CARDS_PATH = '/proc/asound/cards'
 VIDEO_DIR = '/sys/class/video4linux'
 CPU_SCALING_DIR = '/sys/devices/system/cpu'
@@ -250,8 +254,24 @@ def shared_playback_device(card):
 
 # Start the recorder streaming raw audio to stdout
 def start_recorder(command):
-    recorder = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    recorder = subprocess.Popen(command, stdout=subprocess.PIPE)
     return wrap_capture_gain(recorder, SAMPLE_RATE, CAPTURE_CHANNELS)
+
+# Read one block from the owner recorder, restarting a recorder that stopped, None when it keeps failing
+def read_capture_block(owner, block_bytes):
+    for attempt in range(MIC_RESTART_ATTEMPTS + 1):
+        # Hand back a full block
+        data = owner.recorder.stdout.read(block_bytes)
+        if len(data) == block_bytes:
+            return data
+
+        # Start the recorder again after the card settles
+        if attempt < MIC_RESTART_ATTEMPTS:
+            print(f'Microphone stopped, restarting it, try {attempt + 1}.', flush=True)
+            owner.recorder.terminate()
+            time.sleep(MIC_RESTART_SECONDS)
+            owner.recorder = start_recorder(owner.record)
+    return None
 
 # Raise the voice on the capture stream
 def wrap_capture_gain(recorder, rate, channels):
@@ -260,7 +280,7 @@ def wrap_capture_gain(recorder, rate, channels):
         return recorder
 
     # Sox reads the recorder, the caller reads sox
-    booster = subprocess.Popen(capture_gain_command(rate, channels), stdin=recorder.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    booster = subprocess.Popen(capture_gain_command(rate, channels), stdin=recorder.stdout, stdout=subprocess.PIPE)
     recorder.stdout.close()
     return CapturePipe(recorder, booster)
 

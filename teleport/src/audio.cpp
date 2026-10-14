@@ -53,9 +53,10 @@ const double RING_FULL_SCALE = 32767.0;
 // Fall back to the first ALSA card until the USB dongle is found
 const string DEFAULT_AUDIO_DEVICE = "plughw:0,0";
 
-// Play through the ALSA software mixer, so robot speech and a call can hold the speaker at once
+// Go through the ALSA software mixer and snooper, so robot speech and a call can share the card and no sound server holds it
 const string SHARED_PLAYBACK_PREFIX = "plug:\"dmix:";
-const string SHARED_PLAYBACK_SUFFIX = ",0\"";
+const string SHARED_CAPTURE_PREFIX = "plug:\"dsnoop:";
+const string SHARED_DEVICE_SUFFIX = ",0\"";
 const int DEFAULT_AUDIO_PAYLOAD_TYPE = 97;
 const bool DEFAULT_CALL_MIC_MUTED = true;
 
@@ -132,13 +133,12 @@ mutex notchLock;
 
 // Declare helpers that sit further down
 string sharedPlaybackDevice(int card);
+string sharedCaptureDevice(int card);
 vector<int> listUSBCards();
 vector<int> listUSBCaptureCards();
 bool cardHasCapture(int card);
 bool cardHasPlayback(int card);
 string cardStreamInfo(int card);
-vector<string> listPulseShortNames(const char* command);
-bool isUSBPulseAudioName(const string& name);
 bool isPulseAudioDevice(const string& device);
 
 // Declare the ring, call audio, and tone helpers
@@ -176,11 +176,11 @@ string findUSBMicDevice() {
     // Prefer a capture card that can also play
     vector<int> usbCards = listUSBCaptureCards();
     for (int card : usbCards) {
-        if (cardHasPlayback(card)) return "plughw:" + to_string(card) + ",0";
+        if (cardHasPlayback(card)) return sharedCaptureDevice(card);
     }
 
     // Fall back to the first USB capture card
-    if (!usbCards.empty()) return "plughw:" + to_string(usbCards[0]) + ",0";
+    if (!usbCards.empty()) return sharedCaptureDevice(usbCards[0]);
     return "";
 }
 
@@ -199,30 +199,16 @@ string findUSBSpeakerDevice() {
     return "";
 }
 
+// Name the shared snooper capture device for a card
+string sharedCaptureDevice(int card) {
+    // Route through dsnoop so another program holding the mic does not lock us out
+    return SHARED_CAPTURE_PREFIX + to_string(card) + SHARED_DEVICE_SUFFIX;
+}
+
 // Name the shared mixer playback device for a card
 string sharedPlaybackDevice(int card) {
     // Route through dmix so another program holding the speaker does not lock us out
-    return SHARED_PLAYBACK_PREFIX + to_string(card) + SHARED_PLAYBACK_SUFFIX;
-}
-
-// Prefer the USB dongle Pulse capture, skip the camera mic
-string findUSBPulseSource() {
-    // Keep the first Pulse capture name that is a USB dongle
-    for (const string& name : listPulseShortNames("pactl list short sources 2>/dev/null")) {
-        if (name.find("alsa_input") != 0) continue;
-        if (isUSBPulseAudioName(name)) return name;
-    }
-    return "";
-}
-
-// Prefer the USB dongle Pulse speaker
-string findUSBPulseSink() {
-    // Keep the first Pulse sink name that is a USB dongle
-    for (const string& name : listPulseShortNames("pactl list short sinks 2>/dev/null")) {
-        if (name.find("alsa_output") != 0) continue;
-        if (isUSBPulseAudioName(name)) return name;
-    }
-    return "";
+    return SHARED_PLAYBACK_PREFIX + to_string(card) + SHARED_DEVICE_SUFFIX;
 }
 
 // Set mic and speaker to the same ALSA device
@@ -984,40 +970,5 @@ string cardStreamInfo(int card) {
     ifstream streamFile("/proc/asound/card" + to_string(card) + "/stream0");
     if (!streamFile) return "";
     return string((istreambuf_iterator<char>(streamFile)), istreambuf_iterator<char>());
-}
-
-// Collect Pulse source or sink names from pactl
-vector<string> listPulseShortNames(const char* command) {
-    // Collect Pulse source or sink names
-    vector<string> names;
-#ifdef __linux__
-    // Run pactl and read its short list
-    FILE* pipe = popen(command, "r");
-    if (!pipe) return names;
-
-    // Take the name out of the second column of every line
-    char buffer[512];
-    while (fgets(buffer, sizeof(buffer), pipe)) {
-        string line = buffer;
-        size_t tab = line.find('\t');
-        if (tab == string::npos) continue;
-        size_t start = tab + 1;
-        size_t end = line.find('\t', start);
-        if (end == string::npos) end = line.find('\n', start);
-        string name = line.substr(start, end - start);
-        if (!name.empty()) names.push_back(name);
-    }
-    pclose(pipe);
-#endif
-    return names;
-}
-
-// True when this name is a Pulse USB device, not HDMI, monitor, or Arducam
-bool isUSBPulseAudioName(const string& name) {
-    // Reject monitors, the camera, and HDMI, then keep USB names
-    if (name.find(".monitor") != string::npos) return false;
-    if (name.find("Arducam") != string::npos) return false;
-    if (name.find("hdmi") != string::npos || name.find("HDMI") != string::npos) return false;
-    return name.find("usb-") != string::npos || name.find("USB") != string::npos;
 }
 
