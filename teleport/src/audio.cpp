@@ -306,11 +306,15 @@ void startRingtone() {
 
     // Play the ring as plain samples, so the fades live in the waveform and nothing gates it live
     buildRingCycle();
-    string sinkElement = isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink";
+#ifdef __APPLE__
+    string sinkElement = "osxaudiosink";
+#else
+    string sinkElement = (isPulseAudioDevice(videoSpeakerDevice) ? "pulsesink" : "alsasink") + string(" device=") + videoSpeakerDevice;
+#endif
     int chunkBytes = VIDEO_AUDIO_RATE * RING_CHUNK_MS / 1000 * sizeof(gint16);
     string pipelineString = "appsrc name=ringsource is-live=true format=time do-timestamp=true block=true max-bytes=" + to_string(chunkBytes) + " ! "
         "audioconvert ! audioresample ! "
-        + sinkElement + " name=ringsink device=" + videoSpeakerDevice + " sync=false buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
+        + sinkElement + " name=ringsink sync=false buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME);
     GError* error = NULL;
     ringPipeline = gst_parse_launch(pipelineString.c_str(), &error);
     if (error) {
@@ -454,6 +458,10 @@ void quietGstAudioLog(const gchar* logDomain, GLogLevelFlags logLevel, const gch
 string createAudioSourceString() {
     // Open Pulse or ALSA for the mic, mute is a live volume gate later
     string source;
+#ifdef __APPLE__
+    cout << "Using the Mac default mic for call." << endl;
+    source = "osxaudiosrc name=robotmic buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME) + " ! ";
+#else
     if (isPulseAudioDevice(videoMicDevice)) {
         cout << "Using Pulse mic " << videoMicDevice << " for call." << endl;
         source = "pulsesrc name=robotmic device=" + videoMicDevice + " buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME) + " ! ";
@@ -461,6 +469,7 @@ string createAudioSourceString() {
         cout << "Using ALSA mic " << videoMicDevice << " for call." << endl;
         source = "alsasrc name=robotmic device=" + videoMicDevice + " buffer-time=" + to_string(VIDEO_AUDIO_BUFFER_TIME) + " latency-time=" + to_string(VIDEO_AUDIO_LATENCY_TIME) + " ! ";
     }
+#endif
 
     // Match the rate the canceller and its probe must share
     string process = "audioconvert name=robotaudioconvert ! audioresample name=robotaudioresample ! audio/x-raw,format=S16LE,rate=" + to_string(VIDEO_AUDIO_RATE) + ",channels=1 ! ";
@@ -567,11 +576,15 @@ void linkRemoteAudioPad(GstElement* pipeline, GstPad* pad) {
     GstElement* reference = gst_element_factory_make("capsfilter", "robotspeakercaps");
     GstElement* volume = gst_element_factory_make("volume", "robotspeakervolume");
     GstElement* sink = NULL;
+#ifdef __APPLE__
+    sink = gst_element_factory_make("osxaudiosink", NULL);
+#else
     if (isPulseAudioDevice(videoSpeakerDevice)) {
         sink = gst_element_factory_make("pulsesink", NULL);
     } else {
         sink = gst_element_factory_make("alsasink", NULL);
     }
+#endif
     if (!queue || !convert || !resample || !reference || !volume || !sink) {
         cout << "Failed to create remote audio sink." << endl;
         return;
@@ -585,7 +598,10 @@ void linkRemoteAudioPad(GstElement* pipeline, GstPad* pad) {
     g_object_set(reference, "caps", referenceCaps, NULL);
     gst_caps_unref(referenceCaps);
     g_object_set(volume, "volume", VIDEO_SPEAKER_VOLUME, NULL);
-    g_object_set(sink, "device", videoSpeakerDevice.c_str(), "sync", TRUE, "buffer-time", (gint64)VIDEO_AUDIO_BUFFER_TIME, "latency-time", (gint64)VIDEO_AUDIO_LATENCY_TIME, NULL);
+#ifndef __APPLE__
+    g_object_set(sink, "device", videoSpeakerDevice.c_str(), NULL);
+#endif
+    g_object_set(sink, "sync", TRUE, "buffer-time", (gint64)VIDEO_AUDIO_BUFFER_TIME, "latency-time", (gint64)VIDEO_AUDIO_LATENCY_TIME, NULL);
 
     // Add the speaker branch and bring it up with the running pipeline
     GstElement* probe = gst_bin_get_by_name(GST_BIN(pipeline), "robotechoprobe");

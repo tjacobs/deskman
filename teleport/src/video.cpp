@@ -658,7 +658,7 @@ string createVideoSourceString() {
     string cameraIndex = activeCameraPath == "/dev/video0" ? "0" : activeCameraPath;
     string payloadType = to_string(videoPayloadType);
     string encoder = getVideoEncoderString();
-    return "avfvideosrc name=robotcam device-index=" + cameraIndex + " ! videoconvert name=robotconvert ! " + encoder + " ! video/x-h264,profile=baseline ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + " ! sendrecv.";
+    return "avfvideosrc name=robotcam device-index=" + cameraIndex + " ! videoconvert name=robotconvert ! " + encoder + " ! video/x-h264,profile=baseline ! h264parse name=robotparse ! rtph264pay name=robotpay config-interval=1 pt=" + payloadType + " ! application/x-rtp,media=video,encoding-name=H264,payload=" + payloadType + createVideoProfileString() + " ! sendrecv.";
 #else
     string payloadType = to_string(videoPayloadType);
     string encoder = getVideoEncoderString();
@@ -994,9 +994,15 @@ void stopVideoPipeline() {
     remoteVideoShowing = false;
     reportRemoteMedia();
     stopCallAudio();
-    if (videoPipeline) gst_element_set_state(videoPipeline, GST_STATE_NULL);
     if (videoWebrtc) gst_object_unref(videoWebrtc);
+#ifdef __APPLE__
+    // Stop off the main thread, the Mac GL window needs the main thread free to close
+    GstElement* oldPipeline = videoPipeline;
+    if (oldPipeline) thread([oldPipeline]() { gst_element_set_state(oldPipeline, GST_STATE_NULL); gst_object_unref(oldPipeline); }).detach();
+#else
+    if (videoPipeline) gst_element_set_state(videoPipeline, GST_STATE_NULL);
     if (videoPipeline) gst_object_unref(videoPipeline);
+#endif
     videoWebrtc = NULL;
     videoPipeline = NULL;
     remoteVideoSink = NULL;
@@ -1463,7 +1469,13 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
             cout << "Using nv3dsink for remote video." << endl;
         } else {
             convert = gst_element_factory_make("videoconvert", NULL);
+#ifdef __APPLE__
+            // Mac has no X display, so draw in a GL window of our own
+            sink = gst_element_factory_make("glimagesink", "remotesink");
+            if (!sink) sink = gst_element_factory_make("osxvideosink", "remotesink");
+#else
             sink = gst_element_factory_make("xvimagesink", "remotesink");
+#endif
             if (!sink) sink = gst_element_factory_make("ximagesink", "remotesink");
             if (!sink) sink = gst_element_factory_make("autovideosink", "remotesink");
         }

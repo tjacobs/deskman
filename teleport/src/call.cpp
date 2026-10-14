@@ -150,7 +150,13 @@ void stopCallInterface() {
 void pollCallInterface() {
     if (!callInterfaceReady.load()) return;
     applyRequestedView();
-    if (!callWindow || !overlayMapped) return;
+
+    // Keep reading window events while hidden, macOS marks an app that stops as not responding
+    if (!callWindow || !overlayMapped) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {}
+        return;
+    }
     pollXTaps();
 #ifdef __linux__
     if (overlayDisplay && overlayXWindow) {
