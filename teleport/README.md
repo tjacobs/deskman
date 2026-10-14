@@ -56,13 +56,16 @@ Set `GST_PLUGIN_PATH=/usr/local/lib/deskman-gstreamer-1.0` to pick up AEC3 echo 
 {
   "deviceId": 4,
   "autoAnswer": 5,
-  "key": "..."
+  "key": "...",
+  "phone": "41562926925"
 }
 ```
 
 The `deviceId` defaults to the number on the end of the hostname. An incoming call rings the speaker and shows a bar along the bottom of the screen. The `autoAnswer` is how many seconds to ring before answering by itself, and `0` makes it ring until someone taps Accept or Decline.
 
 The `key` is made on first run and is this robot's login to the server. The first login with a key claims the robot's name, and after that the server refuses that name with any other key. Keep it, since a new key cannot log in until the old one is cleared from the server's `robot_keys.json`. The file is readable only by its owner.
+
+The `phone` is this robot's phone number, set with `--phone 415-629-2692-5` once and saved here. The server gives the number to the first robot that logs in with it and its key, and no other robot can take it. People call the robot by typing the number on teleportconnect.com/teleport, and robots call each other with `--call <number>`. There is no public list of robots, and the server answers a wrong number and an offline robot the same way, with a limit on failed tries. A robot with no number can still be reached by its name, so set one.
 
 ## Service
 
