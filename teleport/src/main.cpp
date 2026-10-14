@@ -9,6 +9,7 @@
 */
 
 // Includes
+#include <atomic>
 #include <chrono>
 #include <ctime>
 #include <csignal>
@@ -57,6 +58,10 @@ const int PING_INTERVAL_SECONDS = 1;
 const int SOCKET_PING_SECONDS = 10;
 const uint32_t RECONNECT_WAIT_MILLISECONDS = 10000;
 
+// When the server refuses the login, wait then try once more, then give up
+const int LOGIN_RETRY_WAIT_SECONDS = 60;
+const int LOGIN_RETRY_MAX_TRIES = 2;
+
 // Repeat an unchanged connection error only after this wait, retries are much more often
 const int CONNECTION_ERROR_REPEAT_SECONDS = 300;
 
@@ -95,6 +100,11 @@ time_t lastPing = 0;
 bool running = true;
 string lastConnectionError;
 steady_clock::time_point lastConnectionErrorAt{};
+atomic<bool> loginRefused{false};
+atomic<int> loginRefusals{0};
+bool loginWaiting = false;
+bool loginGaveUp = false;
+steady_clock::time_point loginRetryAt;
 
 // Declare functions
 int main(int argumentCount, char** argumentValues);
@@ -109,6 +119,7 @@ void signalHandler(int signalNumber);
 void connectWebSocket();
 void runMainLoop();
 void sendPing();
+void pollLoginRetry();
 void logConnectionError(const string& reason);
 void handleWebSocketMessage(const WebSocketMessagePtr& message);
 void handleTextMessage(const string& text);
@@ -363,6 +374,7 @@ void runMainLoop() {
     // Keep process alive
     while (running) {
         sendPing();
+        pollLoginRetry();
         pollInterfaceCommands();
         pollLook();
         pollRingingCall();
@@ -395,8 +407,43 @@ void sendPing() {
     lastPing = now;
 }
 
+// Stop and retry after a refused login, and give up after the last try
+void pollLoginRetry() {
+    // Retry once the wait is over
+    if (loginWaiting) {
+        if (steady_clock::now() < loginRetryAt) return;
+        loginWaiting = false;
+        cout << "Trying to log in again." << endl;
+        webSocket.start();
+        return;
+    }
+
+    // Wait for the server to refuse a login
+    if (loginGaveUp || !loginRefused.exchange(false)) return;
+
+    // Stop the connection so it cannot retry on its own
+    webSocket.stop();
+    loginRefused = false;
+    loginRefusals++;
+
+    // Give up after the last try
+    if (loginRefusals >= LOGIN_RETRY_MAX_TRIES) {
+        loginGaveUp = true;
+        cout << "Login refused again, giving up. Fix the key or phone number in config.json, then restart teleport." << endl;
+        return;
+    }
+
+    // Wait before the next try
+    loginRetryAt = steady_clock::now() + seconds(LOGIN_RETRY_WAIT_SECONDS);
+    loginWaiting = true;
+    cout << "Login refused, trying again in " << LOGIN_RETRY_WAIT_SECONDS << " seconds." << endl;
+}
+
 // Log a connection error, and skip repeats of the same one until the wait has passed
 void logConnectionError(const string& reason) {
+    // Skip the error our own stop causes
+    if (reason.find("Cancelled") != string::npos) return;
+
     auto now = steady_clock::now();
     bool same = reason == lastConnectionError;
     if (same && now - lastConnectionErrorAt < seconds(CONNECTION_ERROR_REPEAT_SECONDS)) {
@@ -481,6 +528,7 @@ void handleCommand(const string& command, const string& commandArgument, const s
     // Confirm login
     else if (command == "LOGIN_OK") {
         cout << "Logged in." << endl;
+        loginRefusals = 0;
 
         // Dial peer robot when --call was set
         if (!callPeer.empty()) {
@@ -495,6 +543,7 @@ void handleCommand(const string& command, const string& commandArgument, const s
     // Say why login failed, another robot already holds this name with a different key
     else if (command == "LOGIN_FAILED") {
         cout << "Login refused, the server has a different key for " << deviceName << ", or the phone number belongs to another robot." << endl;
+        loginRefused = true;
     }
 
     // The number reached nothing, a wrong number and a robot that is offline look the same
