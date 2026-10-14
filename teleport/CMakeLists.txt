@@ -1,6 +1,6 @@
 # Configure CMake
 set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "" FORCE)
-cmake_minimum_required(VERSION 3.7)
+cmake_minimum_required(VERSION 3.10)
 
 # Create project
 project(robot)
@@ -35,6 +35,10 @@ endif()
 message(STATUS "GStreamer WebRTC found")
 
 # Warn when the nice plugin is missing, WebRTC needs it to connect
+# Use the gst-inspect that comes with the GStreamer we build against, conda and others can put a different one first on the path
+pkg_get_variable(GST_TOOLS_DIR gstreamer-1.0 toolsdir)
+unset(GST_INSPECT CACHE)
+find_program(GST_INSPECT gst-inspect-1.0 HINTS "${GST_TOOLS_DIR}" NO_DEFAULT_PATH)
 find_program(GST_INSPECT gst-inspect-1.0)
 if(GST_INSPECT)
   execute_process(COMMAND ${GST_INSPECT} nicesrc RESULT_VARIABLE GST_NICE_RESULT OUTPUT_QUIET ERROR_QUIET)
