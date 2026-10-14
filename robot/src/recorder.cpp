@@ -175,8 +175,10 @@ bool start_recording(const string& directory, int cameraIndex) {
         return false;
     }
 
-    // Grow the pipe to hold a whole frame
+    // Grow the pipe to hold a whole frame, only Linux can
+#ifdef F_SETPIPE_SZ
     fcntl(previewPipe[0], F_SETPIPE_SZ, PREVIEW_PIPE_BYTES);
+#endif
 
     // Hand the strings to exec as a plain array
     vector<char*> commandLine;

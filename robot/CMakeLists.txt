@@ -5,6 +5,15 @@ set(TARGET_NAME robot)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Use Homebrew OpenCV 4 on Mac, OpenCV 5 dropped the face cascade classifier
+if(APPLE)
+    foreach(prefix /opt/homebrew/opt/opencv@4 /usr/local/opt/opencv@4)
+        if(EXISTS "${prefix}")
+            list(APPEND CMAKE_PREFIX_PATH "${prefix}")
+        endif()
+    endforeach()
+endif()
+
 find_package(OpenCV REQUIRED)
 
 add_executable(${TARGET_NAME}

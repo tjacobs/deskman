@@ -43,6 +43,8 @@ static const int DETECT_MAX_FACE = 300;
 // Where OpenCV keeps its Haar cascades, Linux first then Mac
 static const char* CASCADE_PATHS[] = {
     "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+    "/opt/homebrew/opt/opencv@4/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
+    "/usr/local/opt/opencv@4/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
     "/opt/homebrew/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
 };
 
