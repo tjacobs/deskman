@@ -769,12 +769,30 @@ static int sweep_servo_test(bool no_servos) {
     return 0;
 }
 
-// Move the hat once when talk starts or stops listening, or a call connects or ends
+// Move the hat once when talk starts or stops listening, or a call connects or ends, and center the head when a call connects or ends or talk goes back to idle
 static void apply_listen_hat() {
     static bool hat_set = false;
     static bool hat_raised = false;
-    bool raised = listen_open() || call_open();
-    if (sweeping() || (hat_set && raised == hat_raised)) {
+    static bool call_was_open = false;
+    bool call = call_open();
+    bool raised = listen_open() || call;
+    if (sweeping()) {
+        return;
+    }
+
+    // Point the head straight ahead with the hat when a call connects or ends, or listening stops
+    bool call_changed = call != call_was_open;
+    bool went_idle = hat_set && hat_raised && !raised;
+    call_was_open = call;
+    if (call_changed || went_idle) {
+        hat_set = true;
+        hat_raised = raised;
+        set_degrees(0, 0, raised ? HAT_LISTEN_DEGREES : HAT_IDLE_DEGREES);
+        return;
+    }
+
+    // Move only the hat when listening starts or stops
+    if (hat_set && raised == hat_raised) {
         return;
     }
     hat_set = true;

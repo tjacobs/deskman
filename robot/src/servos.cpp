@@ -871,8 +871,12 @@ void set_degrees(int pan, int tilt, int hat) {
     // Lean the drawn face the same way the head turned
     face.lookTiltX = -LOOK_FACE_PAN * static_cast<float>(pan) / PAN_FULL_DEGREES;
     face.lookTiltY = 0.0f;
-    printf("Move head to pan %d, tilt %d, hat %d\n", pan, tilt, hat);
-    fflush(stdout);
+
+    // Say where the head went, except for the level center pose
+    if (pan != 0 || tilt != 0 || hat != 0) {
+        printf("Move head to pan %d, tilt %d, hat %d\n", pan, tilt, hat);
+        fflush(stdout);
+    }
     move_servos();
 }
 
