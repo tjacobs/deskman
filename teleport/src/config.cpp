@@ -91,7 +91,7 @@ TeleportConfig loadConfig() {
 
     // Treat a negative wait as waiting for Accept
     if (config.autoAnswer < 0) config.autoAnswer = 0;
-    if (config.deviceId < 1) config.deviceId = hostnameDeviceId();
+    if (config.deviceId < 0) config.deviceId = hostnameDeviceId();
     return config;
 }
 
@@ -152,7 +152,6 @@ static int hostnameDeviceId() {
     while (start > 0 && isdigit(static_cast<unsigned char>(name[start - 1]))) start--;
     if (start == end) return FALLBACK_DEVICE_ID;
     int deviceId = atoi(name.c_str() + start);
-    if (deviceId < 1) return FALLBACK_DEVICE_ID;
     return deviceId;
 }
 

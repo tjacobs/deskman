@@ -49,7 +49,8 @@ const char* LOCAL_SERVER_URL = "ws://127.0.0.1:8080";
 // Configure camera
 const char* DEFAULT_CAMERA_PATH = "0";
 
-// Configure device ID
+// Configure device ID, no device argument given
+const int NO_DEVICE_ARGUMENT = -1;
 const char* DEVICE_NAME_PREFIX = "deskman";
 const char* BINARY_NAME = "teleport";
 
@@ -80,7 +81,7 @@ const char* DEFAULT_DISPLAY = ":0";
 
 // Track runtime state
 int deviceId = FALLBACK_DEVICE_ID;
-int argumentDeviceId = 0;
+int argumentDeviceId = NO_DEVICE_ARGUMENT;
 string argumentPhone;
 string serverUrl = DEFAULT_SERVER_URL;
 string cameraPath = DEFAULT_CAMERA_PATH;
@@ -153,7 +154,7 @@ int main(int argumentCount, char** argumentValues) {
     else cout << "Phone number " << settings.phone << "." << endl;
 
     // Name this device, the argument wins over config.json
-    deviceId = argumentDeviceId > 0 ? argumentDeviceId : settings.deviceId;
+    deviceId = argumentDeviceId != NO_DEVICE_ARGUMENT ? argumentDeviceId : settings.deviceId;
     deviceName = DEVICE_NAME_PREFIX + to_string(deviceId);
 
     // Point HDMI video at the local screen when DISPLAY is unset
