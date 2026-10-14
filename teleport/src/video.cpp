@@ -80,6 +80,12 @@ const char* CONSTRAINED_BASELINE_PROFILE = "42e01f";
 // nvvidconv compute-hw value for the GPU, the VIC path rejects RGB and BGR
 static const int REMOTE_CONVERT_GPU = 1;
 
+// Longest side of the remote picture handed to the display, the display copy breaks when the size changes mid stream
+static const int REMOTE_VIDEO_LONG_SIDE = 1280;
+
+// Spare references to the default memory allocator, one is lost at every video stop
+static const int ALLOCATOR_SPARE_REFERENCES = 100000;
+
 // Candidates wait here for a remote description, through ringing and pipeline rebuilds, until the call ends
 vector<string> pendingVideoAddresses;
 
@@ -205,6 +211,8 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData);
 bool remoteSinkKeepsAspect(GstElement* sink);
 void applyRemoteVideoLetterbox();
 GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
+GstPadProbeReturn logRemoteVideoSize(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
+void holdSpareAllocatorReferences();
 gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData);
 GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer userData);
 GstPadProbeReturn logFirstCameraBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
@@ -464,6 +472,9 @@ bool initVideoBackend() {
         return false;
     }
 
+    // Keep the display sink from freeing the allocator, which crashes later calls
+    holdSpareAllocatorReferences();
+
     // Quiet expected audio setup noise
     quietCallAudioLog();
 
@@ -480,6 +491,19 @@ bool initVideoBackend() {
     videoLoopThread.detach();
     videoBackendReady = true;
     return true;
+}
+
+// Hold spare references to the default memory allocator, the Jetson display sink releases it once too often at every stop
+void holdSpareAllocatorReferences() {
+    GstAllocator* allocator = gst_allocator_find(NULL);
+    if (!allocator) {
+        return;
+    }
+
+    // Each stop uses up one, so the allocator outlives any number of calls
+    for (int count = 0; count < ALLOCATOR_SPARE_REFERENCES; count++) {
+        gst_object_ref(allocator);
+    }
 }
 
 // Run video loop
@@ -1448,7 +1472,13 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
     const gchar* mediaName = gst_structure_get_name(structure);
     bool isVideo = g_str_has_prefix(mediaName, "video/");
     bool isAudio = g_str_has_prefix(mediaName, "audio/");
-    cout << "Decoded remote stream " << (mediaName ? mediaName : "?") << endl;
+
+    // Read the first picture size before the caps go away, zero when the decoder has not set one
+    int decodedWidth = 0;
+    int decodedHeight = 0;
+    gst_structure_get_int(structure, "width", &decodedWidth);
+    gst_structure_get_int(structure, "height", &decodedHeight);
+    cout << "Decoded remote stream " << (mediaName ? mediaName : "?") << " " << decodedWidth << "x" << decodedHeight << endl;
     gst_caps_unref(caps);
     if (!isVideo && !isAudio) return;
 
@@ -1490,7 +1520,16 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
             g_object_set(convert, "compute-hw", REMOTE_CONVERT_GPU, NULL);
             formatFilter = gst_element_factory_make("capsfilter", NULL);
             if (formatFilter) {
-                GstCaps* caps = gst_caps_from_string("video/x-raw,format=RGBA");
+                // Hold the picture to one size, the converter scales a later size change, and the display copy never sees it
+                string filterText = "video/x-raw,format=RGBA";
+                if (decodedWidth > 0 && decodedHeight > 0) {
+                    int longSide = max(decodedWidth, decodedHeight);
+                    int heldWidth = max(2, (decodedWidth * REMOTE_VIDEO_LONG_SIDE / longSide) & ~1);
+                    int heldHeight = max(2, (decodedHeight * REMOTE_VIDEO_LONG_SIDE / longSide) & ~1);
+                    filterText += ",width=" + to_string(heldWidth) + ",height=" + to_string(heldHeight);
+                    cout << "Remote video held at " << heldWidth << "x" << heldHeight << endl;
+                }
+                GstCaps* caps = gst_caps_from_string(filterText.c_str());
                 g_object_set(formatFilter, "caps", caps, NULL);
                 gst_caps_unref(caps);
             }
@@ -1531,6 +1570,9 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
         // Watch the frames, a peer turning its camera off just stops sending
         remoteVideoBufferTimeUs = g_get_monotonic_time();
         gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, noteRemoteVideoBuffer, NULL, NULL);
+
+        // Log each size change in the incoming picture
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, logRemoteVideoSize, NULL, NULL);
         startRemoteVideoIdleTimer();
         return;
     }
@@ -1586,6 +1628,26 @@ GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer
     remoteVideoWidth = GST_VIDEO_INFO_WIDTH(&videoInfo);
     remoteVideoHeight = GST_VIDEO_INFO_HEIGHT(&videoInfo);
     applyRemoteVideoLetterbox();
+    return GST_PAD_PROBE_OK;
+}
+
+// Log each size the remote picture arrives at, a browser lowers it when the connection is slow
+GstPadProbeReturn logRemoteVideoSize(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
+    (void)pad;
+    (void)userData;
+    GstEvent* event = gst_pad_probe_info_get_event(info);
+    if (!event || GST_EVENT_TYPE(event) != GST_EVENT_CAPS) {
+        return GST_PAD_PROBE_OK;
+    }
+
+    // Read the size from the new caps
+    GstCaps* caps = NULL;
+    gst_event_parse_caps(event, &caps);
+    GstVideoInfo videoInfo;
+    if (!caps || !gst_video_info_from_caps(&videoInfo, caps)) {
+        return GST_PAD_PROBE_OK;
+    }
+    cout << "Remote video size " << GST_VIDEO_INFO_WIDTH(&videoInfo) << "x" << GST_VIDEO_INFO_HEIGHT(&videoInfo) << endl;
     return GST_PAD_PROBE_OK;
 }
 
