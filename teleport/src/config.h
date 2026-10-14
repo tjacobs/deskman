@@ -21,8 +21,12 @@ struct TeleportConfig {
     int autoAnswer = AUTO_ANSWER_SECONDS;
     int deviceId;
     std::string key;
+    std::string phone;
     bool loaded = true;
 };
+
+// Keep only the digits of a phone number, so 415 629 2692 5 and 41562926925 are the same
+std::string normalizePhone(const std::string& text);
 
 // Read and write config.json in the project directory, one level above the binary
 TeleportConfig loadConfig();

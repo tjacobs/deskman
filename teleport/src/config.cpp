@@ -76,6 +76,7 @@ TeleportConfig loadConfig() {
         if (settings.contains("autoAnswer")) config.autoAnswer = settings["autoAnswer"].get<int>();
         if (settings.contains("deviceId")) config.deviceId = settings["deviceId"].get<int>();
         if (settings.contains("key")) config.key = settings["key"].get<string>();
+        if (settings.contains("phone")) config.phone = normalizePhone(settings["phone"].get<string>());
     } catch (const exception& error) {
         cerr << "Failed to parse config.json: " << error.what() << endl;
         config.loaded = false;
@@ -92,6 +93,15 @@ TeleportConfig loadConfig() {
     if (config.autoAnswer < 0) config.autoAnswer = 0;
     if (config.deviceId < 1) config.deviceId = hostnameDeviceId();
     return config;
+}
+
+// Keep only the digits of a phone number
+string normalizePhone(const string& text) {
+    string digits;
+    for (char letter : text) {
+        if (isdigit(static_cast<unsigned char>(letter))) digits += letter;
+    }
+    return digits;
 }
 
 // Make and save a key when the file has none, a robot keeps its key for good after that
@@ -171,7 +181,7 @@ static void migrateDeviceIdFile(TeleportConfig& config) {
 // Write config.json in the project directory
 void saveConfig(const TeleportConfig& config) {
     try {
-        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}, {"key", config.key}};
+        json settings = {{"autoAnswer", config.autoAnswer}, {"deviceId", config.deviceId}, {"key", config.key}, {"phone", config.phone}};
         string path = configFilePath();
         string temporaryPath = path + ".tmp";
         ofstream out(temporaryPath);

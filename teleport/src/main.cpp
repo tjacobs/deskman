@@ -76,6 +76,7 @@ const char* DEFAULT_DISPLAY = ":0";
 // Track runtime state
 int deviceId = FALLBACK_DEVICE_ID;
 int argumentDeviceId = 0;
+string argumentPhone;
 string serverUrl = DEFAULT_SERVER_URL;
 string cameraPath = DEFAULT_CAMERA_PATH;
 string deviceName;
@@ -130,6 +131,15 @@ int main(int argumentCount, char** argumentValues) {
     settings = loadConfig();
     if (settings.autoAnswer > 0) cout << "Auto-answering calls after " << settings.autoAnswer << " seconds." << endl;
     else cout << "Auto-answer off, calls wait for Accept." << endl;
+
+    // Take a phone number from the command line and keep it in config.json
+    if (!argumentPhone.empty() && normalizePhone(argumentPhone) != settings.phone) {
+        settings.phone = normalizePhone(argumentPhone);
+        saveConfig(settings);
+        cout << "Saved phone number " << settings.phone << " to config.json." << endl;
+    }
+    if (settings.phone.empty()) cout << "No phone number set, add one with --phone <number> so only people with it can call." << endl;
+    else cout << "Phone number " << settings.phone << "." << endl;
 
     // Name this device, the argument wins over config.json
     deviceId = argumentDeviceId > 0 ? argumentDeviceId : settings.deviceId;
@@ -208,6 +218,11 @@ void parseArgs(int argumentCount, char** argumentValues) {
         // Set device number, this beats the one in config.json
         else if (argument == "--device" && index + 1 < argumentCount) {
             argumentDeviceId = atoi(argumentValues[++index]);
+        }
+
+        // Set this robot's phone number, it is saved in config.json
+        else if (argument == "--phone" && index + 1 < argumentCount) {
+            argumentPhone = argumentValues[++index];
         }
 
         // Set server URL
@@ -333,7 +348,8 @@ void printHelp() {
     cout << "Options:" << endl;
     cout << "  -h, --help              Show this help" << endl;
     cout << "  --device <n>            Device number, login as deskman<n>" << endl;
-    cout << "  --call <peer>           Call peer after login, e.g. deskman2" << endl;
+    cout << "  --phone <number>        This robot's phone number, saved in config.json" << endl;
+    cout << "  --call <number>         Call a phone number after login, e.g. 4156292692" << endl;
     cout << "  --mute, --mute-mic      Start with the call mic muted, this is the default" << endl;
     cout << "  --no-mute               Start with the call mic on" << endl;
     cout << "  --server <url>          WebSocket server URL" << endl;
@@ -401,7 +417,8 @@ void handleWebSocketMessage(const WebSocketMessagePtr& message) {
     if (message->type == WebSocketMessageType::Open) {
         lastConnectionError.clear();
         cout << "Connected." << endl;
-        webSocket.send(deviceName + " LOGIN robot " + settings.key);
+        string phoneSuffix = settings.phone.empty() ? "" : " " + settings.phone;
+        webSocket.send(deviceName + " LOGIN robot " + settings.key + phoneSuffix);
     }
 
     // Log close
@@ -477,7 +494,21 @@ void handleCommand(const string& command, const string& commandArgument, const s
 
     // Say why login failed, another robot already holds this name with a different key
     else if (command == "LOGIN_FAILED") {
-        cout << "Login refused, the server has a different key for " << deviceName << "." << endl;
+        cout << "Login refused, the server has a different key for " << deviceName << ", or the phone number belongs to another robot." << endl;
+    }
+
+    // The number reached nothing, a wrong number and a robot that is offline look the same
+    else if (command == "DIAL_FAILED") {
+        cout << "That number is not available." << endl;
+        stopVideo();
+        showCallFailed("Number not available");
+    }
+
+    // Too many numbers tried in a row
+    else if (command == "DIAL_LIMIT") {
+        cout << "Too many numbers tried, wait a few minutes." << endl;
+        stopVideo();
+        showCallFailed("Too many tries, wait");
     }
 
     // Reply to latency check
