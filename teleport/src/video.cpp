@@ -9,7 +9,9 @@
 #include <cstring>
 #include <climits>
 #include <fstream>
+#include <chrono>
 #include <iostream>
+#include <memory>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -140,6 +142,7 @@ const int CANDIDATE_DROP_HANGOVER_MS = 3000;
 const int REMOTE_VIDEO_IDLE_MS = 1500;
 const int REMOTE_VIDEO_POLL_MS = 500;
 const int PEER_SILENCE_HANGUP_MS = 20000;
+const int PIPELINE_STOP_TIMEOUT_SECONDS = 8;
 const int VIDEO_BITRATE_START = 500;
 const int VIDEO_BITRATE_MINIMUM = 300;
 const double VIDEO_BITRATE_CUT_RATIO = 0.7;
@@ -1079,8 +1082,18 @@ void stopVideoPipeline() {
     GstElement* oldPipeline = videoPipeline;
     if (oldPipeline) thread([oldPipeline]() { gst_element_set_state(oldPipeline, GST_STATE_NULL); gst_object_unref(oldPipeline); }).detach();
 #else
+    // Restart teleport rather than hang the call if stopping deadlocks, the Jetson decoder did this, and we no longer use it so this may not be needed
+    auto stopped = make_shared<atomic<bool>>(false);
+    thread([stopped]() {
+        this_thread::sleep_for(chrono::seconds(PIPELINE_STOP_TIMEOUT_SECONDS));
+        if (stopped->load()) return;
+        cout << "Video pipeline would not stop, restarting teleport." << endl;
+        resumeInterfaceAfterCall();
+        abort();
+    }).detach();
     if (videoPipeline) gst_element_set_state(videoPipeline, GST_STATE_NULL);
     if (videoPipeline) gst_object_unref(videoPipeline);
+    stopped->store(true);
 #endif
     videoWebrtc = NULL;
     videoPipeline = NULL;
