@@ -97,6 +97,7 @@ static int startupStderr = -1;
 static pid_t recorderPid = -1;
 static steady_clock::time_point recorderStart;
 static string recorderPath;
+static int recorderCard = 0;
 
 // The frames coming back from ffmpeg, and the thread that reads them
 static thread previewThread;
@@ -110,7 +111,6 @@ static string shortPath(const string& path);
 static void readPreviewFrames();
 static bool readExactly(int fd, unsigned char* buffer, size_t wanted);
 static void stopPreviewReader();
-static string microphoneDevice();
 static int microphoneCard();
 static bool cardCanCapture(int card);
 static bool cardCanPlay(int card);
@@ -142,7 +142,8 @@ bool start_recording(const string& directory, int cameraIndex) {
 
     // Name the camera, the microphone, and the file this recording writes
     string cameraDevice = "/dev/video" + to_string(cameraIndex);
-    string microphone = microphoneDevice();
+    recorderCard = microphoneCard();
+    string microphone = SHARED_CAPTURE_PREFIX + to_string(recorderCard) + SHARED_CAPTURE_SUFFIX;
     string path = recordingFilePath(directory);
 
     // Pick the size for this board
@@ -291,11 +292,6 @@ static string recordingFilePath(const string& directory) {
     return directory + "/video_" + stamp + ".mp4";
 }
 
-// Name the shared capture device for the USB microphone
-static string microphoneDevice() {
-    return SHARED_CAPTURE_PREFIX + to_string(microphoneCard()) + SHARED_CAPTURE_SUFFIX;
-}
-
 // Find the USB dongle, a camera card records nothing worth keeping
 static int microphoneCard() {
     // Read the card list, keeping the number from every USB line
@@ -415,8 +411,14 @@ void reap_recording() {
     if (recorderPid <= 0)
         return;
     int status = 0;
-    if (waitpid(recorderPid, &status, WNOHANG) != recorderPid)
+    if (waitpid(recorderPid, &status, WNOHANG) != recorderPid) {
+        // Stop a recording whose sound card was unplugged, ffmpeg can spin on the dead card instead of ending
+        if (access(("/proc/asound/card" + to_string(recorderCard)).c_str(), F_OK) != 0) {
+            cout << "Sound card unplugged, stopping the recording." << endl;
+            stop_recording();
+        }
         return;
+    }
 
     // Say where it landed, a recording that ran to the cap is still a good file
     stopPreviewReader();
