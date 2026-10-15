@@ -12,6 +12,8 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <netdb.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
@@ -137,6 +139,8 @@ const int LIBCAMERA_WIDTH = VIDEO_WIDTH;
 const int LIBCAMERA_HEIGHT = VIDEO_HEIGHT;
 const int LIBCAMERA_FRAMERATE = 30;
 const int VIDEO_STATE_TIMEOUT_SECONDS = 2;
+const char* STUN_HOST = "stun.l.google.com";
+const char* STUN_PORT = "19302";
 const int SENDER_CAPS_WAIT_MS = 2000;
 const int SENDER_CAPS_POLL_MS = 50;
 const int VIDEO_CLOCK_RATE = 90000;
@@ -165,6 +169,7 @@ void runVideoLoop();
 void startVideoPipeline();
 bool startParsedVideoPipeline(string pipelineString);
 string createPipelineString(bool withAudio);
+string findStunServer();
 string createVideoSourceString();
 string createVideoProfileString();
 string getCameraDevice();
@@ -669,10 +674,23 @@ bool isVideoCameraAvailable() {
 // Create pipeline string
 string createPipelineString(bool withAudio) {
     // Build webrtcbin with local video, and optional mic audio
-    string pipeline = "webrtcbin bundle-policy=max-bundle name=sendrecv latency=20 stun-server=stun://stun.l.google.com:19302 "
+    string pipeline = "webrtcbin bundle-policy=max-bundle name=sendrecv latency=20 stun-server=" + findStunServer() + " "
         + createVideoSourceString();
     if (withAudio) pipeline += " " + createAudioSourceString();
     return pipeline;
+}
+
+// Name the public STUN server by its IPv4 address, a hostname that resolves to IPv6 first leaves the IPv4 route with no public address
+string findStunServer() {
+    string server = string("stun://") + STUN_HOST + ":" + STUN_PORT;
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    struct addrinfo* result = NULL;
+    if (getaddrinfo(STUN_HOST, STUN_PORT, &hints, &result) != 0) return server;
+    char address[INET_ADDRSTRLEN] = "";
+    getnameinfo(result->ai_addr, result->ai_addrlen, address, sizeof(address), NULL, 0, NI_NUMERICHOST);
+    freeaddrinfo(result);
+    return string("stun://") + address + ":" + STUN_PORT;
 }
 
 // Create local video source branch
@@ -1347,6 +1365,12 @@ void handleVideoAddress(string payload) {
     int mediaLineIndex = json_object_get_int_member(object, "sdpMLineIndex");
 
     if (!candidate || !candidate[0]) {
+        json_object_unref(object);
+        return;
+    }
+
+    // Skip browser hidden names, they cannot be looked up here and each one stalls signaling for seconds
+    if (strstr(candidate, ".local ")) {
         json_object_unref(object);
         return;
     }
