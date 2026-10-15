@@ -88,9 +88,6 @@ static const int REMOTE_CONVERT_GPU = 1;
 // Longest side of the remote picture handed to the display, the display copy breaks when the size changes mid stream
 static const int REMOTE_VIDEO_LONG_SIDE = 1280;
 
-// Spare references to the default memory allocator, one is lost at every video stop
-static const int ALLOCATOR_SPARE_REFERENCES = 100000;
-
 // Candidates wait here for a remote description, through ringing and pipeline rebuilds, until the call ends
 vector<string> pendingVideoAddresses;
 
@@ -247,7 +244,6 @@ gboolean clearRemoteVideoBars(gpointer userData);
 #endif
 GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 GstPadProbeReturn logRemoteVideoSize(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
-void holdSpareAllocatorReferences();
 gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData);
 void requestPeerLoss();
 void readPeerLoss(GstPromise* promise, gpointer userData);
@@ -517,9 +513,6 @@ bool initVideoBackend() {
         gst_object_unref(hardwareDecoder);
     }
 
-    // Keep the display sink from freeing the allocator, which crashes later calls
-    holdSpareAllocatorReferences();
-
     // Quiet expected audio setup noise
     quietCallAudioLog();
 
@@ -536,19 +529,6 @@ bool initVideoBackend() {
     videoLoopThread.detach();
     videoBackendReady = true;
     return true;
-}
-
-// Hold spare references to the default memory allocator, the Jetson display sink releases it once too often at every stop
-void holdSpareAllocatorReferences() {
-    GstAllocator* allocator = gst_allocator_find(NULL);
-    if (!allocator) {
-        return;
-    }
-
-    // Each stop uses up one, so the allocator outlives any number of calls
-    for (int count = 0; count < ALLOCATOR_SPARE_REFERENCES; count++) {
-        gst_object_ref(allocator);
-    }
 }
 
 // Run video loop
