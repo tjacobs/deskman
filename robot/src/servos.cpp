@@ -65,8 +65,14 @@ static const int SERVO_MIN_STARTUP_REGISTER = 24;
 // How often to try the servo port again after its adapter was unplugged
 static const int SERVO_REOPEN_MS = 1000;
 
-// Softer position gain than the factory one, which makes the head shake around its target
-static const int SERVO_P_GAIN = 16;
+// Softer position gain than the factory one, which makes the head shake around its target, and lets it be pushed by hand
+static const int SERVO_P_GAIN = 8;
+
+// How far a servo must be knocked to count as pushed, what counts as still, and how many polls of stillness end a push
+static const int SERVO_PUSH_POLL_MS = 50;
+static const int SERVO_PUSH_AMOUNT_COUNTS = 12;
+static const int SERVO_PUSH_STILL_COUNTS = 3;
+static const int SERVO_PUSH_RELEASE_CYCLES = 10;
 
 // Sweep around center, narrow first then wide, and slower than normal
 static const int SWEEP_NUDGE_PERCENT = 20;
@@ -99,7 +105,7 @@ static const int HEAD_KEY_TILT_DEGREES = 8;
 static const int HEAD_KEY_HAT_DEGREES = 8;
 static const int HEAD_KEY_FACE_LOOK = 5;
 
-// One servo, its angle range, then the counts and state filled in at open
+// One servo, its angle range, then the counts and state filled in at open, and what the push watch keeps
 struct Servo {
     int id;
     const char *name;
@@ -109,6 +115,11 @@ struct Servo {
     int min_limit;
     int max_limit;
     bool found;
+    bool pushed;
+    int goal;
+    int rest;
+    int last_position;
+    int wait;
 };
 
 // Pan, tilt, and hat, open_servos fills the count limits in from config.json
@@ -131,6 +142,10 @@ static bool servos_enabled = true;
 static atomic<bool> servo_position_log_running{false};
 static thread servo_position_log_thread;
 
+// The thread that watches for pushes
+static atomic<bool> servo_push_running{false};
+static thread servo_push_thread;
+
 // Serial port, USB adapter or onboard UART
 static string port_name = servo_port_name();
 static SerialPort serial(port_name);
@@ -149,6 +164,8 @@ static int degrees_to_servo(const Servo &servo, float degrees);
 static void probe_known_servos();
 static bool detect_servo(Servo &servo);
 static void standardize_servo_tuning(Servo &servo);
+static void follow_pushes();
+static void follow_push(Servo &servo, int position);
 [[maybe_unused]] static void print_servo_tuning(Servo &servo);
 static bool reopen_servo_port();
 static bool servo_answers();
@@ -421,11 +438,90 @@ void move_servos() {
     if (!serial.isOpen() && !reopen_servo_port())
         return;
 
-    // Clamp and write only the servos that answered at open
+    // Clamp and write only the servos that answered at open, a pushed servo is left to follow the hand
     for (Servo &servo : servos) {
         servo.position = clamp_to_range(servo.position, servo.min_limit, servo.max_limit);
-        if (servo.found)
+        if (servo.found && !servo.pushed)
             servo_bus.WritePosEx(servo.id, servo.position, SERVO_SPEED, SERVO_ACCELERATION);
+    }
+}
+
+// Watch for a hand pushing the head, until stop_servo_push_follow
+void start_servo_push_follow() {
+    // Run only one watch
+    if (servo_push_running)
+        return;
+
+    // Poll the servos on a thread until stopped
+    servo_push_running = true;
+    servo_push_thread = thread([]() {
+        while (servo_push_running) {
+            follow_pushes();
+            sleep_for(milliseconds(SERVO_PUSH_POLL_MS));
+        }
+    });
+}
+
+// Stop the push watch
+void stop_servo_push_follow() {
+    // Ask the thread to end, then wait for it
+    servo_push_running = false;
+    if (servo_push_thread.joinable())
+        servo_push_thread.join();
+}
+
+// Read every servo once, and let each follow a push on it
+static void follow_pushes() {
+    // Hold the servo bus while it is read
+    lock_guard<recursive_mutex> lock(servo_mutex);
+
+    // Skip while relaxed or unplugged
+    if (!servos_enabled || !servo_bus.pSerial || !serial.isOpen())
+        return;
+
+    // Read each servo that answered at open, and judge it
+    for (Servo &servo : servos) {
+        if (servo.found && servo_bus.FeedBack(servo.id) != -1)
+            follow_push(servo, servo_bus.ReadPos(-1));
+    }
+}
+
+// Decide if this servo is being pushed, and follow the hand until it stops
+static void follow_push(Servo &servo, int position) {
+    // Measure how far it moved, and whether it came closer to its goal
+    int moved = abs(position - servo.last_position);
+    bool closing = abs(position - servo.position) < abs(servo.last_position - servo.position);
+    servo.last_position = position;
+
+    // Count down the wait
+    if (servo.wait > 0)
+        servo.wait--;
+
+    // Carry the goal along with the hand, and let go once it has been still a while
+    if (servo.pushed) {
+        if (moved > SERVO_PUSH_STILL_COUNTS)
+            servo.wait = SERVO_PUSH_RELEASE_CYCLES;
+        servo.position = clamp_to_range(position, servo.min_limit, servo.max_limit);
+        servo_bus.WritePosEx(servo.id, servo.position, SERVO_SPEED, SERVO_ACCELERATION);
+        if (servo.wait == 0) {
+            servo.pushed = false;
+            servo.rest = position;
+            servo.goal = servo.position;
+            printf("Released %s, holding at %d\n", servo.name, servo.position);
+        }
+        return;
+    }
+
+    // A new goal or a servo closing on its goal explains the motion, so note where it is, it may stop short of the goal
+    if (servo.position != servo.goal || closing)
+        servo.rest = position;
+    servo.goal = servo.position;
+
+    // Take a servo knocked far from where it rested as pushed
+    if (abs(position - servo.rest) > SERVO_PUSH_AMOUNT_COUNTS) {
+        servo.pushed = true;
+        servo.wait = SERVO_PUSH_RELEASE_CYCLES;
+        printf("Pushed %s, amount %d, following\n", servo.name, position - servo.rest);
     }
 }
 
@@ -859,6 +955,10 @@ static float servo_to_degrees(const Servo &servo, int position) {
 // Set pan, tilt, and hat from degrees, clamp to each axis range
 void set_degrees(int pan, int tilt, int hat) {
     lock_guard<recursive_mutex> lock(servo_mutex);
+
+    // A commanded pose takes over from any push
+    for (Servo &servo : servos)
+        servo.pushed = false;
     servos[0].position = degrees_to_servo(servos[0], pan);
     servos[1].position = degrees_to_servo(servos[1], tilt);
     servos[2].position = degrees_to_servo(servos[2], hat);
@@ -883,6 +983,9 @@ void set_degrees(int pan, int tilt, int hat) {
 // Set only the hat from degrees, leaving the head and the drawn face where they are
 void set_hat_degrees(int hat) {
     lock_guard<recursive_mutex> lock(servo_mutex);
+
+    // A commanded hat takes over from any push
+    servos[2].pushed = false;
     servos[2].position = degrees_to_servo(servos[2], hat);
     move_servos();
 }

@@ -287,6 +287,10 @@ int main(int argc, char **argv) {
     if (!g_no_talk)
         start_talk_process();
 
+    // Follow the head being pushed by hand
+    if (servos_ready)
+        start_servo_push_follow();
+
     // Log positions after startup prints, so they do not interleave
     if (no_servos)
         start_servo_position_log();
@@ -1253,6 +1257,7 @@ static void stop_robot(FaceTracker& faceTracker) {
     stop_talk_process();
     stop_interface();
     stop_servo_position_log();
+    stop_servo_push_follow();
     faceTracker.stopTracking();
     relax_servos();
     if (show_window)

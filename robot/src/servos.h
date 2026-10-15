@@ -22,6 +22,10 @@ void stop_servo_position_log();
 // Write a new bus ID into a servo's EEPROM
 int set_servo_id(int old_id, int new_id);
 
+// Follow a hand pushing the head, and hold where it is let go
+void start_servo_push_follow();
+void stop_servo_push_follow();
+
 // Send the commanded positions
 void move_servos();
 
