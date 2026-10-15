@@ -17,6 +17,9 @@ OPENAI_ENV_FILE="${TALK_DIR}/openai.env"
 WINDOW_MANAGER_WAIT_SECONDS=60
 WINDOW_MANAGER_POLL_SECONDS=1
 
+# Socket a Wayland compositor makes when it is up, as on the Pi
+WAYLAND_SOCKET_NAME="wayland-0"
+
 # Main
 main() {
     # Give talk.py --cloud the key when the service did not inherit bashrc
@@ -40,7 +43,7 @@ main() {
 # Wait for the window manager, a face window made before it is always on top and hides the call video
 wait_for_window_manager() {
     local waited=0
-    while ! xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q "window id"; do
+    while ! window_manager_ready; do
         if (( waited >= WINDOW_MANAGER_WAIT_SECONDS )); then
             echo "No window manager after ${WINDOW_MANAGER_WAIT_SECONDS} seconds, starting the robot anyway."
             return
@@ -48,6 +51,18 @@ wait_for_window_manager() {
         sleep "${WINDOW_MANAGER_POLL_SECONDS}"
         waited=$((waited + WINDOW_MANAGER_POLL_SECONDS))
     done
+}
+
+# Check for a Wayland compositor, as on the Pi, or an X window manager, as on the Jetson
+window_manager_ready() {
+    # A Wayland compositor shows itself with a socket
+    local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    if [[ -S "${runtime_dir}/${WAYLAND_SOCKET_NAME}" ]]; then
+        return 0
+    fi
+
+    # An X window manager sets a check property on the root window
+    xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q "window id"
 }
 
 # Load OPENAI_API_KEY from the user env file when unset
