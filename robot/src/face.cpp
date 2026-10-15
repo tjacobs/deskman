@@ -67,9 +67,9 @@ Face create_face() {
     vectorRenderer.addShape(new_face.mouth);
 
     // Load the status font, Mac path first then Linux
-    new_face.font = TTF_OpenFont(MAC_FONT_PATH, FONT_SIZE);
+    new_face.font = TTF_OpenFont(MAC_FONT_PATH, scale_to_screen(FONT_SIZE));
     if (!new_face.font) {
-        new_face.font = TTF_OpenFont(LINUX_FONT_PATH, FONT_SIZE);
+        new_face.font = TTF_OpenFont(LINUX_FONT_PATH, scale_to_screen(FONT_SIZE));
     }
     return new_face;
 }

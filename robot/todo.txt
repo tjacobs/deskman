@@ -1,0 +1,9 @@
+- [done] detect servo pushes
+- [done] make eyes use less CPU
+- [done] make text render use less CPU
+- [done] make eyes smoother and bigger
+- improve face tracking to actually detect faces well
+- make hat go down when asleep at bedtime, up in the morning
+- make it recognize individual people and remember them and say hi name
+- bluetooth connection from cursor to robot, no wifi
+

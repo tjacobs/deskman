@@ -92,8 +92,9 @@ namespace Projection {
         // Apply face rotation first
         Vec3 rotated = point.rotateX(faceRotation.x).rotateY(faceRotation.y).rotateZ(faceRotation.z);
 
-        // Shrink with depth, then move the origin to the middle of the screen
+        // Shrink with depth, grow with the screen so the face keeps its physical size, then move the origin to the middle of the screen
         float perspective = 1.0f / (1.0f + rotated.z * PERSPECTIVE_DEPTH);
-        return {rotated.x * perspective + screen_width / 2, rotated.y * perspective + screen_height / 2};
+        float screen_scale = screen_height / REFERENCE_SCREEN_HEIGHT;
+        return {rotated.x * perspective * screen_scale + screen_width / 2, rotated.y * perspective * screen_scale + screen_height / 2};
     }
 }

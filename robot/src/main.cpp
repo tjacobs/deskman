@@ -450,14 +450,21 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             handle_call_event(event);
         }
 
-        // Point eyes and head at the tracked face until talk goes ready after listening
+        // Point the eyes at the tracked face, and look ahead again once it is lost
         float faceX, faceY;
-        bool hasFaceTracking = use_camera && listen_open() && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY);
-        if (hasFaceTracking && !sweeping()) {
+        static bool eyes_following = false;
+        bool hasFaceTracking = use_camera && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY) && !sweeping();
+        if (hasFaceTracking) {
             face.lookTiltX = -faceX * FACE_LOOK_TILT_DEGREES;
             face.lookTiltY = faceY * FACE_LOOK_TILT_DEGREES;
+        } else if (eyes_following) {
+            face.lookTiltX = 0.0f;
+            face.lookTiltY = 0.0f;
+        }
+        eyes_following = hasFaceTracking;
 
-            // Nudge the head at a steady rate, however fast frames are drawn
+        // Nudge the head at a steady rate, however fast frames are drawn, only while talk listens
+        if (hasFaceTracking && listen_open()) {
             static Uint32 last_nudge_ticks = 0;
             Uint32 now_ticks = SDL_GetTicks();
             if (now_ticks - last_nudge_ticks >= FACE_TRACK_NUDGE_MS) {

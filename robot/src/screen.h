@@ -12,6 +12,9 @@
 // Namespace
 using namespace std;
 
+// Screen height the layout sizes were designed for
+static const float REFERENCE_SCREEN_HEIGHT = 1024.0f;
+
 // Window size, and the renderer everything draws through
 extern int screen_width;
 extern int screen_height;
@@ -41,6 +44,9 @@ void hide_cursor();
 // Draw text, and the status bar
 void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color);
 void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible);
+
+// Scale a size designed for the reference screen to the real screen
+int scale_to_screen(int pixels);
 
 // Status bar size, so the menu button can sit inside it
 int status_bar_height();

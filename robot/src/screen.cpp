@@ -22,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <string>
 #include <system_error>
@@ -43,7 +44,7 @@ static const char* DEFAULT_DISPLAY = ":0";
 static const int STACKING_CHECK_SECONDS = 5;
 static const char* STACKING_WARNING = "Face covers call video, restart robot";
 
-// Status bar size and padding
+// Status bar size and padding, as designed for the reference screen
 static const int STATUS_BAR_HEIGHT = 96;
 static const int STATUS_BAR_PAD = 12;
 static const int STATUS_BAR_LINE_GAP = 4;
@@ -70,6 +71,10 @@ static const int COORDINATE_TEXT_SIZE = 100;
 // Hold the very first frame long enough for the compositor to show it
 static const int FIRST_FRAME_DELAY_MS = 16;
 
+// Most text textures kept before they are all cleared, and room for the font and colour ahead of the text in a key
+static const size_t TEXT_CACHE_LIMIT = 64;
+static const int TEXT_KEY_PREFIX_SIZE = 64;
+
 // Names for the start stamp, and the offsets tm reports against
 static const char* MONTH_NAMES[] = {
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -91,6 +96,9 @@ static bool g_window_hidden = false;
 SDL_Renderer* renderer = nullptr;
 int screen_width = 800;
 int screen_height = 600;
+
+// Text textures already made, so a line that stays the same is not rebuilt every frame
+static map<string, SDL_Texture*> text_textures;
 
 // Status text
 string currentStatus;
@@ -450,14 +458,31 @@ void draw_text(const char* text, int x, int y, TTF_Font* font, SDL_Color color) 
     if (!text || !font)
         return;
 
-    // Turn the text into a texture, blit it, then let both go
-    SDL_Surface* textSurface = TTF_RenderUTF8_Solid(font, text, color);
-    if (textSurface != NULL) {
-        SDL_Texture* textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
-        SDL_Rect textRect = {x, y, textSurface->w, textSurface->h};
+    // Key the texture by font, colour, and text, and clear them all when too many pile up
+    char key_prefix[TEXT_KEY_PREFIX_SIZE];
+    snprintf(key_prefix, sizeof(key_prefix), "%p|%d,%d,%d,%d|", (void*)font, color.r, color.g, color.b, color.a);
+    string key = string(key_prefix) + text;
+    if (!text_textures.count(key) && text_textures.size() >= TEXT_CACHE_LIMIT) {
+        for (auto& entry : text_textures)
+            SDL_DestroyTexture(entry.second);
+        text_textures.clear();
+    }
+
+    // Turn the text into a texture the first time it is drawn, then keep it
+    SDL_Texture*& textTexture = text_textures[key];
+    if (!textTexture) {
+        SDL_Surface* textSurface = TTF_RenderUTF8_Solid(font, text, color);
+        if (textSurface != NULL) {
+            textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+            SDL_FreeSurface(textSurface);
+        }
+    }
+
+    // Blit it at its own size
+    if (textTexture) {
+        SDL_Rect textRect = {x, y, 0, 0};
+        SDL_QueryTexture(textTexture, NULL, NULL, &textRect.w, &textRect.h);
         SDL_RenderCopy(renderer, textTexture, NULL, &textRect);
-        SDL_FreeSurface(textSurface);
-        SDL_DestroyTexture(textTexture);
     }
 }
 
@@ -467,8 +492,11 @@ void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible) {
         return;
 
     // Fill the bar
-    int bar_y = screen_height - STATUS_BAR_HEIGHT;
-    SDL_Rect bar = {0, bar_y, screen_width, STATUS_BAR_HEIGHT};
+    int bar_height = status_bar_height();
+    int pad = status_bar_pad();
+    int line_gap = scale_to_screen(STATUS_BAR_LINE_GAP);
+    int bar_y = screen_height - bar_height;
+    SDL_Rect bar = {0, bar_y, screen_width, bar_height};
     SDL_SetRenderDrawColor(renderer, BAR_FILL_COLOR.r, BAR_FILL_COLOR.g, BAR_FILL_COLOR.b, BAR_FILL_COLOR.a);
     SDL_RenderFillRect(renderer, &bar);
     SDL_SetRenderDrawColor(renderer, BAR_BORDER_COLOR.r, BAR_BORDER_COLOR.g, BAR_BORDER_COLOR.b, BAR_BORDER_COLOR.a);
@@ -488,24 +516,24 @@ void draw_status_bar(const char* battery, TTF_Font* font, bool keep_visible) {
         TTF_SizeUTF8(font, battery, &battery_width, &battery_height);
     int block_height = log_height + battery_height;
     if (have_log && have_battery)
-        block_height += STATUS_BAR_LINE_GAP;
-    int text_y = bar_y + (STATUS_BAR_HEIGHT - block_height) / 2;
+        block_height += line_gap;
+    int text_y = bar_y + (bar_height - block_height) / 2;
 
     // Clip the text so a long line does not run into the menu button
-    int text_right = menu_button_left() - STATUS_BAR_PAD;
-    int clip_width = text_right - STATUS_BAR_PAD;
+    int text_right = menu_button_left() - pad;
+    int clip_width = text_right - pad;
     if (clip_width < 0)
         clip_width = 0;
-    SDL_Rect text_clip = {STATUS_BAR_PAD, bar_y, clip_width, STATUS_BAR_HEIGHT};
+    SDL_Rect text_clip = {pad, bar_y, clip_width, bar_height};
     SDL_RenderSetClipRect(renderer, &text_clip);
 
     // Battery above the last log line, on the left
     if (have_battery) {
-        draw_text(battery, STATUS_BAR_PAD, text_y, font, BAR_TEXT_COLOR);
-        text_y += battery_height + STATUS_BAR_LINE_GAP;
+        draw_text(battery, pad, text_y, font, BAR_TEXT_COLOR);
+        text_y += battery_height + line_gap;
     }
     if (have_log)
-        draw_text(log_line.c_str(), STATUS_BAR_PAD, text_y, font, BAR_TEXT_COLOR);
+        draw_text(log_line.c_str(), pad, text_y, font, BAR_TEXT_COLOR);
     SDL_RenderSetClipRect(renderer, nullptr);
 
     // Menu button and the popup above it
@@ -580,14 +608,19 @@ static string clip_log_line(const string& text) {
     return line;
 }
 
+// Scale a size designed for the reference screen to the real screen
+int scale_to_screen(int pixels) {
+    return pixels * screen_height / REFERENCE_SCREEN_HEIGHT;
+}
+
 // Height of the status bar
 int status_bar_height() {
-    return STATUS_BAR_HEIGHT;
+    return scale_to_screen(STATUS_BAR_HEIGHT);
 }
 
 // Inset of the menu button inside the status bar
 int status_bar_pad() {
-    return STATUS_BAR_PAD;
+    return scale_to_screen(STATUS_BAR_PAD);
 }
 
 // True when the status bar is on screen

@@ -750,7 +750,8 @@ static SDL_Rect menu_button_rect() {
     int pad = status_bar_pad();
     int bar_y = screen_height - status_bar_height();
     int height = status_bar_height() - pad * 2;
-    return {screen_width - pad - HAMBURGER_BUTTON_WIDTH, bar_y + pad, HAMBURGER_BUTTON_WIDTH, height};
+    int width = scale_to_screen(HAMBURGER_BUTTON_WIDTH);
+    return {screen_width - pad - width, bar_y + pad, width, height};
 }
 
 // Count the items on the page showing
