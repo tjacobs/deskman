@@ -1860,13 +1860,21 @@ void reportRemoteMedia() {
     remoteVideoFrames = 0;
 }
 
-// Hang up when nothing has come from the other side for a while, a vanished browser sends no stop
-gboolean stopVideoWhenPeerSilent(gpointer userData) {
+// Hang up when the sound card is unplugged, or nothing has come from the other side for a while, a vanished browser sends no stop
+gboolean stopVideoWhenCallDead(gpointer userData) {
     (void)userData;
 
     // Stop watching once the call is over
     if (!videoRunning) {
         peerSilenceTimerId = 0;
+        return G_SOURCE_REMOVE;
+    }
+
+    // Hang up on an unplugged sound card, the mic capture can spin on a dead card instead of ending
+    if (includeAudioInPipeline && !isCallMicPresent()) {
+        cout << "Hanging up, the USB sound card was unplugged." << endl;
+        peerSilenceTimerId = 0;
+        stopVideo();
         return G_SOURCE_REMOVE;
     }
 
@@ -2266,7 +2274,7 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
     noteVideoState("connection", videoConnectionStateName(state), ending);
     if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED) {
         setCallConnected(true);
-        if (!peerSilenceTimerId) peerSilenceTimerId = g_timeout_add_seconds(1, stopVideoWhenPeerSilent, NULL);
+        if (!peerSilenceTimerId) peerSilenceTimerId = g_timeout_add_seconds(1, stopVideoWhenCallDead, NULL);
         currentVideoBitrate = VIDEO_BITRATE_START;
         calmBitrateSeconds = 0;
         latestPeerLoss.store(0.0);

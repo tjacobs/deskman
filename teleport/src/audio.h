@@ -35,4 +35,5 @@ void stopCallAudio();
 void linkRemoteAudioPad(GstElement* pipeline, GstPad* pad);
 bool isCallAudioDisconnectMessage(const string& errorMessage, const string& debugMessage);
 bool shouldLogCallAudioDisconnect();
+bool isCallMicPresent();
 #endif

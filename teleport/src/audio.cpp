@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 // Fail the build when GStreamer WebRTC is missing
@@ -671,6 +672,20 @@ bool shouldLogCallAudioDisconnect() {
     if (audioDisconnectLogged) return false;
     audioDisconnectLogged = true;
     return true;
+}
+
+// False once the sound card the call mic reads from is unplugged, a dead card can leave the capture spinning
+bool isCallMicPresent() {
+    // Only an ALSA card number on Linux can be checked
+#ifdef __linux__
+    size_t colon = videoMicDevice.rfind(':');
+    if (isPulseAudioDevice(videoMicDevice) || colon == string::npos || !isdigit((unsigned char)videoMicDevice[colon + 1])) return true;
+
+    // The card folder goes away with the card
+    return access(("/proc/asound/card" + to_string(atoi(videoMicDevice.c_str() + colon + 1))).c_str(), F_OK) == 0;
+#else
+    return true;
+#endif
 }
 
 // Attach the tone probe to an element's src pad
