@@ -10,6 +10,7 @@
 #include <climits>
 #include <fstream>
 #include <iostream>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <netdb.h>
@@ -118,6 +119,16 @@ gint64 remoteMediaStartUs = 0;
 guint64 remoteVideoPackets = 0;
 guint64 remoteAudioPackets = 0;
 guint64 remoteVideoFrames = 0;
+
+// Bytes of RTP from the peer, so a call can be ended when they stop arriving
+guint64 remoteMediaBytes = 0;
+guint64 peerSilenceLastBytes = 0;
+gint64 peerSilenceSinceUs = 0;
+guint peerSilenceTimerId = 0;
+guint bitrateTimerId = 0;
+int currentVideoBitrate = 0;
+int calmBitrateSeconds = 0;
+atomic<double> latestPeerLoss(0.0);
 GstElement* remoteVideoSink = NULL;
 int remoteVideoRectX = 0;
 int remoteVideoRectY = 0;
@@ -128,6 +139,15 @@ int remoteVideoHeight = 0;
 const int CANDIDATE_DROP_HANGOVER_MS = 3000;
 const int REMOTE_VIDEO_IDLE_MS = 1500;
 const int REMOTE_VIDEO_POLL_MS = 500;
+const int PEER_SILENCE_HANGUP_MS = 20000;
+const int VIDEO_BITRATE_START = 500;
+const int VIDEO_BITRATE_MINIMUM = 300;
+const double VIDEO_BITRATE_CUT_RATIO = 0.7;
+const double VIDEO_BITRATE_RAISE_RATIO = 1.25;
+const double PEER_LOSS_HIGH = 0.05;
+const double PEER_LOSS_LOW = 0.01;
+const int BITRATE_RAISE_CALM_SECONDS = 4;
+const int BITRATE_CHECK_SECONDS = 2;
 #ifdef HAVE_X11_FULLSCREEN
 Display* videoDisplay = NULL;
 Window videoWindow = 0;
@@ -226,6 +246,9 @@ GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer
 GstPadProbeReturn logRemoteVideoSize(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 void holdSpareAllocatorReferences();
 gboolean handleVideoBusMessage(GstBus* bus, GstMessage* message, gpointer userData);
+void requestPeerLoss();
+void readPeerLoss(GstPromise* promise, gpointer userData);
+void setVideoBitrate(int bitrate);
 GstBusSyncReply handleVideoBusSync(GstBus* bus, GstMessage* message, gpointer userData);
 GstPadProbeReturn logFirstCameraBuffer(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 gboolean stopVideoFromMainLoop(gpointer userData);
@@ -927,21 +950,21 @@ string getVideoEncoderString() {
 #ifdef __APPLE__
     // Use software H264 encoding on Mac
     cout << "Using software H264 encoder x264enc." << endl;
-    return "x264enc name=robotenc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=" + to_string(VIDEO_BITRATE);
+    return "x264enc name=robotenc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=" + to_string(VIDEO_BITRATE_START);
 #else
     // Prefer Jetson hardware H264 encoding
     if (isVideoHardwareEncoderAvailable()) {
         cout << "Using hardware H264 encoder nvv4l2h264enc." << endl;
-        return "video/x-raw,format=I420 ! nvvidconv name=robotnvconvert ! nvv4l2h264enc name=robotenc insert-sps-pps=true iframeinterval=30 bitrate=" + to_string(VIDEO_BITRATE * 1000) + " ! video/x-h264,stream-format=byte-stream,profile=baseline";
+        return "video/x-raw,format=I420 ! nvvidconv name=robotnvconvert ! nvv4l2h264enc name=robotenc insert-sps-pps=true iframeinterval=30 bitrate=" + to_string(VIDEO_BITRATE_START * 1000) + " ! video/x-h264,stream-format=byte-stream,profile=baseline";
     }
 
     // Prefer x264, then OpenH264 on boards without x264enc
     if (isGStreamerElementAvailable("x264enc")) {
         cout << "Using software H264 encoder x264enc." << endl;
-        return "video/x-raw,format=I420 ! x264enc name=robotenc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=" + to_string(VIDEO_BITRATE) + " ! video/x-h264,profile=baseline";
+        return "video/x-raw,format=I420 ! x264enc name=robotenc tune=zerolatency speed-preset=ultrafast key-int-max=30 bitrate=" + to_string(VIDEO_BITRATE_START) + " ! video/x-h264,profile=baseline";
     }
     cout << "Using software H264 encoder openh264enc." << endl;
-    return "video/x-raw,format=I420 ! openh264enc name=robotenc bitrate=" + to_string(VIDEO_BITRATE * 1000) + " ! video/x-h264,profile=baseline";
+    return "video/x-raw,format=I420 ! openh264enc name=robotenc bitrate=" + to_string(VIDEO_BITRATE_START * 1000) + " ! video/x-h264,profile=baseline";
 #endif
 }
 
@@ -1810,10 +1833,10 @@ void startRemoteVideoIdleTimer() {
 GstPadProbeReturn countRemoteVideoPacket(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
     // Ignore unused values
     (void)pad;
-    (void)info;
     (void)userData;
 
     remoteVideoPackets++;
+    remoteMediaBytes += gst_buffer_get_size(GST_PAD_PROBE_INFO_BUFFER(info));
     if (remoteVideoPackets == 1)
         cout << "First remote video packet after " << (g_get_monotonic_time() - remoteMediaStartUs) / 1000 << "ms." << endl;
     return GST_PAD_PROBE_OK;
@@ -1823,10 +1846,10 @@ GstPadProbeReturn countRemoteVideoPacket(GstPad* pad, GstPadProbeInfo* info, gpo
 GstPadProbeReturn countRemoteAudioPacket(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
     // Ignore unused values
     (void)pad;
-    (void)info;
     (void)userData;
 
     remoteAudioPackets++;
+    remoteMediaBytes += gst_buffer_get_size(GST_PAD_PROBE_INFO_BUFFER(info));
     if (remoteAudioPackets == 1)
         cout << "First remote audio packet after " << (g_get_monotonic_time() - remoteMediaStartUs) / 1000 << "ms." << endl;
     return GST_PAD_PROBE_OK;
@@ -1838,9 +1861,111 @@ void reportRemoteMedia() {
         return;
     cout << "Remote media: " << remoteVideoPackets << " video packets, " << remoteVideoFrames << " decoded frames, " << remoteAudioPackets << " audio packets." << endl;
     remoteMediaStartUs = 0;
+    remoteMediaBytes = 0;
     remoteVideoPackets = 0;
     remoteAudioPackets = 0;
     remoteVideoFrames = 0;
+}
+
+// Hang up when nothing has come from the other side for a while, a vanished browser sends no stop
+gboolean stopVideoWhenPeerSilent(gpointer userData) {
+    (void)userData;
+
+    // Stop watching once the call is over
+    if (!videoRunning) {
+        peerSilenceTimerId = 0;
+        return G_SOURCE_REMOVE;
+    }
+
+    // Restart the count whenever bytes arrive, and wait for the first ones, a viewer may send nothing
+    if (remoteMediaBytes == 0 || remoteMediaBytes != peerSilenceLastBytes) {
+        peerSilenceLastBytes = remoteMediaBytes;
+        peerSilenceSinceUs = g_get_monotonic_time();
+        return G_SOURCE_CONTINUE;
+    }
+    if (g_get_monotonic_time() - peerSilenceSinceUs < PEER_SILENCE_HANGUP_MS * 1000) return G_SOURCE_CONTINUE;
+
+    // Say why, then hang up
+    cout << "Hanging up, nothing received from the other side for " << PEER_SILENCE_HANGUP_MS / 1000 << " seconds, the browser or network is gone." << endl;
+    peerSilenceTimerId = 0;
+    stopVideo();
+    return G_SOURCE_REMOVE;
+}
+
+// Start low and raise the sending bitrate while the other side reports little loss, cutting it when loss is heavy
+gboolean adaptVideoBitrate(gpointer userData) {
+    (void)userData;
+
+    // Stop adapting once the call is over
+    if (!videoRunning) {
+        bitrateTimerId = 0;
+        return G_SOURCE_REMOVE;
+    }
+
+    // Use the loss from the last report, then ask for a fresh one
+    double loss = latestPeerLoss.load();
+    requestPeerLoss();
+
+    // Cut quickly on heavy loss, raise slowly after calm
+    int target = currentVideoBitrate;
+    if (loss > PEER_LOSS_HIGH) {
+        target = max(VIDEO_BITRATE_MINIMUM, (int)(currentVideoBitrate * VIDEO_BITRATE_CUT_RATIO));
+        calmBitrateSeconds = 0;
+    } else if (loss < PEER_LOSS_LOW) {
+        calmBitrateSeconds += BITRATE_CHECK_SECONDS;
+        if (calmBitrateSeconds >= BITRATE_RAISE_CALM_SECONDS) {
+            target = min(VIDEO_BITRATE, (int)(currentVideoBitrate * VIDEO_BITRATE_RAISE_RATIO) + 1);
+            calmBitrateSeconds = 0;
+        }
+    } else {
+        calmBitrateSeconds = 0;
+    }
+
+    // Apply the new bitrate and say why
+    if (target == currentVideoBitrate) return G_SOURCE_CONTINUE;
+    cout << "Video bitrate " << (target < currentVideoBitrate ? "lowered" : "raised") << " to " << target << " kbps, peer reports " << (int)(loss * 100) << "% loss." << endl;
+    currentVideoBitrate = target;
+    setVideoBitrate(target);
+    return G_SOURCE_CONTINUE;
+}
+
+// Ask webrtcbin how much video the other side lost, the reply lands in readPeerLoss
+void requestPeerLoss() {
+    if (!videoWebrtc) return;
+    GstPromise* promise = gst_promise_new_with_change_func(readPeerLoss, NULL, NULL);
+    g_signal_emit_by_name(videoWebrtc, "get-stats", NULL, promise);
+    gst_promise_unref(promise);
+}
+
+// Keep the worst loss fraction the other side reported for what we send
+void readPeerLoss(GstPromise* promise, gpointer userData) {
+    (void)userData;
+    const GstStructure* reply = gst_promise_get_reply(promise);
+    if (!reply) return;
+
+    // Look at the receiver reports, one per stream we send
+    double worstLoss = 0.0;
+    int fieldCount = gst_structure_n_fields(reply);
+    for (int index = 0; index < fieldCount; index++) {
+        const char* fieldName = gst_structure_nth_field_name(reply, index);
+        if (!g_str_has_prefix(fieldName, "rtp-remote-inbound-stream-stats")) continue;
+        const GValue* value = gst_structure_get_value(reply, fieldName);
+        if (!value || !GST_VALUE_HOLDS_STRUCTURE(value)) continue;
+        double loss = 0.0;
+        gst_structure_get_double(gst_value_get_structure(value), "fraction-lost", &loss);
+        worstLoss = max(worstLoss, loss);
+    }
+    latestPeerLoss.store(worstLoss);
+}
+
+// Change the running encoder bitrate, x264enc takes kilobits and the others take bits
+void setVideoBitrate(int bitrate) {
+    if (!videoPipeline) return;
+    GstElement* encoder = gst_bin_get_by_name(GST_BIN(videoPipeline), "robotenc");
+    if (!encoder) return;
+    bool inKilobits = g_str_has_prefix(GST_OBJECT_NAME(gst_element_get_factory(encoder)), "x264enc");
+    g_object_set(encoder, "bitrate", inKilobits ? bitrate : bitrate * 1000, NULL);
+    gst_object_unref(encoder);
 }
 
 // Note the arrival time of each remote frame, and show the screen again on the first one
@@ -2148,6 +2273,11 @@ void logVideoConnectionState(GObject* object, GParamSpec* spec, gpointer userDat
     noteVideoState("connection", videoConnectionStateName(state), ending);
     if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED) {
         setCallConnected(true);
+        if (!peerSilenceTimerId) peerSilenceTimerId = g_timeout_add_seconds(1, stopVideoWhenPeerSilent, NULL);
+        currentVideoBitrate = VIDEO_BITRATE_START;
+        calmBitrateSeconds = 0;
+        latestPeerLoss.store(0.0);
+        if (!bitrateTimerId) bitrateTimerId = g_timeout_add_seconds(BITRATE_CHECK_SECONDS, adaptVideoBitrate, NULL);
     }
 }
 
