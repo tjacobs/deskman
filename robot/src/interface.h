@@ -99,3 +99,7 @@ void set_camera_showing(bool showing);
 void set_talk_mode(int mode);
 int take_talk_mode_request();
 const char* talk_mode_name(int mode);
+
+// Say whether talk.py is running so Listen and the mode buttons grey out when it is not, and take a tap that asks for it to start
+void set_talk_running(bool running);
+bool take_talk_start_request();

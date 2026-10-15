@@ -280,10 +280,14 @@ int main(int argc, char **argv) {
 
     // Open the camera before talk, so a missing one fails in the startup log
     FaceTracker faceTracker(show_camera, use_camera);
-    if (use_camera && faceTracker.isCameraAvailable())
+    if (use_camera && faceTracker.isCameraAvailable()) {
         faceTracker.startTracking();
-    else
+
+        // Log a blank line so the status bar clears once the camera is up
+        cout << endl;
+    } else {
         use_camera = false;
+    }
 
     // Spawn talk after the bus, socket, and camera probe, with the mode buttons on the model it runs
     set_talk_mode(load_talk_mode());
@@ -400,6 +404,14 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         apply_record_request(faceTracker);
         if (take_play_request())
             play_last_recording();
+
+        // Grey out Listen and the modes while talk is down, and start it when one of them is tapped
+        set_talk_running(g_talk_pid > 0);
+        if (take_talk_start_request()) {
+            g_no_talk = false;
+            g_talk_restarts = 0;
+            start_talk_process();
+        }
 
         // Run talk on another model once a mode button is tapped
         int talk_mode = take_talk_mode_request();
@@ -1036,10 +1048,9 @@ static void switch_talk_mode(int mode) {
     out << config.dump(2) << endl;
     out.close();
 
-    // Restart talk so it loads the new model
+    // Restart talk so it loads the new model, and a tap on a mode starts talk even after no talk was asked for
     cout << "Talk mode: " << talk_mode_name(mode) << endl;
-    if (g_no_talk)
-        return;
+    g_no_talk = false;
     stop_talk_process();
     start_talk_process();
 }

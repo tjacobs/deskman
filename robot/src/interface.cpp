@@ -141,7 +141,7 @@ static const SDL_Color WIFI_ACTIVE_COLOR = {30, 140, 70, 255};
 static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
 
-// Mode button colors, the running mode lit green like Camera when on, the others dark, and ones that cannot run now dimmer still
+// Mode button colors, the running mode lit green like Camera when on, the others dark, and ones that cannot run now dimmer still, all of them grey while talk is not running
 static const SDL_Color TALK_MODE_ON_COLOR = {30, 140, 70, 255};
 static const SDL_Color TALK_MODE_OFF_COLOR = {60, 60, 70, 255};
 static const SDL_Color TALK_MODE_UNAVAILABLE_COLOR = {40, 40, 45, 255};
@@ -243,6 +243,10 @@ static steady_clock::time_point g_last_menu_tap{};
 static atomic<int> g_talk_mode{0};
 static atomic<bool> g_talk_mode_pending{false};
 static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true};
+
+// Whether talk.py is running, Listen and the mode buttons grey out when not, and a tap on one that asks for talk to start
+static atomic<bool> g_talk_running{false};
+static atomic<bool> g_talk_start_request{false};
 static steady_clock::time_point g_interface_start{};
 
 // Handoff of the camera between the robot and a call
@@ -888,7 +892,10 @@ void draw_menu(TTF_Font* font) {
     if (g_menu_open) {
         for (int row = 0; row < menu_row_count(); row++) {
             int item = menu_row_item(row);
-            draw_bar_button(menu_item_rect(row), menu_item_label(item), menu_item_color(item), font);
+            if (item == MENU_LISTEN && !g_talk_running.load())
+                draw_button(menu_item_rect(row), menu_item_label(item), TALK_MODE_UNAVAILABLE_COLOR, TALK_MODE_UNAVAILABLE_LABEL_COLOR, font);
+            else
+                draw_bar_button(menu_item_rect(row), menu_item_label(item), menu_item_color(item), font);
         }
         draw_talk_modes(font);
     }
@@ -900,14 +907,15 @@ void draw_menu(TTF_Font* font) {
     draw_hamburger_icon(menu_rect);
 }
 
-// Draw the three mode buttons, the running one lit and the ones talk cannot run dimmed
+// Draw the three mode buttons, the running one lit and the ones talk cannot run dimmed, all dimmed while talk is not running
 static void draw_talk_modes(TTF_Font* font) {
+    bool running = g_talk_running.load();
     for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
         SDL_Color fill = TALK_MODE_OFF_COLOR;
         SDL_Color label_color = BUTTON_LABEL_COLOR;
-        if (mode == g_talk_mode.load()) {
+        if (running && mode == g_talk_mode.load()) {
             fill = TALK_MODE_ON_COLOR;
-        } else if (!g_talk_mode_available[mode].load()) {
+        } else if (!running || !g_talk_mode_available[mode].load()) {
             fill = TALK_MODE_UNAVAILABLE_COLOR;
             label_color = TALK_MODE_UNAVAILABLE_LABEL_COLOR;
         }
@@ -1365,11 +1373,13 @@ void handle_call_event(const SDL_Event& event) {
     if ((item >= 0 || talk_mode != TALK_MODE_NONE) && !debounce_tap())
         return;
 
-    // Light a new mode and restart talk on it, the menu stays up so the lit button shows where it landed
+    // Light a new mode and restart talk on it, or start talk on the mode already lit when it is not running, the menu stays up so the lit button shows where it landed
     if (talk_mode != TALK_MODE_NONE) {
         if (talk_mode != g_talk_mode.load()) {
             g_talk_mode = talk_mode;
             g_talk_mode_pending = true;
+        } else if (!g_talk_running.load()) {
+            g_talk_start_request = true;
         }
         return;
     }
@@ -1389,9 +1399,11 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
 
-    // Listen wakes talk, and quiets it when it is already listening
+    // Listen starts talk when it is not running, wakes it, and quiets it when it is already listening
     if (item == MENU_LISTEN) {
-        if (g_listen_open.load())
+        if (!g_talk_running.load())
+            g_talk_start_request = true;
+        else if (g_listen_open.load())
             send_quiet();
         else
             send_to_clients(json{{"command", "wake"}}.dump(), NO_CLIENT);
@@ -1634,6 +1646,16 @@ int take_talk_mode_request() {
     if (!g_talk_mode_pending.exchange(false))
         return TALK_MODE_NONE;
     return g_talk_mode.load();
+}
+
+// Record whether talk.py is running, once per frame
+void set_talk_running(bool running) {
+    g_talk_running = running;
+}
+
+// True once after a tap asked for talk to start
+bool take_talk_start_request() {
+    return g_talk_start_request.exchange(false);
 }
 
 // Name one talk mode for the log

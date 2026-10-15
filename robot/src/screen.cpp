@@ -572,20 +572,21 @@ string last_log_line() {
     string chunk((istreambuf_iterator<char>(input)), istreambuf_iterator<char>());
     g_log_offset = size;
 
-    // Treat a carriage return as a line end, progress bars use them
+    // Treat a carriage return as a line end, progress bars use them, and a return before a newline is one end
+    size_t pair;
+    while ((pair = chunk.find("\r\n")) != string::npos)
+        chunk.erase(pair, 1);
     for (char& character : chunk) {
         if (character == '\r')
             character = '\n';
     }
     g_log_pending += chunk;
 
-    // Keep the last non-empty line
+    // Keep the last line, a blank one clears the bar
     size_t newline;
     while ((newline = g_log_pending.find('\n')) != string::npos) {
-        string line = clip_log_line(g_log_pending.substr(0, newline));
+        g_last_log_line = clip_log_line(g_log_pending.substr(0, newline));
         g_log_pending.erase(0, newline + 1);
-        if (!line.empty())
-            g_last_log_line = line;
     }
     return log_display_line();
 }
