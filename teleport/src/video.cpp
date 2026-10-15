@@ -119,6 +119,10 @@ guint64 remoteVideoPackets = 0;
 guint64 remoteAudioPackets = 0;
 guint64 remoteVideoFrames = 0;
 GstElement* remoteVideoSink = NULL;
+int remoteVideoRectX = 0;
+int remoteVideoRectY = 0;
+int remoteVideoRectWidth = 0;
+int remoteVideoRectHeight = 0;
 int remoteVideoWidth = 0;
 int remoteVideoHeight = 0;
 const int CANDIDATE_DROP_HANGOVER_MS = 3000;
@@ -215,6 +219,9 @@ void dropRemotePad(GstPad* pad);
 void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData);
 bool remoteSinkKeepsAspect(GstElement* sink);
 void applyRemoteVideoLetterbox();
+#ifdef HAVE_X11_FULLSCREEN
+gboolean clearRemoteVideoBars(gpointer userData);
+#endif
 GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 GstPadProbeReturn logRemoteVideoSize(GstPad* pad, GstPadProbeInfo* info, gpointer userData);
 void holdSpareAllocatorReferences();
@@ -1519,12 +1526,13 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
         GstElement* convert = NULL;
         GstElement* sink = NULL;
 
-        // Prefer Jetson EGL sink so aspect ratio is kept, nv3dsink stretches to fill
-        if (isGStreamerElementAvailable("nveglglessink") && isGStreamerElementAvailable("nvvidconv")) {
+        // Prefer the plain X11 sink, the Jetson EGL sink crashes when the phone changes picture size
+        bool preferX11Sink = isGStreamerElementAvailable("xvimagesink");
+        if (!preferX11Sink && isGStreamerElementAvailable("nveglglessink") && isGStreamerElementAvailable("nvvidconv")) {
             convert = gst_element_factory_make("nvvidconv", NULL);
             sink = gst_element_factory_make("nveglglessink", "remotesink");
             cout << "Using nveglglessink for remote video." << endl;
-        } else if (isGStreamerElementAvailable("nv3dsink") && isGStreamerElementAvailable("nvvidconv")) {
+        } else if (!preferX11Sink && isGStreamerElementAvailable("nv3dsink") && isGStreamerElementAvailable("nvvidconv")) {
             convert = gst_element_factory_make("nvvidconv", NULL);
             sink = gst_element_factory_make("nv3dsink", "remotesink");
             cout << "Using nv3dsink for remote video." << endl;
@@ -1539,6 +1547,7 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
 #endif
             if (!sink) sink = gst_element_factory_make("ximagesink", "remotesink");
             if (!sink) sink = gst_element_factory_make("autovideosink", "remotesink");
+            if (sink) cout << "Using " << GST_OBJECT_NAME(gst_element_get_factory(sink)) << " for remote video." << endl;
         }
         if (!queue || !convert || !sink) {
             cout << "Failed to create remote video sink." << endl;
@@ -1569,7 +1578,7 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
         g_object_set(queue, "max-size-buffers", 2, "max-size-time", 0, "max-size-bytes", 0, "leaky", 2, NULL);
         g_object_set(sink, "sync", FALSE, NULL);
         if (g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "force-aspect-ratio")) {
-            g_object_set(sink, "force-aspect-ratio", TRUE, NULL);
+            g_object_set(sink, "force-aspect-ratio", remoteSinkKeepsAspect(sink), NULL);
         }
         if (g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "create-window")) {
             g_object_set(sink, "create-window", FALSE, NULL);
@@ -1611,9 +1620,10 @@ void onDecodedStream(GstElement* decodebin, GstPad* pad, gpointer userData) {
     linkRemoteAudioPad(videoPipeline, pad);
 }
 
-// True when the sink letterboxes instead of stretching
+// True when the sink letterboxes instead of stretching, xvimagesink has the setting but stretches on the Jetson display
 bool remoteSinkKeepsAspect(GstElement* sink) {
     if (!sink) return false;
+    if (g_str_has_prefix(GST_OBJECT_NAME(gst_element_get_factory(sink)), "xvimagesink")) return false;
     return g_object_class_find_property(G_OBJECT_GET_CLASS(sink), "force-aspect-ratio") != NULL;
 }
 
@@ -1640,9 +1650,35 @@ void applyRemoteVideoLetterbox() {
     int x = (windowWidth - scaledWidth) / 2;
     int y = (windowHeight - scaledHeight) / 2;
     gst_video_overlay_set_render_rectangle(GST_VIDEO_OVERLAY(remoteVideoSink), x, y, scaledWidth, scaledHeight);
+    remoteVideoRectX = x;
+    remoteVideoRectY = y;
+    remoteVideoRectWidth = scaledWidth;
+    remoteVideoRectHeight = scaledHeight;
+    g_idle_add(clearRemoteVideoBars, NULL);
     cout << "Remote video letterbox " << scaledWidth << "x" << scaledHeight << " in " << windowWidth << "x" << windowHeight << endl;
 #endif
 }
+
+#ifdef HAVE_X11_FULLSCREEN
+// Paint the bars around the picture black, the sink never erases what an earlier picture shape left there
+gboolean clearRemoteVideoBars(gpointer userData) {
+    (void)userData;
+    if (!videoDisplay || !videoWindow) return G_SOURCE_REMOVE;
+
+    // Clear each bar on its own, a zero size would clear out to the window edge
+    int screen = DefaultScreen(videoDisplay);
+    int windowWidth = DisplayWidth(videoDisplay, screen);
+    int windowHeight = DisplayHeight(videoDisplay, screen);
+    int rightEdge = remoteVideoRectX + remoteVideoRectWidth;
+    int bottomEdge = remoteVideoRectY + remoteVideoRectHeight;
+    if (remoteVideoRectY > 0) XClearArea(videoDisplay, videoWindow, 0, 0, windowWidth, remoteVideoRectY, False);
+    if (bottomEdge < windowHeight) XClearArea(videoDisplay, videoWindow, 0, bottomEdge, windowWidth, windowHeight - bottomEdge, False);
+    if (remoteVideoRectX > 0) XClearArea(videoDisplay, videoWindow, 0, remoteVideoRectY, remoteVideoRectX, remoteVideoRectHeight, False);
+    if (rightEdge < windowWidth) XClearArea(videoDisplay, videoWindow, rightEdge, remoteVideoRectY, windowWidth - rightEdge, remoteVideoRectHeight, False);
+    XFlush(videoDisplay);
+    return G_SOURCE_REMOVE;
+}
+#endif
 
 // Read decoded frame size so Jetson can letterbox
 GstPadProbeReturn onRemoteVideoCaps(GstPad* pad, GstPadProbeInfo* info, gpointer userData) {
