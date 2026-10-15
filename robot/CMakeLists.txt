@@ -57,9 +57,9 @@ if(NOT PKG_CONFIG_FOUND)
 endif()
 
 # Find SDL2, SDL2_image, and SDL2_ttf
-pkg_check_modules(SDL2 IMPORTED_TARGET sdl2 SDL2_image SDL2_ttf)
+pkg_check_modules(SDL2 IMPORTED_TARGET sdl2>=2.0.18 SDL2_image SDL2_ttf)
 if(NOT SDL2_FOUND)
-    message(FATAL_ERROR "SDL2 not found. Run ./install.sh to install SDL2.")
+    message(FATAL_ERROR "SDL2 2.0.18 or newer not found. Run ./install.sh to install SDL2.")
 endif()
 target_link_libraries(${TARGET_NAME} PRIVATE PkgConfig::SDL2)
 

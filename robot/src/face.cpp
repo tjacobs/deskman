@@ -11,8 +11,8 @@ using namespace std;
 // The one face the whole program animates
 Face face;
 
-// How often to blink, and how fast the sine closes and opens the lid
-static const float ANIMATION_SPEED = 0.02f;
+// Animation clock units per real second, how often to blink, and how fast the sine closes and opens the lid
+static const float ANIMATION_SPEED = 0.4f;
 static const float BLINK_SPEED = 8.0f;
 static const float BLINK_INTERVAL = 10.0f;
 
@@ -32,11 +32,9 @@ static const float MOUTH_OFFSET_Y = 200.0f;
 static const float MOUTH_CUTOUT_Y = -40.0f;
 static const float MOUTH_CUTOUT_HEIGHT = 180.0f;
 
-// Dark grey eyes and a black mouth, strokes are off so the outline never shows
+// Dark grey eyes and a black mouth
 static const SDL_Color EYE_FILL = {25, 25, 25, 255};
-static const SDL_Color EYE_STROKE = {255, 255, 255, 255};
 static const SDL_Color MOUTH_COLOR = {0, 0, 0, 255};
-static const float SHAPE_STROKE_WIDTH = 0.0f;
 
 // Fonts to try for the status text, Mac first then Linux
 static const char* MAC_FONT_PATH = "/System/Library/Fonts/Helvetica.ttc";
@@ -51,13 +49,15 @@ Face create_face() {
     Face new_face;
 
     // Two eyes either side of centre
-    new_face.leftEye = new Ellipse(EYE_RADIUS_X, EYE_RADIUS_Y, EYE_FILL, EYE_STROKE, SHAPE_STROKE_WIDTH);
+    new_face.leftEye = new Ellipse(EYE_RADIUS_X, EYE_RADIUS_Y, EYE_FILL);
     new_face.leftEye->localPosition = Vec3(-EYE_OFFSET_X, EYE_OFFSET_Y, 0);
-    new_face.rightEye = new Ellipse(EYE_RADIUS_X, EYE_RADIUS_Y, EYE_FILL, EYE_STROKE, SHAPE_STROKE_WIDTH);
+    new_face.rightEye = new Ellipse(EYE_RADIUS_X, EYE_RADIUS_Y, EYE_FILL);
     new_face.rightEye->localPosition = Vec3(EYE_OFFSET_X, EYE_OFFSET_Y, 0);
 
     // Mouth carries a cutout for the opening, hidden until talk starts
-    new_face.mouth = new Ellipse(MOUTH_RADIUS_X, MOUTH_RADIUS_Y, MOUTH_COLOR, MOUTH_COLOR, SHAPE_STROKE_WIDTH, MOUTH_CUTOUT_Y, MOUTH_CUTOUT_HEIGHT);
+    new_face.mouth = new Ellipse(MOUTH_RADIUS_X, MOUTH_RADIUS_Y, MOUTH_COLOR);
+    new_face.mouth->cutoutY = MOUTH_CUTOUT_Y;
+    new_face.mouth->cutoutHeight = MOUTH_CUTOUT_HEIGHT;
     new_face.mouth->localPosition = Vec3(0, MOUTH_OFFSET_Y, 0);
     new_face.mouth->visible = false;
 
@@ -87,9 +87,15 @@ void reset_face_animation(Face* face) {
 
 // Advance the blink, then tilt the whole face toward where it is looking
 void update_face_animation(Face* face) {
+    // Measure the real time since the last frame, so the speed holds at any frame rate
+    static Uint32 last_ticks = SDL_GetTicks();
+    Uint32 now_ticks = SDL_GetTicks();
+    float step = (now_ticks - last_ticks) / 1000.0f * ANIMATION_SPEED;
+    last_ticks = now_ticks;
+
     // Start a blink once the interval has passed
-    face->time += ANIMATION_SPEED;
-    face->blinkTimer += ANIMATION_SPEED;
+    face->time += step;
+    face->blinkTimer += step;
     if (!face->isBlinking && face->blinkTimer >= BLINK_INTERVAL) {
         face->isBlinking = true;
         face->blinkTimer = 0.0f;

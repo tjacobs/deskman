@@ -16,15 +16,12 @@ using namespace std;
 // Shapes further back shrink by this much per unit of depth
 static const float PERSPECTIVE_DEPTH = 0.001f;
 
-// Step this many pixels when filling a shape, then draw a fat dot at each one
-static const int SHAPE_FILL_STEP = 2;
+// Texture pixels per face unit, so the soft edge stays crisp
+static const int ELLIPSE_TEXTURE_SCALE = 2;
 
-// Default shape size and colour when the caller does not say
-static const float DEFAULT_CIRCLE_RADIUS = 50;
-static const float DEFAULT_ELLIPSE_RADIUS_X = 100;
-static const float DEFAULT_ELLIPSE_RADIUS_Y = 50;
-static const float DEFAULT_STROKE_WIDTH = 1.0f;
-static const SDL_Color DEFAULT_SHAPE_COLOR = {0, 0, 0, 255};
+// Mesh cells across and down each shape, enough to bend smoothly with perspective
+static const int MESH_COLUMNS = 6;
+static const int MESH_ROWS = 10;
 
 // 3D Vector class for transformations
 struct Vec3 {
@@ -71,127 +68,49 @@ struct Vec3 {
 // Projection utilities
 namespace Projection {
     // Project 3D point to 2D screen coordinates with perspective
-    SDL_Point project(const Vec3& point, const Vec3& faceRotation);
+    SDL_FPoint project(const Vec3& point, const Vec3& faceRotation);
 }
 
 // Base class for all vector shapes
 class VectorShape {
 public:
-    // Where the shape sits on the face plane, and how it is turned and sized
+    // Where the shape sits on the face plane, and what colour it is
     Vec3 localPosition;
-    Vec3 rotation;
-    Vec3 scale;
-
-    // How the shape is painted, and whether it is drawn at all
     SDL_Color fillColor;
-    SDL_Color strokeColor;
-    float strokeWidth;
+
+    // Whether the shape is drawn at all
     bool visible;
 
-    // Start centred, unturned, full size, and black
-    VectorShape() : localPosition(0, 0, 0), rotation(0, 0, 0), scale(1, 1, 1),
-                   fillColor(DEFAULT_SHAPE_COLOR), strokeColor(DEFAULT_SHAPE_COLOR), strokeWidth(DEFAULT_STROKE_WIDTH),
-                   visible(true) {}
+    // Start centred, black, and shown
+    VectorShape() : localPosition(0, 0, 0), fillColor({0, 0, 0, 255}), visible(true) {}
     virtual ~VectorShape() {}
 
     // Each shape paints itself against the face position and rotation
     virtual void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) = 0;
 };
 
-// Helper function to draw a larger dot
-void drawLargeDot(SDL_Renderer* renderer, int x, int y);
-
-// Circle shape
-class Circle : public VectorShape {
-public:
-    float radius;
-
-    // Build a circle of the given radius and colours
-    Circle(float radius = DEFAULT_CIRCLE_RADIUS, SDL_Color fillColor = DEFAULT_SHAPE_COLOR,
-           SDL_Color strokeColor = DEFAULT_SHAPE_COLOR, float strokeWidth = DEFAULT_STROKE_WIDTH)
-        : radius(radius) {
-        this->fillColor = fillColor;
-        this->strokeColor = strokeColor;
-        this->strokeWidth = strokeWidth;
-    }
-
-    // Fill the circle a dot at a time, so perspective applies to every point
-    void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) override {
-        SDL_SetRenderDrawColor(renderer, fillColor.r, fillColor.g, fillColor.b, fillColor.a);
-
-        // Calculate effective radius based on perspective
-        float effectiveRadius = radius * (1.0f / (1.0f + (localPosition.z + facePosition.z) * PERSPECTIVE_DEPTH));
-
-        // Draw filled circle by projecting each point in 3D space
-        for (int y = -effectiveRadius; y <= effectiveRadius; y += SHAPE_FILL_STEP) {
-            for (int x = -effectiveRadius; x <= effectiveRadius; x += SHAPE_FILL_STEP) {
-                if (x * x + y * y > effectiveRadius * effectiveRadius)
-                    continue;
-
-                // Move the local point onto the face, then project it
-                Vec3 point(x, y, 0);
-                point = point + localPosition + facePosition;
-                SDL_Point screenPoint = Projection::project(point, faceRotation);
-                drawLargeDot(renderer, screenPoint.x, screenPoint.y);
-            }
-        }
-    }
-};
-
-// Ellipse shape
+// Ellipse shape, drawn as a textured mesh so the graphics card does the filling
 class Ellipse : public VectorShape {
 public:
     float radiusX, radiusY;
 
-    // Centre and height of an ellipse cut out of this one, for the mouth
+    // Centre and height of an ellipse cut out of this one, for the mouth, set before the first draw
     float cutoutY;
     float cutoutHeight;
 
-    // Build an ellipse of the given radii, colours, and cutout
-    Ellipse(float radiusX = DEFAULT_ELLIPSE_RADIUS_X, float radiusY = DEFAULT_ELLIPSE_RADIUS_Y,
-            SDL_Color fillColor = DEFAULT_SHAPE_COLOR,
-            SDL_Color strokeColor = DEFAULT_SHAPE_COLOR, float strokeWidth = DEFAULT_STROKE_WIDTH,
-            float cutoutY = 0, float cutoutHeight = 0)
-        : radiusX(radiusX), radiusY(radiusY), cutoutY(cutoutY), cutoutHeight(cutoutHeight) {
+    // Build an ellipse of the given radii and colour, with no cutout
+    Ellipse(float radiusX, float radiusY, SDL_Color fillColor)
+        : radiusX(radiusX), radiusY(radiusY), cutoutY(0), cutoutHeight(0), texture(nullptr) {
         this->fillColor = fillColor;
-        this->strokeColor = strokeColor;
-        this->strokeWidth = strokeWidth;
     }
 
-    // Fill the ellipse a dot at a time, skipping anything inside the cutout
-    void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) override {
-        SDL_SetRenderDrawColor(renderer, fillColor.r, fillColor.g, fillColor.b, fillColor.a);
+    // Bend a mesh of the ellipse texture through the face rotation
+    void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) override;
 
-        // Calculate effective radii based on perspective
-        float effectiveRadiusX = radiusX * (1.0f / (1.0f + (localPosition.z + facePosition.z) * PERSPECTIVE_DEPTH));
-        float effectiveRadiusY = radiusY * (1.0f / (1.0f + (localPosition.z + facePosition.z) * PERSPECTIVE_DEPTH));
-
-        // Draw filled ellipse by projecting each point in 3D space
-        for (int y = -effectiveRadiusY; y <= effectiveRadiusY; y += SHAPE_FILL_STEP) {
-            for (int x = -effectiveRadiusX; x <= effectiveRadiusX; x += SHAPE_FILL_STEP) {
-                // Calculate if point is in the main ellipse
-                float ellipseValue = (x * x) / (float)(effectiveRadiusX * effectiveRadiusX) + (y * y) / (float)(effectiveRadiusY * effectiveRadiusY);
-
-                // Calculate if point is in the cutout ellipse
-                float cutoutValue = 0.0f;
-                if (cutoutHeight > 0) {
-                    float cutoutRadiusY = cutoutHeight / 2.0f;
-                    float cutoutRadiusX = effectiveRadiusX * (cutoutRadiusY / effectiveRadiusY);
-                    cutoutValue = (x * x) / (float)(cutoutRadiusX * cutoutRadiusX) + ((y - cutoutY) * (y - cutoutY)) / (float)(cutoutRadiusY * cutoutRadiusY);
-                }
-
-                // Draw point if it's in the main ellipse but not in the cutout
-                if (ellipseValue > 1.0f || (cutoutHeight != 0 && cutoutValue <= 1.0f))
-                    continue;
-
-                // Move the local point onto the face, then project it
-                Vec3 point(x, y, 0);
-                point = point + localPosition + facePosition;
-                SDL_Point screenPoint = Projection::project(point, faceRotation);
-                drawLargeDot(renderer, screenPoint.x, screenPoint.y);
-            }
-        }
-    }
+private:
+    // Soft edged white ellipse, made on first draw and freed with the renderer
+    SDL_Texture* texture;
+    void buildTexture(SDL_Renderer* renderer);
 };
 
 // Vector face class to manage all face elements

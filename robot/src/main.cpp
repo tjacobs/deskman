@@ -56,8 +56,8 @@ static const char* DEFAULT_DISPLAY = ":0";
 static const bool SWEEP_SCAN_BUS = true;
 static const bool SWEEP_KNOWN_SERVOS = false;
 
-// Frame rate the face is drawn at, and the faster one used while video is on screen
-static const int MAX_FPS = 20;
+// Frame rate the face is drawn at, and the rate used while video is on screen, which needs no more
+static const int MAX_FPS = 60;
 static const int FRAME_MS = 1000 / MAX_FPS;
 static const int VIDEO_FPS = 30;
 static const int VIDEO_FRAME_MS = 1000 / VIDEO_FPS;
@@ -71,7 +71,7 @@ static const int SCREEN_WAIT_MS = 500;
 static const int SCREEN_ROTATE_TRIES = 2;
 
 // Frames to pump before the slow startup work, so the eyes appear early
-static const int STARTUP_FRAMES = 8;
+static const int STARTUP_FRAMES = 24;
 
 // Ask talk.py to stop, then kill it, it holds the GPU so exiting takes a few seconds, the last code says the exec never took
 static const int TALK_STOP_WAIT_MS = 5000;
@@ -92,6 +92,9 @@ static const int HEALTH_LOG_SECONDS = 60;
 // How far the head and eyes swing for a full face offset
 static const int FACE_TRACK_COUNTS = 20;
 static const int FACE_LOOK_TILT_DEGREES = 30;
+
+// How often the head is nudged toward the tracked face
+static const int FACE_TRACK_NUDGE_MS = 50;
 
 // Hat down to level while idle, all the way up while talk listens or a call is connected
 static const int HAT_IDLE_DEGREES = 0;
@@ -454,10 +457,17 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             face.lookTiltX = -faceX * FACE_LOOK_TILT_DEGREES;
             face.lookTiltY = faceY * FACE_LOOK_TILT_DEGREES;
 
-            // Truncate to whole counts, so a small face offset leaves the head still
-            int pan_nudge = (int)(-faceX * FACE_TRACK_COUNTS);
-            int tilt_nudge = (int)(faceY * FACE_TRACK_COUNTS);
-            move_degrees(pan_degrees_from_counts(pan_nudge), tilt_degrees_from_counts(tilt_nudge), 0);
+            // Nudge the head at a steady rate, however fast frames are drawn
+            static Uint32 last_nudge_ticks = 0;
+            Uint32 now_ticks = SDL_GetTicks();
+            if (now_ticks - last_nudge_ticks >= FACE_TRACK_NUDGE_MS) {
+                last_nudge_ticks = now_ticks;
+
+                // Truncate to whole counts, so a small face offset leaves the head still
+                int pan_nudge = (int)(-faceX * FACE_TRACK_COUNTS);
+                int tilt_nudge = (int)(faceY * FACE_TRACK_COUNTS);
+                move_degrees(pan_degrees_from_counts(pan_nudge), tilt_degrees_from_counts(tilt_nudge), 0);
+            }
         }
 
         // Step the blink
