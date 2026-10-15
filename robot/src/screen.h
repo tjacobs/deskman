@@ -29,6 +29,9 @@ bool close_window();
 void set_window_hidden(bool hidden);
 bool window_hidden();
 
+// Warn once if the face window will sit above the call video
+void check_window_stacking();
+
 // Give a child process the input method back, the face itself keeps the touch keyboard away
 void allow_screen_keyboard();
 

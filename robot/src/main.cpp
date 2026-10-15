@@ -369,6 +369,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             take_camera_back(faceTracker);
         close_playback();
         check_fan();
+        check_window_stacking();
         check_battery();
         log_robot_health();
         apply_call_handoff(faceTracker);

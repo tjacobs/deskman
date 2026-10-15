@@ -4,9 +4,16 @@
 #include "interface.h"
 
 // SDL
+#include <SDL2/SDL_syswm.h>
 #include <SDL2/SDL_ttf.h>
 
+// X11
+#ifdef __linux__
+#include <X11/Xlib.h>
+#endif
+
 // System
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -27,9 +34,14 @@
 
 // Namespace
 using namespace std;
+using namespace std::chrono;
 
 // Fall back to the local HDMI seat when DISPLAY is unset
 static const char* DEFAULT_DISPLAY = ":0";
+
+// Check the window stacking this long after start, once the window manager has framed the window
+static const int STACKING_CHECK_SECONDS = 5;
+static const char* STACKING_WARNING = "Face covers call video, restart robot";
 
 // Status bar size and padding
 static const int STATUS_BAR_HEIGHT = 96;
@@ -280,6 +292,49 @@ void set_window_hidden(bool hidden) {
     }
     SDL_ShowWindow(window);
     SDL_RaiseWindow(window);
+}
+
+// True when the window, or the frame around it, is override-redirect, SDL makes one when the robot starts before the window manager, and it stays above every call video
+static bool window_is_override_redirect() {
+#ifdef __linux__
+    // Find the X window behind the SDL window
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!window || !SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_X11)
+        return false;
+    Display* display = info.info.x11.display;
+    Window face = info.info.x11.window;
+
+    // Look at the window and its parent
+    Window root = 0;
+    Window parent = 0;
+    Window* children = nullptr;
+    unsigned int childCount = 0;
+    if (XQueryTree(display, face, &root, &parent, &children, &childCount) && children)
+        XFree(children);
+    XWindowAttributes attributes;
+    if (XGetWindowAttributes(display, face, &attributes) && attributes.override_redirect)
+        return true;
+    return parent != 0 && parent != root && XGetWindowAttributes(display, parent, &attributes) && attributes.override_redirect;
+#else
+    return false;
+#endif
+}
+
+// Warn once, a little after start, if the face window will hide the call video
+void check_window_stacking() {
+    // Wait for the window manager to frame the window, and check only once
+    static const steady_clock::time_point started = steady_clock::now();
+    static bool checked = false;
+    if (checked || steady_clock::now() - started < seconds(STACKING_CHECK_SECONDS))
+        return;
+    checked = true;
+
+    // Say so on the face and in the log
+    if (window_is_override_redirect()) {
+        cout << "Warning: " << STACKING_WARNING << ", the window manager was not running at start." << endl;
+        show_warning(STACKING_WARNING);
+    }
 }
 
 // True while the face is hidden

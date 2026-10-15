@@ -13,6 +13,10 @@ TALK_PYTHON="${TALK_DIR}/.venv/bin/python"
 DISPLAY_DEFAULT=":0"
 OPENAI_ENV_FILE="${TALK_DIR}/openai.env"
 
+# How long to wait for the window manager at boot, and how often to look
+WINDOW_MANAGER_WAIT_SECONDS=60
+WINDOW_MANAGER_POLL_SECONDS=1
+
 # Main
 main() {
     # Give talk.py --cloud the key when the service did not inherit bashrc
@@ -22,6 +26,7 @@ main() {
     if [[ -x "${ROBOT_BIN}" ]]; then
         echo "Starting Deskman robot ${ROBOT_BIN}..."
         export DISPLAY="${DISPLAY:-${DISPLAY_DEFAULT}}"
+        wait_for_window_manager
         cd "$(dirname "${ROBOT_BIN}")"
         exec "${ROBOT_BIN}"
     fi
@@ -30,6 +35,19 @@ main() {
     echo "Starting talk.py..."
     cd "${TALK_DIR}"
     exec "${TALK_PYTHON}" -u "${TALK_SCRIPT}"
+}
+
+# Wait for the window manager, a face window made before it is always on top and hides the call video
+wait_for_window_manager() {
+    local waited=0
+    while ! xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q "window id"; do
+        if (( waited >= WINDOW_MANAGER_WAIT_SECONDS )); then
+            echo "No window manager after ${WINDOW_MANAGER_WAIT_SECONDS} seconds, starting the robot anyway."
+            return
+        fi
+        sleep "${WINDOW_MANAGER_POLL_SECONDS}"
+        waited=$((waited + WINDOW_MANAGER_POLL_SECONDS))
+    done
 }
 
 # Load OPENAI_API_KEY from the user env file when unset
