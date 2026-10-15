@@ -4,6 +4,7 @@
 # Imports
 import os
 import sys
+import select
 import json
 import time
 import glob
@@ -43,8 +44,12 @@ CAPTURE_GAIN_DB = 12
 CAPTURE_BUFFER_BYTES = '256'
 
 # Retry a microphone that dies, the sound card can be busy for a few seconds after a call
-MIC_RESTART_ATTEMPTS = 8
+MIC_RESTART_ATTEMPTS = 20
 MIC_RESTART_SECONDS = 1.0
+MIC_OPEN_TEST_SECONDS = 1
+
+# Treat the microphone as dead when no audio data at all arrives for this long, a quiet room still sends data
+MIC_NO_DATA_SECONDS = 3.0
 CARDS_PATH = '/proc/asound/cards'
 VIDEO_DIR = '/sys/class/video4linux'
 CPU_SCALING_DIR = '/sys/devices/system/cpu'
@@ -242,7 +247,24 @@ def linux_record_command():
     if card is None:
         print('No microphone found. Plug in a USB mic and try again.')
         sys.exit(1)
+    return linux_record_command_for_card(card)
+
+# Build the arecord command for one sound card
+def linux_record_command_for_card(card):
     return [LINUX_RECORDER, '-D', shared_capture_device(card), '-f', 'S16_LE', '-r', str(SAMPLE_RATE), '-c', '1', '-t', 'raw', '-q']
+
+# Return the record command for the microphone as it is now, None while it is unplugged or still busy starting up
+def current_record_command(previous):
+    if platform.system() == 'Darwin':
+        return previous
+    card = find_capture_card()
+    if card is None:
+        return None
+
+    # Try opening it for a second, a card just plugged in stays busy for a few seconds and arecord prints errors for each failed open
+    command = linux_record_command_for_card(card)
+    opened = subprocess.run(command + ['-d', str(MIC_OPEN_TEST_SECONDS)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return command if opened.returncode == 0 else None
 
 # Name the shared capture device, dsnoop lets a recording read the mic at the same time
 def shared_capture_device(card):
@@ -257,21 +279,50 @@ def start_recorder(command):
     recorder = subprocess.Popen(command, stdout=subprocess.PIPE)
     return wrap_capture_gain(recorder, SAMPLE_RATE, CAPTURE_CHANNELS)
 
-# Read one block from the owner recorder, restarting a recorder that stopped, None when it keeps failing
+# Read one block from the owner recorder, restarting a recorder that stopped or went silent, None when it keeps failing
 def read_capture_block(owner, block_bytes):
     for attempt in range(MIC_RESTART_ATTEMPTS + 1):
-        # Hand back a full block
-        data = owner.recorder.stdout.read(block_bytes)
-        if len(data) == block_bytes:
+        # Hand back a full block, saying so when audio flows again after a restart
+        data = read_block_before_timeout(owner.recorder.stdout, block_bytes)
+        if data is not None:
+            if attempt > 0:
+                print('Microphone is back, audio is flowing.', flush=True)
             return data
 
-        # Start the recorder again after the card settles
+        # Kill the recorder, an unplugged sound card leaves it spinning and deaf to a polite stop
         if attempt < MIC_RESTART_ATTEMPTS:
-            print(f'Microphone stopped, restarting it, try {attempt + 1}.', flush=True)
-            owner.recorder.terminate()
+            owner.recorder.kill()
             time.sleep(MIC_RESTART_SECONDS)
-            owner.recorder = start_recorder(owner.record)
+
+            # Start it again once the card is back, a missing card makes arecord print a pile of errors, so wait quietly instead
+            command = current_record_command(owner.record)
+            if command is None:
+                if attempt == 0:
+                    print('Microphone not ready, waiting for it.', flush=True)
+                continue
+            print(f'Microphone stopped, restarting it, try {attempt + 1}.', flush=True)
+            owner.record = command
+            owner.recorder = start_recorder(command)
+
+    # Say it never came back
+    print('Microphone did not come back.', flush=True)
     return None
+
+# Read exactly one block from a recorder stream, None when it ends or sends no data for a while
+def read_block_before_timeout(stream, block_bytes):
+    data = b''
+    while len(data) < block_bytes:
+        # Give up on a stream that sends no data
+        ready, _, _ = select.select([stream], [], [], MIC_NO_DATA_SECONDS)
+        if not ready:
+            return None
+
+        # Give up on a stream that has ended
+        chunk = os.read(stream.fileno(), block_bytes - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
 
 # Raise the voice on the capture stream
 def wrap_capture_gain(recorder, rate, channels):
