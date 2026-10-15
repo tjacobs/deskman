@@ -49,6 +49,8 @@ Talk setup is `cd talk && ./install.sh`, which installs `uv` into `~/.local/bin`
 
 Robot build: `cd robot && mkdir -p build && cd build && cmake .. && make`, then `./robot`. `--no-talk` skips spawning `talk/talk.py`. `--camera` shows the tracking preview.
 
+Restart the robot and teleport services without a password by running `robot/restart_services.sh`. It hands off to `/usr/local/bin/deskman-restart-services` through a sudoers rule, and restarts both after about a second. Use it after a rebuild instead of killing the robot or `sudo systemctl restart`. Do not `pkill` the robot first, it can leave the service inactive.
+
 Teleport build: `cd teleport && mkdir -p build && cd build && cmake .. && make`, then `./teleport`.
 
 Run talk scripts from `talk/`. Shebangs are relative, `#!.venv/bin/python`, so `./speak.py` only resolves from that directory. Otherwise use `talk/.venv/bin/python talk/speak.py`.
