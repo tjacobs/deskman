@@ -108,7 +108,7 @@ void setCallConnected(bool connected) {
 }
 
 static void logError(const string& message) {
-    if (isatty(STDERR_FILENO)) {
+    if (!getenv("JOURNAL_STREAM")) {
         cerr << "\033[1;31m*** ERROR *** : " << message << "\033[0m" << endl;
         return;
     }

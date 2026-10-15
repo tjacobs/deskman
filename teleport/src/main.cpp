@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <ctime>
+#include <climits>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <fcntl.h>
 #include <unistd.h>
 #include <vector>
 
@@ -48,6 +50,12 @@ const char* LOCAL_SERVER_URL = "ws://127.0.0.1:8080";
 
 // Configure camera
 const char* DEFAULT_CAMERA_PATH = "0";
+
+// Configure the log file, it sits beside the build folder
+const char* LOG_FILE_NAME = "log.txt";
+const int LOG_FILE_MODE = 0644;
+const int LOG_BUFFER_SIZE = 4096;
+const int LOG_STAMP_SIZE = 64;
 
 // Configure device ID, no device argument given
 const int NO_DEVICE_ARGUMENT = -1;
@@ -86,6 +94,9 @@ string argumentPhone;
 string serverUrl = DEFAULT_SERVER_URL;
 string cameraPath = DEFAULT_CAMERA_PATH;
 string deviceName;
+int logConsoleDescriptor = -1;
+int logFileDescriptor = -1;
+int logPipeDescriptor = -1;
 string callPeer;
 string audioDevice = DEFAULT_AUDIO_DEVICE;
 bool holdIncomingCall = false;
@@ -112,6 +123,8 @@ int main(int argumentCount, char** argumentValues);
 void parseArgs(int argumentCount, char** argumentValues);
 void checkAlreadyRunning();
 pid_t findOtherRunning();
+void startLog();
+void copyLog();
 void setupDisplayEnv();
 void setupPluginPath();
 void printHelp();
@@ -138,6 +151,9 @@ int main(int argumentCount, char** argumentValues) {
 
     // Make sure only one running
     checkAlreadyRunning();
+
+    // Keep a copy of everything printed in log.txt
+    startLog();
 
     // Read call settings
     settings = loadConfig();
@@ -321,6 +337,54 @@ pid_t findOtherRunning() {
 
     pclose(pipe);
     return foundPid;
+}
+
+// Copy stdout and stderr into log.txt as well as the console, so GStreamer warnings are kept too
+void startLog() {
+    // Find log.txt beside the build folder, or one level up when the binary path is unknown
+    string path = string("../") + LOG_FILE_NAME;
+    char executable[PATH_MAX] = {0};
+    ssize_t length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
+    if (length > 0) {
+        string folder = string(executable, length);
+        folder = folder.substr(0, folder.rfind('/'));
+        path = folder.substr(0, folder.rfind('/')) + "/" + LOG_FILE_NAME;
+    }
+
+    // Keep the console and open the file, and carry on without a log if either fails
+    logConsoleDescriptor = dup(STDOUT_FILENO);
+    logFileDescriptor = open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND, LOG_FILE_MODE);
+    int pipeDescriptors[2];
+    if (logConsoleDescriptor < 0 || logFileDescriptor < 0 || pipe(pipeDescriptors) != 0) return;
+
+    // Send stdout and stderr through a pipe that a thread copies to both places
+    logPipeDescriptor = pipeDescriptors[0];
+    thread(copyLog).detach();
+    dup2(pipeDescriptors[1], STDOUT_FILENO);
+    dup2(pipeDescriptors[1], STDERR_FILENO);
+    close(pipeDescriptors[1]);
+
+    // Flush each line so the file stays current
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+
+    // Mark where this run starts
+    time_t now = time(NULL);
+    char stamp[LOG_STAMP_SIZE];
+    strftime(stamp, sizeof(stamp), "%a %b %d %Y, %I:%M%p", localtime(&now));
+    cout << endl << "=== Teleport on " << stamp << " ===" << endl;
+}
+
+// Write what comes through the pipe to the file and the console
+void copyLog() {
+    char buffer[LOG_BUFFER_SIZE];
+    ssize_t count;
+    while ((count = read(logPipeDescriptor, buffer, sizeof(buffer))) > 0) {
+        // Write the text to the file and the console
+        ssize_t written = write(logFileDescriptor, buffer, count);
+        written = write(logConsoleDescriptor, buffer, count);
+        (void)written;
+    }
 }
 
 // Point GStreamer at the local HDMI seat when launched from SSH

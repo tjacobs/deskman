@@ -2,3 +2,4 @@ build/
 config.json
 device.id
 aec3/
+log.txt
