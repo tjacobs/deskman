@@ -22,8 +22,19 @@ using namespace std;
 // Ask for the networks in range from a fresh scan, while connected the cached list can shrink to the joined network
 static const char* LIST_COMMAND = "nmcli -t -f ACTIVE,SSID,SIGNAL dev wifi list --rescan yes 2>/dev/null";
 
-// How long a join waits, the system password prompt sits inside it while someone types
-static const char* JOIN_WAIT_SECONDS = "300";
+// How long a join waits, the system password prompt sits inside it while someone types, and a join nobody finishes then gives up
+static const char* JOIN_WAIT_SECONDS = "60";
+
+// How long to wait for the old network to come back after a join fails
+static const char* REJOIN_WAIT_SECONDS = "30";
+
+// Ask what the wireless device is doing, it says it needs authentication while the system password prompt is up
+static const char* DEVICE_STATE_COMMAND = "nmcli -t -f TYPE,STATE device status 2>/dev/null";
+static const char* WIRELESS_DEVICE_TYPE = "wifi";
+static const char* NEEDS_PASSWORD_STATE = "need authentication";
+
+// How often to check whether a join is waiting for a password
+static const int PASSWORD_WATCH_MS = 500;
 
 // How often a join or forget checks whether the scan ahead of it has finished
 static const int JOIN_SCAN_POLL_MS = 50;
@@ -57,6 +68,7 @@ static string wifiStatus = STATUS_LOOKING;
 static vector<Network> wifiList;
 static atomic<bool> wifiWorking{false};
 static atomic<bool> wifiJoining{false};
+static atomic<bool> wifiNeedsPassword{false};
 static string wifiJoiningName;
 static string wifiForgettingName;
 
@@ -71,7 +83,11 @@ static void readNetworks();
 static vector<Network> listNetworks();
 static vector<SavedConnection> savedConnections();
 static string describeConnection(const vector<Network>& networks);
-static void joinNetwork(const Network& network);
+static void joinNetwork(const Network& network, const string& previous);
+static string joinedNetworkName();
+static void rejoinNetwork(const string& name);
+static void watchForPassword(const atomic<bool>& finished);
+static bool deviceNeedsPassword();
 static void waitForWifi();
 static vector<string> runCommand(const string& command);
 static int runProgram(const vector<string>& arguments, vector<string>& lines);
@@ -181,7 +197,14 @@ void connect_network(const Network& network) {
     // Joining takes a few seconds and the password box waits on a person, so it runs off the main thread, after any scan finishes
     thread([network] {
         waitForWifi();
-        joinNetwork(network);
+
+        // Remember where the robot was, and watch for the password prompt while the join waits on it
+        string previous = joinedNetworkName();
+        atomic<bool> finished{false};
+        thread watcher(watchForPassword, cref(finished));
+        joinNetwork(network, previous);
+        finished = true;
+        watcher.join();
         {
             lock_guard<mutex> lock(wifiMutex);
             wifiJoiningName.clear();
@@ -193,7 +216,7 @@ void connect_network(const Network& network) {
 }
 
 // Join, the system asks for a new network's password with its keyboard, and forget a new network that would not join
-static void joinNetwork(const Network& network) {
+static void joinNetwork(const Network& network, const string& previous) {
     // Join, waiting long enough for the password to be typed
     vector<string> output;
     int result = runProgram({"nmcli", "--wait", JOIN_WAIT_SECONDS, "device", "wifi", "connect", network.name}, output);
@@ -215,6 +238,48 @@ static void joinNetwork(const Network& network) {
         for (const string& line : deleted)
             cout << line << endl;
     }
+
+    // Go back to the network the robot was on, a join that gave up leaves it with none
+    if (!previous.empty() && previous != network.name)
+        rejoinNetwork(previous);
+}
+
+// The network the last look found joined, empty when none
+static string joinedNetworkName() {
+    lock_guard<mutex> lock(wifiMutex);
+    auto active = find_if(wifiList.begin(), wifiList.end(), [](const Network& network) { return network.active; });
+    return active == wifiList.end() ? "" : active->name;
+}
+
+// Join a network again from the connection it already has
+static void rejoinNetwork(const string& name) {
+    for (const SavedConnection& connection : savedConnections()) {
+        if (!connection.joined || connection.ssid != name)
+            continue;
+        vector<string> output;
+        cout << "Going back to " << name << "." << endl;
+        runProgram({"nmcli", "--wait", REJOIN_WAIT_SECONDS, "connection", "up", "uuid", connection.uuid}, output);
+        return;
+    }
+}
+
+// Keep saying whether the join is waiting on a password, until the join ends
+static void watchForPassword(const atomic<bool>& finished) {
+    while (!finished.load()) {
+        wifiNeedsPassword = deviceNeedsPassword();
+        this_thread::sleep_for(chrono::milliseconds(PASSWORD_WATCH_MS));
+    }
+    wifiNeedsPassword = false;
+}
+
+// True when the wireless device is asking for a password
+static bool deviceNeedsPassword() {
+    for (const string& line : runCommand(DEVICE_STATE_COMMAND)) {
+        vector<string> fields = splitFields(line);
+        if (fields.size() >= 2 && fields[0] == WIRELESS_DEVICE_TYPE && fields[1].find(NEEDS_PASSWORD_STATE) != string::npos)
+            return true;
+    }
+    return false;
 }
 
 // Forget a network, every connection saved for it goes, and a joined one drops off
@@ -285,6 +350,11 @@ bool wifi_busy() {
 // True while a join is running, the password box included
 bool wifi_joining() {
     return wifiJoining.load();
+}
+
+// True while the system is asking for a password to finish a join
+bool wifi_needs_password() {
+    return wifiNeedsPassword.load();
 }
 
 // The network being joined, empty when no join is going

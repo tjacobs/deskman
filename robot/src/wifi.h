@@ -35,5 +35,8 @@ void forget_network(const Network& network);
 bool wifi_busy();
 bool wifi_joining();
 
+// True while the system is asking for a password, the face steps aside so its prompt can be used
+bool wifi_needs_password();
+
 // The network being joined, empty when no join is going
 string wifi_joining_name();

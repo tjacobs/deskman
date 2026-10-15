@@ -75,6 +75,7 @@ static const char* DEAD_IBUS_ADDRESS = "unix:path=/nonexistent";
 
 // Screen globals
 SDL_Window* window = nullptr;
+static bool g_window_hidden = false;
 SDL_Renderer* renderer = nullptr;
 int screen_width = 800;
 int screen_height = 600;
@@ -266,6 +267,24 @@ void hide_cursor() {
     install_blank_cursor();
     if (g_blank_cursor)
         SDL_SetCursor(g_blank_cursor);
+}
+
+// Hide the face so a system prompt can be seen and touched, and bring it back after
+void set_window_hidden(bool hidden) {
+    if (!window || hidden == g_window_hidden)
+        return;
+    g_window_hidden = hidden;
+    if (hidden) {
+        SDL_HideWindow(window);
+        return;
+    }
+    SDL_ShowWindow(window);
+    SDL_RaiseWindow(window);
+}
+
+// True while the face is hidden
+bool window_hidden() {
+    return g_window_hidden;
 }
 
 // One transparent pixel, so Wayland still has a cursor to hide

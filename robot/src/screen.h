@@ -25,6 +25,10 @@ extern mutex statusMutex;
 bool create_window();
 bool close_window();
 
+// Hide the face while a system prompt needs the screen, and show it again
+void set_window_hidden(bool hidden);
+bool window_hidden();
+
 // Give a child process the input method back, the face itself keeps the touch keyboard away
 void allow_screen_keyboard();
 

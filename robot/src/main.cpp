@@ -9,6 +9,7 @@
 #include "tracker.h"
 #include "config.h"
 #include "interface.h"
+#include "wifi.h"
 #include "recorder.h"
 #include "player.h"
 #include "fan.h"
@@ -457,8 +458,11 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Step the blink
         update_face_animation(&face);
 
+        // Step aside while the system asks for a WiFi password, so its prompt can be used
+        set_window_hidden(wifi_needs_password());
+
         // Sleep out the frame when there is nothing to draw
-        if (!show_window || !renderer) {
+        if (!show_window || !renderer || window_hidden()) {
             sleep_for(milliseconds(frame_gap_ms()));
             continue;
         }
