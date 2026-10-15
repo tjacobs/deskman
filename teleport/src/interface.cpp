@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -39,6 +40,9 @@ static string lastReply;
 static string pendingCommand;
 static string pendingPeer;
 
+// What the robot is told on a crash, it shows the text on the face and writes it to its log
+static const char* CRASH_WARNING_LINE = "{\"command\":\"warning\",\"text\":\"Teleport crashed, restarting\",\"seconds\":60}\n";
+
 static string robotInterfacePath();
 static bool connectRobot();
 static void closeClient();
@@ -49,11 +53,26 @@ static bool waitInterfaceOk();
 static bool waitInterfaceReply(int timeoutSeconds);
 static bool jsonNumber(const string& line, const string& key, float& value);
 static void logError(const string& message);
+static void reportCrash(int signalNumber);
 
 void startInterface() {
     if (interfaceRunning.load()) return;
     interfaceRunning = true;
     interfaceThread = thread(runInterface);
+}
+
+// Report fatal signals to the robot
+void installCrashReporter() {
+    int fatalSignals[] = {SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL};
+    for (int signalNumber : fatalSignals) signal(signalNumber, reportCrash);
+}
+
+// Warn the robot, then die the same way so systemd still restarts teleport
+static void reportCrash(int signalNumber) {
+    ssize_t sent = write(clientSocketFd, CRASH_WARNING_LINE, strlen(CRASH_WARNING_LINE));
+    (void)sent;
+    signal(signalNumber, SIG_DFL);
+    raise(signalNumber);
 }
 
 void stopInterface() {

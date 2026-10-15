@@ -766,6 +766,9 @@ void initSignals() {
     // Catch termination signals
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
+
+    // Report a crash to the robot log and screen
+    installCrashReporter();
 }
 
 // Handle signals

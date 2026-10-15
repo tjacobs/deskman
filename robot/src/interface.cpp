@@ -196,6 +196,7 @@ static steady_clock::time_point g_call_tap_time{};
 static mutex g_warning_mutex;
 static string g_warning;
 static string g_warning_url;
+static steady_clock::time_point g_warning_expires{};
 
 // Where the warning was last drawn, so a tap can find it
 static SDL_Rect g_warning_rect = {0, 0, 0, 0};
@@ -550,8 +551,13 @@ static string handle_request(const string& line, int from_fd) {
         // Show a warning on the face with an optional link to fix it, empty text clears it
         } else if (command == "warning") {
             lock_guard<mutex> lock(g_warning_mutex);
-            g_warning = request.value("text", "");
+            string warning_text = request.value("text", "");
+            if (!warning_text.empty() && warning_text != g_warning)
+                cout << warning_text << endl;
+            g_warning = warning_text;
             g_warning_url = request.value("url", "");
+            int warning_seconds = request.value("seconds", 0);
+            g_warning_expires = warning_seconds > 0 ? steady_clock::now() + seconds(warning_seconds) : steady_clock::time_point{};
             reply = {{"ok", true}};
 
         // Light the mode talk started in and dim the ones it cannot run, it can fall back from the saved one, which stays for the next start
@@ -1512,6 +1518,7 @@ void show_warning(const string& text) {
     lock_guard<mutex> lock(g_warning_mutex);
     g_warning = text;
     g_warning_url = "";
+    g_warning_expires = steady_clock::time_point{};
 }
 
 // Say voice is restarting
@@ -1526,6 +1533,7 @@ static void clear_voice_warning() {
         return;
     g_warning = "";
     g_warning_url = "";
+    g_warning_expires = steady_clock::time_point{};
 }
 
 // Draw the warning, saying it can be tapped when it has a link, and keep where it landed
@@ -1535,6 +1543,11 @@ void draw_warning(TTF_Font* font, int x, int y, SDL_Color color) {
     string url;
     {
         lock_guard<mutex> lock(g_warning_mutex);
+        if (g_warning_expires != steady_clock::time_point{} && steady_clock::now() >= g_warning_expires) {
+            g_warning = "";
+            g_warning_url = "";
+            g_warning_expires = steady_clock::time_point{};
+        }
         text = g_warning;
         url = g_warning_url;
     }

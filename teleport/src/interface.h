@@ -4,6 +4,7 @@
 
 void startInterface();
 void stopInterface();
+void installCrashReporter();
 void pauseInterfaceForCall();
 void resumeInterfaceAfterCall();
 bool takeInterfaceCommand(std::string& command, std::string& peer);
