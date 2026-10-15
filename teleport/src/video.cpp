@@ -477,6 +477,13 @@ bool initVideoBackend() {
         return false;
     }
 
+    // Decode remote video in software, the NVIDIA decoder hangs the call when the phone changes picture size
+    GstElementFactory* hardwareDecoder = gst_element_factory_find("nvv4l2decoder");
+    if (hardwareDecoder) {
+        gst_plugin_feature_set_rank(GST_PLUGIN_FEATURE(hardwareDecoder), GST_RANK_NONE);
+        gst_object_unref(hardwareDecoder);
+    }
+
     // Keep the display sink from freeing the allocator, which crashes later calls
     holdSpareAllocatorReferences();
 
