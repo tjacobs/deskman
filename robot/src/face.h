@@ -24,9 +24,11 @@ typedef struct {
     float blinkTimer;
     bool isBlinking;
 
-    // Where the head and eyes are pointed
+    // Where the head and eyes are pointed, and where they are gliding to
     float lookTiltX;
     float lookTiltY;
+    float lookTargetX;
+    float lookTargetY;
     float currentHeadX;
     float currentHeadY;
 } Face;
@@ -41,7 +43,7 @@ extern const float HEAD_LOOK_DEGREES;
 Face create_face();
 void reset_face_animation(Face* face);
 
-// Step the blink and tilt animation, once per frame
+// Step the blink, and glide the tilt toward its target, once per frame
 void update_face_animation(Face* face);
 
 // Hook for the servo keys, the renderer drives the face itself

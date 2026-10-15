@@ -81,3 +81,6 @@ elseif(APPLE AND SDL2_LIBRARY_DIRS)
 endif()
 
 target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCV_LIBS})
+
+# Tell the tracker where the face detector model lives, beside the sources
+target_compile_definitions(${TARGET_NAME} PRIVATE ROBOT_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")

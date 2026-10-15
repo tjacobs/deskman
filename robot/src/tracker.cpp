@@ -13,9 +13,13 @@
 // Namespace
 using namespace std;
 
-// Run the Haar detector well under the camera rate, it is the expensive part
-static const int FACE_DETECT_FPS = 3;
+// Run the face detector well under the camera rate, it is the expensive part
+static const int FACE_DETECT_FPS = 10;
 static const int FACE_DETECT_GAP_MS = 1000 / FACE_DETECT_FPS;
+
+// Look this often while no face is in view, so an empty room costs little
+static const int EMPTY_DETECT_FPS = 2;
+static const int EMPTY_DETECT_GAP_MS = 1000 / EMPTY_DETECT_FPS;
 
 // How long to wait when the recording has not sent its next frame yet
 static const int FRAME_WAIT_MS = 10;
@@ -28,48 +32,60 @@ static const int PREVIEW_GAP_MS = 1000 / PREVIEW_FPS;
 static const bool LOG_PREVIEW_FPS = false;
 static const int LOG_FPS_GAP_MS = 5000;
 
+// Turn on to draw the face feature dots and the head turn arrow on the preview, off keeps just the boxes
+static const bool SHOW_FACE_FEATURES = false;
+
 // Green box on the face being followed, grey on the rest
 static const cv::Scalar TRACKED_FACE_COLOR = cv::Scalar(0, 255, 0);
 static const cv::Scalar OTHER_FACE_COLOR = cv::Scalar(128, 128, 128);
 static const int FACE_BOX_THICKNESS = 2;
 
-// Blur before detection, then accept faces between these sizes
-static const int DETECT_BLUR_SIZE = 5;
-static const double DETECT_SCALE_FACTOR = 1.1;
-static const int DETECT_MIN_NEIGHBORS = 3;
-static const int DETECT_MIN_FACE = 60;
-static const int DETECT_MAX_FACE = 300;
+// Dots on each face, one colour each for the eyes, the nose, and the mouth corners
+static const cv::Scalar LANDMARK_EYE_COLOR = cv::Scalar(255, 170, 60);
+static const cv::Scalar LANDMARK_NOSE_COLOR = cv::Scalar(0, 215, 255);
+static const cv::Scalar LANDMARK_MOUTH_COLOR = cv::Scalar(147, 112, 255);
+static const cv::Scalar LANDMARK_COLORS[LANDMARK_COUNT] = {LANDMARK_EYE_COLOR, LANDMARK_EYE_COLOR, LANDMARK_NOSE_COLOR, LANDMARK_MOUTH_COLOR, LANDMARK_MOUTH_COLOR};
+static const int LANDMARK_RADIUS = 3;
 
-// Where OpenCV keeps its Haar cascades, Linux first then Mac
-static const char* CASCADE_PATHS[] = {
-    "/usr/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
-    "/opt/homebrew/opt/opencv@4/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
-    "/usr/local/opt/opencv@4/share/opencv4/haarcascades/haarcascade_frontalface_default.xml",
-    "/opt/homebrew/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
-};
+// Arrow from the nose showing which way the head is turned, as a share of the face width per unit of turn
+static const cv::Scalar HEAD_ARROW_COLOR = cv::Scalar(0, 170, 255);
+static const int HEAD_ARROW_THICKNESS = 2;
+static const float HEAD_ARROW_LENGTH = 4.0f;
 
-// Forward declaration
+// Where the nose sits from the eyes down to the mouth when looking straight at the camera
+static const float NOSE_LEVEL_FACING = 0.6f;
+
+// Where the landmarks start in each row the detector returns, after the box and before the score
+static const int LANDMARK_FIRST_COLUMN = 4;
+
+// Detect on a frame shrunk to this width, a small frame is much cheaper and finds the same faces
+static const int DETECT_WIDTH = 320;
+
+// Face detector model beside the sources, and how sure it must be to call something a face
+static const char* DETECT_MODEL_NAME = "face_detection_yunet_2023mar.onnx";
+static const float DETECT_MIN_SCORE = 0.6f;
+static const float DETECT_OVERLAP_LIMIT = 0.3f;
+static const int DETECT_MAX_FACES = 50;
+
+// Limit how many threads OpenCV uses, its worker pool spins between frames and costs more CPU than the detector itself
+static const int OPENCV_THREADS = 1;
+
+// Forward declarations
 static void logPreviewRate();
+static void drawHeadArrow(cv::Mat& frame, const FaceLandmarks& landmarks, const cv::Rect& face);
 
-// Load the face cascade and open the camera
+// Load the face detector and open the camera
 FaceTracker::FaceTracker(bool show_window, bool use_camera): showWindow(show_window) {
-    // Load the first cascade file that is present
-    bool loaded = false;
-    for (const char* path : CASCADE_PATHS) {
-        if (filesystem::exists(path) && face_cascade.load(path)) {
-            loaded = true;
-            break;
-        }
-    }
+    // Fail when the model file is missing
+    string model_path = string(ROBOT_MODEL_DIR) + "/" + DETECT_MODEL_NAME;
+    if (!filesystem::exists(model_path))
+        throw runtime_error("Could not find the face detector model " + model_path);
 
-    // Fail when the cascade file is missing
-    if (!loaded) {
-        cerr << "Error: Could not find or load face cascade classifier in any of the following paths:" << endl;
-        for (const char* path : CASCADE_PATHS) {
-            cerr << "  " << path << endl;
-        }
-        throw runtime_error("Failed to load face cascade classifier");
-    }
+    // Keep OpenCV's worker pool from spinning
+    cv::setNumThreads(OPENCV_THREADS);
+
+    // Load the model, sized for the shrunk frames
+    face_detector = cv::FaceDetectorYN::create(model_path, "", cv::Size(DETECT_WIDTH, DETECT_WIDTH), DETECT_MIN_SCORE, DETECT_OVERLAP_LIMIT, DETECT_MAX_FACES);
 
     // Open the camera unless tracking is disabled
     if (use_camera) {
@@ -117,9 +133,14 @@ void FaceTracker::trackingThreadFunction() {
                 break;
             }
 
+            // Look often while a face is in view, and rarely in an empty room
+            unique_lock<mutex> gapLock(faceMutex);
+            int detectGap = lastFaces.empty() ? EMPTY_DETECT_GAP_MS : FACE_DETECT_GAP_MS;
+            gapLock.unlock();
+
             // Hand the frame to the detector on a timer, it runs alongside so it never holds up the preview
             auto now = chrono::steady_clock::now();
-            if (chrono::duration_cast<chrono::milliseconds>(now - lastDetectAt).count() >= FACE_DETECT_GAP_MS) {
+            if (chrono::duration_cast<chrono::milliseconds>(now - lastDetectAt).count() >= detectGap) {
                 unique_lock<mutex> detectLock(detectMutex);
                 if (!detectBusy) {
                     lastDetectAt = now;
@@ -134,11 +155,19 @@ void FaceTracker::trackingThreadFunction() {
             if (showWindow.load()) {
                 unique_lock<mutex> faceLock(faceMutex);
                 vector<cv::Rect> faces = lastFaces;
+                vector<FaceLandmarks> landmarks = lastLandmarks;
                 size_t largest = largestFace;
                 faceLock.unlock();
                 for (size_t i = 0; i < faces.size(); i++) {
                     cv::Scalar color = i == largest ? TRACKED_FACE_COLOR : OTHER_FACE_COLOR;
                     cv::rectangle(frame, faces[i], color, FACE_BOX_THICKNESS);
+
+                    // Add the feature dots and head arrow when asked for
+                    if (!SHOW_FACE_FEATURES)
+                        continue;
+                    for (int point = 0; point < LANDMARK_COUNT; point++)
+                        cv::circle(frame, landmarks[i][point], LANDMARK_RADIUS, LANDMARK_COLORS[point], cv::FILLED);
+                    drawHeadArrow(frame, landmarks[i], faces[i]);
                 }
                 unique_lock<mutex> frameLock(frameMutex);
                 frame.copyTo(currentFrame);
@@ -147,7 +176,7 @@ void FaceTracker::trackingThreadFunction() {
             }
 
             // Hold the loop to the preview rate, with nothing on screen only the detector needs frames
-            int gap = showWindow.load() ? PREVIEW_GAP_MS : FACE_DETECT_GAP_MS;
+            int gap = showWindow.load() ? PREVIEW_GAP_MS : detectGap;
             auto spent = chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now() - frameStart).count();
             if (spent < gap)
                 this_thread::sleep_for(chrono::milliseconds(gap - spent));
@@ -161,7 +190,7 @@ void FaceTracker::trackingThreadFunction() {
     detectReady.notify_all();
 }
 
-// Run the Haar detector on whichever frame the capture thread last handed over
+// Run the face detector on whichever frame the capture thread last handed over
 void FaceTracker::detectThreadFunction() {
     while (!shouldQuit) {
         // Wait for the next frame to look at
@@ -175,9 +204,11 @@ void FaceTracker::detectThreadFunction() {
         }
 
         // Keep the largest face by area, and the boxes the preview draws
-        vector<cv::Rect> faces = detectFaces(frame);
+        vector<FaceLandmarks> landmarks;
+        vector<cv::Rect> faces = detectFaces(frame, landmarks);
         unique_lock<mutex> faceLock(faceMutex);
         lastFaces = faces;
+        lastLandmarks = landmarks;
         frameWidth = frame.cols;
         frameHeight = frame.rows;
         largestFace = 0;
@@ -202,21 +233,48 @@ void FaceTracker::detectThreadFunction() {
     }
 }
 
-// Find every face in one frame
-vector<cv::Rect> FaceTracker::detectFaces(const cv::Mat& frame) {
+// Find every face in one frame, shrunk first so it costs little
+vector<cv::Rect> FaceTracker::detectFaces(const cv::Mat& frame, vector<FaceLandmarks>& landmarks) {
+    // Shrink the frame, keeping its shape
+    double scale = (double)DETECT_WIDTH / frame.cols;
+    cv::Mat small;
+    cv::resize(frame, small, cv::Size(DETECT_WIDTH, (int)round(frame.rows * scale)), 0, 0, cv::INTER_AREA);
+
+    // Detect, then scale the boxes back up to the full frame
+    cv::Mat found;
+    face_detector->setInputSize(small.size());
+    face_detector->detect(small, found);
     vector<cv::Rect> faces;
-    cv::Mat frame_gray;
+    for (int row = 0; row < found.rows; row++) {
+        cv::Rect box((int)(found.at<float>(row, 0) / scale), (int)(found.at<float>(row, 1) / scale), (int)(found.at<float>(row, 2) / scale), (int)(found.at<float>(row, 3) / scale));
+        faces.push_back(box & cv::Rect(0, 0, frame.cols, frame.rows));
 
-    // Convert, blur, and equalize for more stable Haar detection
-    cv::cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
-    cv::GaussianBlur(frame_gray, frame_gray, cv::Size(DETECT_BLUR_SIZE, DETECT_BLUR_SIZE), 0);
-    cv::equalizeHist(frame_gray, frame_gray);
-
-    // Detect faces, the min size skips the tiny scales that cost the most and never hold a face
-    cv::Size min_face = cv::Size(DETECT_MIN_FACE, DETECT_MIN_FACE);
-    cv::Size max_face = cv::Size(DETECT_MAX_FACE, DETECT_MAX_FACE);
-    face_cascade.detectMultiScale(frame_gray, faces, DETECT_SCALE_FACTOR, DETECT_MIN_NEIGHBORS, cv::CASCADE_SCALE_IMAGE, min_face, max_face);
+        // Scale the landmarks the same way
+        FaceLandmarks points;
+        for (int point = 0; point < LANDMARK_COUNT; point++)
+            points[point] = cv::Point((int)(found.at<float>(row, LANDMARK_FIRST_COLUMN + point * 2) / scale), (int)(found.at<float>(row, LANDMARK_FIRST_COLUMN + point * 2 + 1) / scale));
+        landmarks.push_back(points);
+    }
     return faces;
+}
+
+// Draw an arrow from the nose toward where the head is turned, guessed from the nose against the eyes and mouth
+static void drawHeadArrow(cv::Mat& frame, const FaceLandmarks& landmarks, const cv::Rect& face) {
+    // Measure the eyes and mouth, skipping a face too small or too odd to read
+    cv::Point2f eyeMiddle = (cv::Point2f(landmarks[0]) + cv::Point2f(landmarks[1])) / 2.0f;
+    cv::Point2f mouthMiddle = (cv::Point2f(landmarks[3]) + cv::Point2f(landmarks[4])) / 2.0f;
+    float eyeGap = fabs((float)(landmarks[1].x - landmarks[0].x));
+    float eyeToMouth = mouthMiddle.y - eyeMiddle.y;
+    if (eyeGap < 1.0f || eyeToMouth < 1.0f)
+        return;
+
+    // Sideways turn moves the nose across the eyes, up and down moves it along the face
+    float turnX = (landmarks[2].x - eyeMiddle.x) / eyeGap;
+    float turnY = (landmarks[2].y - eyeMiddle.y) / eyeToMouth - NOSE_LEVEL_FACING;
+
+    // Point the arrow that way, as long as the face is wide
+    cv::Point2f tip = cv::Point2f(landmarks[2]) + cv::Point2f(turnX, turnY) * (face.width * HEAD_ARROW_LENGTH);
+    cv::arrowedLine(frame, landmarks[2], cv::Point(tip), HEAD_ARROW_COLOR, HEAD_ARROW_THICKNESS);
 }
 
 // Report the tracked face as an offset from centre, from -1 to 1

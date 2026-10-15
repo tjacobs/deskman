@@ -467,11 +467,11 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         static bool eyes_following = false;
         bool hasFaceTracking = use_camera && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY) && !sweeping();
         if (hasFaceTracking) {
-            face.lookTiltX = -faceX * FACE_LOOK_TILT_DEGREES;
-            face.lookTiltY = faceY * FACE_LOOK_TILT_DEGREES;
+            face.lookTargetX = -faceX * FACE_LOOK_TILT_DEGREES;
+            face.lookTargetY = faceY * FACE_LOOK_TILT_DEGREES;
         } else if (eyes_following) {
-            face.lookTiltX = 0.0f;
-            face.lookTiltY = 0.0f;
+            face.lookTargetX = 0.0f;
+            face.lookTargetY = 0.0f;
         }
         eyes_following = hasFaceTracking;
 

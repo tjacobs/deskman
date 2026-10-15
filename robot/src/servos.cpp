@@ -969,8 +969,8 @@ void set_degrees(int pan, int tilt, int hat) {
     hat = (int)lround(servo_to_degrees(servos[2], servos[2].position));
 
     // Lean the drawn face the same way the head turned
-    face.lookTiltX = -LOOK_FACE_PAN * static_cast<float>(pan) / PAN_FULL_DEGREES;
-    face.lookTiltY = 0.0f;
+    face.lookTargetX = -LOOK_FACE_PAN * static_cast<float>(pan) / PAN_FULL_DEGREES;
+    face.lookTargetY = 0.0f;
 
     // Say where the head went, except for the level center pose
     if (pan != 0 || tilt != 0 || hat != 0) {

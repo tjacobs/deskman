@@ -16,6 +16,9 @@ static const float ANIMATION_SPEED = 0.4f;
 static const float BLINK_SPEED = 8.0f;
 static const float BLINK_INTERVAL = 10.0f;
 
+// How long the face takes to glide most of the way to a new look target
+static const float LOOK_EASE_MS = 100.0f;
+
 // Eye size, and how far down a blink pulls the lid
 static const float EYE_RADIUS_X = 45.0f;
 static const float EYE_RADIUS_Y = 120.0f;
@@ -81,6 +84,8 @@ void reset_face_animation(Face* face) {
     face->isBlinking = false;
     face->lookTiltX = 0.0f;
     face->lookTiltY = 0.0f;
+    face->lookTargetX = 0.0f;
+    face->lookTargetY = 0.0f;
     face->currentHeadX = 0.0f;
     face->currentHeadY = 0.0f;
 }
@@ -90,7 +95,8 @@ void update_face_animation(Face* face) {
     // Measure the real time since the last frame, so the speed holds at any frame rate
     static Uint32 last_ticks = SDL_GetTicks();
     Uint32 now_ticks = SDL_GetTicks();
-    float step = (now_ticks - last_ticks) / 1000.0f * ANIMATION_SPEED;
+    float elapsed_milliseconds = (float)(now_ticks - last_ticks);
+    float step = elapsed_milliseconds / 1000.0f * ANIMATION_SPEED;
     last_ticks = now_ticks;
 
     // Start a blink once the interval has passed
@@ -115,6 +121,11 @@ void update_face_animation(Face* face) {
     float eyeHeight = EYE_RADIUS_Y * (1.0f - blinkProgress * EYE_BLINK_CLOSE);
     face->leftEye->radiusY = eyeHeight;
     face->rightEye->radiusY = eyeHeight;
+
+    // Glide the tilt a fraction of the way to its target, so slow face tracking still looks smooth
+    float glide = 1.0f - exp(-elapsed_milliseconds / LOOK_EASE_MS);
+    face->lookTiltX += (face->lookTargetX - face->lookTiltX) * glide;
+    face->lookTiltY += (face->lookTargetY - face->lookTiltY) * glide;
 
     // Turn the face toward the look target
     vectorRenderer.setFaceRotation(Vec3(-face->lookTiltY, face->lookTiltX, 0));

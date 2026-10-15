@@ -10,6 +10,7 @@
 #include "camera.h"
 
 // System
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -20,10 +21,14 @@
 // Namespace
 using namespace std;
 
+// Eyes, nose, and mouth corners the detector finds on a face
+static const int LANDMARK_COUNT = 5;
+typedef array<cv::Point, LANDMARK_COUNT> FaceLandmarks;
+
 // Watch the camera for faces, and draw a preview over the face
 class FaceTracker {
 public:
-    // Load the cascade and open the camera, then close both again
+    // Load the face detector and open the camera, then close both again
     FaceTracker(bool show_window, bool use_camera);
     ~FaceTracker();
 
@@ -50,11 +55,11 @@ private:
     // Worker thread bodies, one grabs frames and one looks for faces in them
     void trackingThreadFunction();
     void detectThreadFunction();
-    vector<cv::Rect> detectFaces(const cv::Mat& frame);
+    vector<cv::Rect> detectFaces(const cv::Mat& frame, vector<FaceLandmarks>& landmarks);
 
-    // Camera, cascade, and the face the tracker last saw
+    // Camera, face detector, and the face the tracker last saw
     Camera camera;
-    cv::CascadeClassifier face_cascade;
+    cv::Ptr<cv::FaceDetectorYN> face_detector;
     cv::Rect currentFace;
     mutex faceMutex;
 
@@ -64,6 +69,7 @@ private:
 
     // Boxes from the last detection, drawn onto the frames in between
     vector<cv::Rect> lastFaces;
+    vector<FaceLandmarks> lastLandmarks;
     size_t largestFace = 0;
     chrono::steady_clock::time_point lastDetectAt{};
 
