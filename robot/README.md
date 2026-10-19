@@ -60,7 +60,7 @@ Other programs, such as talk and teleport, drive the head, camera, and menu over
 
 Run once per machine, then reboot. It sets up the system: booting to graphical, auto-logs in, hides the pointer and crash and update dialogs, keeps the screen and Wi-Fi awake, fixes the mDNS name, rotates the screen to portrait, and adds Robot and Teleport desktop icons. On the Pi it also writes the DSI panel, servo UART, and I2C lines into `/boot/firmware/config.txt`, and installs a matchbox touch keyboard if not present. On the Jetson it turns on the screen keyboard if not on already.
 
-The Robot icon runs `start_robot.sh`, which offers the OpenAI key setup when `talk/openai.env` has no key, then starts `robot.service`. The`restart_services.sh` script restarts robot and teleport after a short delay, so talk can restart them by voice.
+The Robot icon runs `start_robot.sh`, which starts `robot.service`. The`restart_services.sh` script restarts robot and teleport after a short delay, so talk can restart them by voice.
 
 ## Service
 

@@ -97,7 +97,7 @@ The key is checked against `https://api.openai.com/v1/models` before saving, so 
 
 Use `--terminal` over SSH, it skips the browser and paste box and prompts on the terminal. That also happens on its own when there is no display or no browser.
 
-`talk.py` opens this by itself when `--cloud` or `--realtime` asks for OpenAI and no key is saved, so the person who asked can paste one. The plain startup with no flags never opens it, it just says to run this and carries on with the local model.
+`talk.py` opens this by itself when it starts with cloud or realtime mode on, from `--cloud`, `--realtime`, or `config.json`, and no key is saved. Local mode leaves it alone and carries on with the local model.
 
 ## talk.py
 

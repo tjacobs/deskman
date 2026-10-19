@@ -241,6 +241,7 @@ static steady_clock::time_point g_last_menu_tap{};
 
 // The one mode talk runs, the tap that has not reached talk yet, and whether each mode could run, dimmed when not
 static atomic<int> g_talk_mode{0};
+static atomic<int> g_talk_saved_mode{0};
 static atomic<bool> g_talk_mode_pending{false};
 static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true};
 
@@ -564,7 +565,7 @@ static string handle_request(const string& line, int from_fd) {
             g_warning_expires = warning_seconds > 0 ? steady_clock::now() + seconds(warning_seconds) : steady_clock::time_point{};
             reply = {{"ok", true}};
 
-        // Light the mode talk started in and dim the ones it cannot run, it can fall back from the saved one, which stays for the next start
+        // Light the mode talk is running and dim the ones it cannot run. A fallback does not change the saved mode.
         } else if (command == "talk_mode") {
             int mode = talk_mode_from_name(request.value("mode", ""));
             if (mode == TALK_MODE_NONE) {
@@ -1373,9 +1374,9 @@ void handle_call_event(const SDL_Event& event) {
     if ((item >= 0 || talk_mode != TALK_MODE_NONE) && !debounce_tap())
         return;
 
-    // Light a new mode and restart talk on it, or start talk on the mode already lit when it is not running, the menu stays up so the lit button shows where it landed
+    // Save a tap that differs from the mode in config, even when talk fell back and already lit that button
     if (talk_mode != TALK_MODE_NONE) {
-        if (talk_mode != g_talk_mode.load()) {
+        if (talk_mode != g_talk_saved_mode.load()) {
             g_talk_mode = talk_mode;
             g_talk_mode_pending = true;
         } else if (!g_talk_running.load()) {
@@ -1636,9 +1637,10 @@ void set_camera_showing(bool showing) {
     g_camera_showing = showing;
 }
 
-// Light the saved mode, so the row starts on the right button before talk reports in
+// Light this mode and remember it as the one saved in config
 void set_talk_mode(int mode) {
     g_talk_mode = mode;
+    g_talk_saved_mode = mode;
 }
 
 // The mode button just tapped, or no mode when none is waiting

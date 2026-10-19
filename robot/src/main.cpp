@@ -1048,6 +1048,9 @@ static void switch_talk_mode(int mode) {
     out << config.dump(2) << endl;
     out.close();
 
+    // Remember the saved mode, so a later fallback does not make this same tap look unchanged
+    set_talk_mode(mode);
+
     // Restart talk so it loads the new model, and a tap on a mode starts talk even after no talk was asked for
     cout << "Talk mode: " << talk_mode_name(mode) << endl;
     g_no_talk = false;

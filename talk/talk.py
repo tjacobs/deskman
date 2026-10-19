@@ -209,7 +209,7 @@ def main():
             print(f'{reason} Using local.', flush=True)
             REALTIME_MODE = False
 
-            # Realtime was asked for, so a missing key is worth opening the setup over
+            # Realtime was asked for, so a missing key opens the setup
             if reason == NO_KEY_REASON:
                 offer_key_setup(True)
         else:
@@ -388,7 +388,7 @@ def warn_using_local(reason):
     LOCAL_REASON_SHOWN = True
     print(f'Warning: {reason}, using local model.', flush=True)
 
-# Open the key setup when cloud was asked for, only say how when it was just the auto pick
+# Open the key setup when cloud or realtime was asked for, only say how when it was just the auto pick
 def offer_key_setup(asked_for_cloud):
     global KEY_SETUP_OFFERED
     if KEY_SETUP_OFFERED:
