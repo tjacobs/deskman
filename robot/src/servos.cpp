@@ -736,13 +736,13 @@ void sweep_servos(bool scan_bus) {
         sweep_line(label, servo, servo_center(servo));
     }
 
-    // Leave the hat raised, it is how the robot sits when it is done
+    // Leave the hat level at zero degrees, it is how the robot sits when idle
     for (int index = 0; index < count; index++) {
         Servo &servo = list[index];
         if (servo.id != SERVO_ID_HAT)
             continue;
-        snprintf(label, sizeof(label), "%s up", servo.name);
-        sweep_line(label, servo, degrees_to_servo(servo, servo.degrees_min));
+        snprintf(label, sizeof(label), "%s zero", servo.name);
+        sweep_line(label, servo, degrees_to_servo(servo, 0));
     }
     printf(g_quit ? "Sweep stopped\n" : "Sweep done\n");
 }
