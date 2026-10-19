@@ -26,6 +26,7 @@ GITHUB_HOST="github.com"
 AUTHORIZED_KEYS_FILE="${HOME}/.ssh/authorized_keys"
 SHELL_HISTORY_FILE="${HOME}/.bash_history"
 TELEPORT_CONFIG_FILE="${TELEPORT_DIR}/config.json"
+AVAHI_CONFIG_FILE="/etc/avahi/avahi-daemon.conf"
 
 # Teleport settings that stay, the rest is made again on the next start
 TELEPORT_KEPT_SETTINGS="autoAnswer phone"
@@ -268,6 +269,12 @@ rename_robot() {
     # Set the name, and the local address that goes with it
     act sudo hostnamectl set-hostname "${NEW_HOSTNAME}"
     act sudo sed -i "s/^127.0.1.1.*/127.0.1.1 ${NEW_HOSTNAME}/" /etc/hosts
+
+    # Change the name Avahi announces as name.local, the installer wrote the old one into its config
+    if [[ -f "${AVAHI_CONFIG_FILE}" ]]; then
+        act sudo sed -i "s/^#*host-name=.*/host-name=${NEW_HOSTNAME}/" "${AVAHI_CONFIG_FILE}"
+        act sudo systemctl restart avahi-daemon.service
+    fi
 }
 
 # Reload the service files, so the next boot starts the services without a changed on disk warning
