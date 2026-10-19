@@ -311,25 +311,9 @@ remove_teleport_identity() {
     act rm -f -- "${TELEPORT_DIR}/log.txt"
 }
 
-# Delete the shell history, then point the file at nothing so this shell cannot write its lines back
+# Delete the shell history
 remove_shell_history() {
     act rm -f -- "${SHELL_HISTORY_FILE}"
-    act ln -s /dev/null "${SHELL_HISTORY_FILE}"
-    restore_history_when_shell_exits
-}
-
-# Put a real empty history file back once the shell that ran the reset has exited
-restore_history_when_shell_exits() {
-    local parent_pid="${PPID}"
-
-    # Say what will happen, including on a preview
-    echo "  restore ${SHELL_HISTORY_FILE} when shell ${parent_pid} exits"
-    if [[ "${DRY_RUN}" == "${FLAG_ON}" ]]; then
-        return
-    fi
-
-    # Keep running after the reset script itself exits, and after that shell closes
-    setsid bash -c "while kill -0 ${parent_pid} 2>/dev/null; do sleep 1; done; rm -f -- '${SHELL_HISTORY_FILE}'; : > '${SHELL_HISTORY_FILE}'" </dev/null >/dev/null 2>&1 &
 }
 
 # Give the robot its own hostname when one was asked for, and announce it
