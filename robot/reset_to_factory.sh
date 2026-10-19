@@ -259,22 +259,31 @@ remove_teleport_identity() {
     act rm -f -- "${TELEPORT_DIR}/build/device.id" "${TELEPORT_DIR}/build/config.json" "${TELEPORT_DIR}/log.txt"
 }
 
-# Give the robot its own hostname when one was asked for
+# Give the robot its own hostname when one was asked for, and announce it
 rename_robot() {
-    # Nothing to do without a name
-    if [[ -z "${NEW_HOSTNAME}" ]]; then
+    # Set the name, and the local address that goes with it, when one was asked for
+    if [[ -n "${NEW_HOSTNAME}" ]]; then
+        act sudo hostnamectl set-hostname "${NEW_HOSTNAME}"
+        act sudo sed -i "s/^127.0.1.1.*/127.0.1.1 ${NEW_HOSTNAME}/" /etc/hosts
+    fi
+
+    # Make Avahi announce the robot name, whether or not it was just changed
+    announce_hostname
+}
+
+# Change the name Avahi announces as name.local, the installer wrote an old one into its config
+announce_hostname() {
+    # Find the name that should be announced
+    local announced_name="${NEW_HOSTNAME:-$(hostname)}"
+
+    # Nothing to do when there is no config, or it already has the name
+    if [[ ! -f "${AVAHI_CONFIG_FILE}" ]] || grep -qx "host-name=${announced_name}" "${AVAHI_CONFIG_FILE}"; then
         return
     fi
 
-    # Set the name, and the local address that goes with it
-    act sudo hostnamectl set-hostname "${NEW_HOSTNAME}"
-    act sudo sed -i "s/^127.0.1.1.*/127.0.1.1 ${NEW_HOSTNAME}/" /etc/hosts
-
-    # Change the name Avahi announces as name.local, the installer wrote the old one into its config
-    if [[ -f "${AVAHI_CONFIG_FILE}" ]]; then
-        act sudo sed -i "s/^#*host-name=.*/host-name=${NEW_HOSTNAME}/" "${AVAHI_CONFIG_FILE}"
-        act sudo systemctl restart avahi-daemon.service
-    fi
+    # Write the name and restart Avahi
+    act sudo sed -i "s/^#*host-name=.*/host-name=${announced_name}/" "${AVAHI_CONFIG_FILE}"
+    act sudo systemctl restart avahi-daemon.service
 }
 
 # Reload the service files, so the next boot starts the services without a changed on disk warning
