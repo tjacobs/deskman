@@ -38,7 +38,7 @@ WAYLAND_FLAG = '--ozone-platform=wayland'
 
 # Title, prompt, and width of the paste box
 DIALOG_TITLE = 'OpenAI key'
-DIALOG_TEXT = 'Log in, create a key, and copy it, it is saved as soon as it is copied'
+DIALOG_TEXT = 'Log into OpenAI platform, create a key, and copy it.\nIt will be saved as soon as it is copied.'
 DIALOG_WIDTH = '600'
 
 # How often to look at the clipboard while the box is up, a copied key closes the box so nothing needs pasting
