@@ -13,5 +13,5 @@ tools/fan_samples.csv
 memory.json
 reminders.json
 accounts.json
-openai.env
+openai.env*
 history/
