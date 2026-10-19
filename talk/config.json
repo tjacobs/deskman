@@ -1,7 +1,7 @@
 {
-  "local": false,
+  "local": true,
   "cloud": false,
-  "realtime": true,
+  "realtime": false,
   "realtime_accent": "Speak with an American accent.",
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo"
