@@ -427,7 +427,6 @@ act() {
 print_reminders() {
     echo
     echo "Still to do by hand:"
-    echo "  Set up an OpenAI key with talk/install_openai_key.sh, or set talk/config.json to local."
     echo "  Reboot, then check the robot starts on its own."
 }
 
