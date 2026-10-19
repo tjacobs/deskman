@@ -25,6 +25,9 @@ GITHUB_LOGIN_FILE="${HOME}/.config/gh/hosts.yml"
 GITHUB_HOST="github.com"
 AUTHORIZED_KEYS_FILE="${HOME}/.ssh/authorized_keys"
 SHELL_HISTORY_FILE="${HOME}/.bash_history"
+BASHRC_FILE="${HOME}/.bashrc"
+HISTORY_CLEAR_BEGIN="# deskman-reset-clear-history begin"
+HISTORY_CLEAR_END="# deskman-reset-clear-history end"
 TELEPORT_CONFIG_FILE="${TELEPORT_DIR}/config.json"
 AVAHI_CONFIG_FILE="/etc/avahi/avahi-daemon.conf"
 
@@ -295,7 +298,62 @@ reload_units() {
 clear_logs() {
     act sudo journalctl --rotate
     act sudo journalctl --vacuum-time=1s
-    act truncate -c -s 0 -- "${SHELL_HISTORY_FILE}"
+
+    # Point the history file at nothing, so this shell cannot write its lines back on exit
+    act rm -f -- "${SHELL_HISTORY_FILE}"
+    act ln -s /dev/null "${SHELL_HISTORY_FILE}"
+    restore_history_when_shell_exits
+    arm_history_clear_once
+}
+
+# Put a real empty history file back once the shell that ran the reset has exited
+restore_history_when_shell_exits() {
+    local parent_pid="${PPID}"
+
+    # Say what will happen, including on a preview
+    echo "  restore ${SHELL_HISTORY_FILE} when shell ${parent_pid} exits"
+    if [[ "${DRY_RUN}" == "${FLAG_ON}" ]]; then
+        return
+    fi
+
+    # Keep running after the reset script itself exits, and after that shell closes
+    setsid bash -c "while kill -0 ${parent_pid} 2>/dev/null; do sleep 1; done; rm -f -- '${SHELL_HISTORY_FILE}'; : > '${SHELL_HISTORY_FILE}'" </dev/null >/dev/null 2>&1 &
+}
+
+# Clear history in the next shell too, in case reboot stops the restore above
+arm_history_clear_once() {
+    local parent_pid="${PPID}"
+
+    # Say what will happen, including on a preview
+    echo "  arm one history clear in ${BASHRC_FILE} for shell ${parent_pid}"
+    if [[ "${DRY_RUN}" == "${FLAG_ON}" ]]; then
+        return
+    fi
+
+    # Drop a block left by an earlier reset, so only one remains
+    if [[ -f "${BASHRC_FILE}" ]]; then
+        sed -i "/${HISTORY_CLEAR_BEGIN}/,/${HISTORY_CLEAR_END}/d" "${BASHRC_FILE}"
+    fi
+
+    # Keep a newline before the block when the file does not already end with one
+    if [[ -s "${BASHRC_FILE}" && -n "$(tail -c 1 "${BASHRC_FILE}")" ]]; then
+        echo >> "${BASHRC_FILE}"
+    fi
+
+    # The next interactive shell forgets anything it loaded, then removes this block once the reset shell is gone
+    cat >> "${BASHRC_FILE}" <<EOF
+${HISTORY_CLEAR_BEGIN} ${parent_pid}
+history -c
+if ! kill -0 ${parent_pid} 2>/dev/null; then
+    if [[ -L "\${HOME}/.bash_history" ]]; then
+        rm -f -- "\${HOME}/.bash_history"
+    fi
+    : > "\${HOME}/.bash_history"
+    history -w
+    sed -i '/${HISTORY_CLEAR_BEGIN}/,/${HISTORY_CLEAR_END}/d' "\${HOME}/.bashrc"
+fi
+${HISTORY_CLEAR_END}
+EOF
 }
 
 # Forget every saved WiFi network only when asked to, the customer joins theirs from the WiFi menu
@@ -358,8 +416,7 @@ print_reminders() {
     echo
     echo "Still to do by hand:"
     echo "  Set up an OpenAI key with talk/install_openai_key.sh, or set talk/config.json to local."
-    echo "  Open a new terminal to sudo reboot, as this shell can write its history back on exit."
-    echo "  Check the robot starts on its own after the reboot."
+    echo "  Reboot, then check the robot starts on its own."
 }
 
 # Run the delete
