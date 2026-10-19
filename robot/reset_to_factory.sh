@@ -15,7 +15,7 @@ FLAG_ON=1
 FLAG_OFF=0
 
 # Word that must be typed to start the delete
-CONFIRM_WORD="DELETE"
+CONFIRM_WORD="RESET"
 
 # Character that makes the rows above and below a banner message
 BANNER_CHARACTER="*"
@@ -25,14 +25,17 @@ GITHUB_LOGIN_FILE="${HOME}/.config/gh/hosts.yml"
 GITHUB_HOST="github.com"
 AUTHORIZED_KEYS_FILE="${HOME}/.ssh/authorized_keys"
 SHELL_HISTORY_FILE="${HOME}/.bash_history"
+BROWSER_PROCESS_PATTERN="/snap/chromium/|google-chrome|(^|/)chromium( |$)"
+BROWSER_DATA_DIRECTORIES=(
+    "${HOME}/.snap/data/chromium"
+    "${HOME}/snap/chromium"
+    "${HOME}/.config/chromium"
+    "${HOME}/.config/google-chrome"
+    "${HOME}/.cache/chromium"
+    "${HOME}/.cache/google-chrome"
+)
 TELEPORT_CONFIG_FILE="${TELEPORT_DIR}/config.json"
 AVAHI_CONFIG_FILE="/etc/avahi/avahi-daemon.conf"
-
-# Teleport settings that stay, the rest is made again on the next start
-TELEPORT_KEPT_SETTINGS="autoAnswer phone"
-
-# Rewrites the teleport config with only the kept settings
-KEEP_SETTINGS_PROGRAM='import json, sys; path = sys.argv[1]; config = json.load(open(path)); json.dump({name: config[name] for name in sys.argv[2:] if name in config}, open(path, "w"), indent=2)'
 WIRELESS_CONNECTION_TYPE="802-11-wireless"
 HOSTNAME_PATTERN='^[a-z]+[0-9]+$'
 
@@ -74,7 +77,7 @@ parse_args() {
     ASSUME_YES="${FLAG_OFF}"
     KEEP_OPENAI_KEY="${FLAG_OFF}"
     DELETE_SSH_KEY="${FLAG_OFF}"
-    DELETE_TELEPORT_KEY="${FLAG_OFF}"
+    DELETE_TELEPORT_LOGIN="${FLAG_OFF}"
     DELETE_WIFI="${FLAG_OFF}"
     NEW_HOSTNAME=""
 
@@ -93,8 +96,8 @@ parse_args() {
             --delete-ssh-key)
                 DELETE_SSH_KEY="${FLAG_ON}"
                 ;;
-            --delete-teleport-key)
-                DELETE_TELEPORT_KEY="${FLAG_ON}"
+            --delete-teleport-login)
+                DELETE_TELEPORT_LOGIN="${FLAG_ON}"
                 ;;
             --delete-wifi)
                 DELETE_WIFI="${FLAG_ON}"
@@ -124,14 +127,14 @@ parse_args() {
 
 # Show the options
 print_usage() {
-    echo "Usage: robot/reset_to_factory.sh [--dry-run] [--yes] [--keep-key] [--delete-ssh-key] [--delete-teleport-key] [--delete-wifi] [--hostname name]"
+    echo "Usage: robot/reset_to_factory.sh [--dry-run] [--yes] [--keep-key] [--delete-ssh-key] [--delete-teleport-login] [--delete-wifi] [--hostname name]"
     echo "  --dry-run               only show what would be deleted"
     echo "  --yes                   do not ask before deleting"
     echo "  --keep-key              keep the OpenAI key in talk/openai.env"
     echo "  --delete-ssh-key        remove the authorized SSH keys, they are kept for remote support otherwise"
-    echo "  --delete-teleport-key   forget the teleport login key, it is kept otherwise"
+    echo "  --delete-teleport-login delete the teleport config, it is left alone otherwise"
     echo "  --delete-wifi           forget every saved WiFi network, they are kept otherwise"
-    echo "  --hostname name         rename the robot, like deskman7, and give teleport a new key"
+    echo "  --hostname name         rename the robot, like deskman7"
 }
 
 # Print a message between rows of stars as wide as the message, so it stands out above the steps
@@ -177,12 +180,15 @@ delete_robot() {
 
     # Do each step
     stop_services
+    forget_git_config
+    remove_browser_data
     remove_openai_key
     remove_github_login
     remove_ssh_keys
     remove_talk_data
     remove_robot_data
     remove_teleport_identity
+    remove_shell_history
     rename_robot
     reload_units
     clear_logs
@@ -197,6 +203,43 @@ stop_services() {
     act sudo systemctl stop robot.service teleport.service
 }
 
+# Forget the owner's git name and the saved GitHub login helper
+forget_git_config() {
+    act git config --global --unset-all user.name
+    act git config --global --unset-all user.email
+    act git config --global --remove-section "credential.https://${GITHUB_HOST}"
+    act git config --global --remove-section "credential.https://gist.${GITHUB_HOST}"
+}
+
+# Close Chromium and Chrome and delete cookies, history, saved logins, and caches
+remove_browser_data() {
+    # Quit an open browser so it cannot write the profile back after this delete
+    if pgrep -u "${USER}" -f "${BROWSER_PROCESS_PATTERN}" >/dev/null; then
+        act pkill -u "${USER}" -f "${BROWSER_PROCESS_PATTERN}"
+    fi
+
+    # Delete each profile directory that is on this machine
+    local browser_directory
+    for browser_directory in "${BROWSER_DATA_DIRECTORIES[@]}"; do
+        if [[ -d "${browser_directory}" ]]; then
+            act rm -rf -- "${browser_directory}"
+        fi
+    done
+}
+
+# Delete matched paths, and skip the line when a glob found nothing
+remove_found() {
+    local remove_flag="$1"
+    shift
+
+    # An empty glob has nothing to delete
+    if [[ $# -eq 0 ]]; then
+        return
+    fi
+
+    act rm "${remove_flag}" -- "$@"
+}
+
 # Delete the OpenAI key
 remove_openai_key() {
     # Keep it when asked to
@@ -206,19 +249,12 @@ remove_openai_key() {
     fi
 
     # Delete the key file and any renamed copies
-    act rm -f -- "${TALK_DIR}"/openai.env*
+    remove_found -f "${TALK_DIR}"/openai.env*
 }
 
-# Sign out of GitHub and forget the owner's git name
+# Delete the saved GitHub login, the logout command waits on a keyring dialog
 remove_github_login() {
-    # Delete the saved GitHub login, the logout command waits on a keyring dialog
     act rm -f -- "${GITHUB_LOGIN_FILE}"
-
-    # Forget the owner's name and email, and the helper that used the login
-    act git config --global --unset-all user.name
-    act git config --global --unset-all user.email
-    act git config --global --remove-section "credential.https://${GITHUB_HOST}"
-    act git config --global --remove-section "credential.https://gist.${GITHUB_HOST}"
 }
 
 # Remove the owner's SSH keys only when asked to
@@ -235,40 +271,65 @@ remove_ssh_keys() {
 
 # Delete what talk saved about the owner
 remove_talk_data() {
-    # Conversations, memories, and reminders
-    act rm -rf -- "${TALK_DIR}"/history/*
-    act rm -f -- "${TALK_DIR}/memory.json" "${TALK_DIR}/reminders.json"
+    # Conversations
+    remove_found -rf "${TALK_DIR}"/history/*
+
+    # Saved memory
+    act rm -f -- "${TALK_DIR}/memory.json"
+
+    # Saved reminders
+    act rm -f -- "${TALK_DIR}/reminders.json"
 
     # Linked calendar and speaker accounts
     act rm -f -- "${TALK_DIR}/accounts.json"
 
-    # Test recordings of the owner's voice and talk logs
-    act rm -f -- "${TALK_DIR}"/audio/test_*.wav
-    act rm -f -- "${TALK_DIR}/log.txt" "${TALK_DIR}/monitor.log"
+    # Test recordings of the owner's voice and the talk log
+    remove_found -f "${TALK_DIR}"/audio/test_*.wav
+    act rm -f -- "${TALK_DIR}/log.txt"
 }
 
 # Delete what the robot recorded and logged
 remove_robot_data() {
-    act rm -rf -- "${ROBOT_DIR}"/recordings/*
+    # Recordings
+    remove_found -rf "${ROBOT_DIR}"/recordings/*
     act rm -f -- "${ROBOT_DIR}/log.txt"
 }
 
-# Drop the teleport name but keep the phone number, and keep the login key unless asked to drop it
+# Leave the teleport config alone unless asked to delete the login
 remove_teleport_identity() {
-    # The login key stays so the next start can still log in as this robot
-    local kept_settings="${TELEPORT_KEPT_SETTINGS}"
-    if [[ "${DELETE_TELEPORT_KEY}" != "${FLAG_ON}" && -z "${NEW_HOSTNAME}" ]]; then
-        kept_settings="${kept_settings} key"
-        keep_note "Keeping the teleport key"
+    # The file stays, including the device id, phone, and login key
+    if [[ "${DELETE_TELEPORT_LOGIN}" != "${FLAG_ON}" ]]; then
+        keep_note "Keeping the teleport config"
     fi
 
-    # Rewrite the file down to those settings
-    if [[ -f "${TELEPORT_CONFIG_FILE}" ]]; then
-        act python3 -c "${KEEP_SETTINGS_PROGRAM}" "${TELEPORT_CONFIG_FILE}" ${kept_settings}
+    # Delete the config when asked, so the next start makes a new login
+    if [[ "${DELETE_TELEPORT_LOGIN}" == "${FLAG_ON}" ]]; then
+        act rm -f -- "${TELEPORT_CONFIG_FILE}"
     fi
 
-    # Delete the old name file and old config, both from the build folder where the service runs, and the log
-    act rm -f -- "${TELEPORT_DIR}/build/device.id" "${TELEPORT_DIR}/build/config.json" "${TELEPORT_DIR}/log.txt"
+    # Delete the log
+    act rm -f -- "${TELEPORT_DIR}/log.txt"
+}
+
+# Delete the shell history, then point the file at nothing so this shell cannot write its lines back
+remove_shell_history() {
+    act rm -f -- "${SHELL_HISTORY_FILE}"
+    act ln -s /dev/null "${SHELL_HISTORY_FILE}"
+    restore_history_when_shell_exits
+}
+
+# Put a real empty history file back once the shell that ran the reset has exited
+restore_history_when_shell_exits() {
+    local parent_pid="${PPID}"
+
+    # Say what will happen, including on a preview
+    echo "  restore ${SHELL_HISTORY_FILE} when shell ${parent_pid} exits"
+    if [[ "${DRY_RUN}" == "${FLAG_ON}" ]]; then
+        return
+    fi
+
+    # Keep running after the reset script itself exits, and after that shell closes
+    setsid bash -c "while kill -0 ${parent_pid} 2>/dev/null; do sleep 1; done; rm -f -- '${SHELL_HISTORY_FILE}'; : > '${SHELL_HISTORY_FILE}'" </dev/null >/dev/null 2>&1 &
 }
 
 # Give the robot its own hostname when one was asked for, and announce it
@@ -303,29 +364,10 @@ reload_units() {
     act sudo systemctl daemon-reload
 }
 
-# Clear the system journal and the shell history
+# Clear the system journal
 clear_logs() {
     act sudo journalctl --rotate
     act sudo journalctl --vacuum-time=1s
-
-    # Point the history file at nothing, so this shell cannot write its lines back on exit
-    act rm -f -- "${SHELL_HISTORY_FILE}"
-    act ln -s /dev/null "${SHELL_HISTORY_FILE}"
-    restore_history_when_shell_exits
-}
-
-# Put a real empty history file back once the shell that ran the reset has exited
-restore_history_when_shell_exits() {
-    local parent_pid="${PPID}"
-
-    # Say what will happen, including on a preview
-    echo "  restore ${SHELL_HISTORY_FILE} when shell ${parent_pid} exits"
-    if [[ "${DRY_RUN}" == "${FLAG_ON}" ]]; then
-        return
-    fi
-
-    # Keep running after the reset script itself exits, and after that shell closes
-    setsid bash -c "while kill -0 ${parent_pid} 2>/dev/null; do sleep 1; done; rm -f -- '${SHELL_HISTORY_FILE}'; : > '${SHELL_HISTORY_FILE}'" </dev/null >/dev/null 2>&1 &
 }
 
 # Forget every saved WiFi network only when asked to, the customer joins theirs from the WiFi menu
