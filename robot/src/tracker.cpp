@@ -18,7 +18,7 @@ static const int FACE_DETECT_FPS = 10;
 static const int FACE_DETECT_GAP_MS = 1000 / FACE_DETECT_FPS;
 
 // Look this often while no face is in view, so an empty room costs little
-static const int EMPTY_DETECT_FPS = 2;
+static const int EMPTY_DETECT_FPS = 1;
 static const int EMPTY_DETECT_GAP_MS = 1000 / EMPTY_DETECT_FPS;
 
 // How long to wait when the recording has not sent its next frame yet

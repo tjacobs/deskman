@@ -69,7 +69,7 @@ static const int SERVO_REOPEN_MS = 1000;
 static const int SERVO_P_GAIN = 8;
 
 // How far a servo must be knocked to count as pushed, what counts as still, and how many polls of stillness end a push
-static const int SERVO_PUSH_POLL_MS = 50;
+static const int SERVO_PUSH_POLL_MS = 100;
 static const int SERVO_PUSH_AMOUNT_COUNTS = 12;
 static const int SERVO_PUSH_STILL_COUNTS = 3;
 static const int SERVO_PUSH_RELEASE_CYCLES = 10;
