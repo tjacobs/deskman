@@ -77,6 +77,7 @@ parse_args() {
     ASSUME_YES="${FLAG_OFF}"
     KEEP_OPENAI_KEY="${FLAG_OFF}"
     DELETE_SSH_KEY="${FLAG_OFF}"
+    DELETE_TELEPORT_KEY="${FLAG_OFF}"
     DELETE_WIFI="${FLAG_OFF}"
     NEW_HOSTNAME=""
 
@@ -94,6 +95,9 @@ parse_args() {
                 ;;
             --delete-ssh-key)
                 DELETE_SSH_KEY="${FLAG_ON}"
+                ;;
+            --delete-teleport-key)
+                DELETE_TELEPORT_KEY="${FLAG_ON}"
                 ;;
             --delete-wifi)
                 DELETE_WIFI="${FLAG_ON}"
@@ -123,13 +127,14 @@ parse_args() {
 
 # Show the options
 print_usage() {
-    echo "Usage: robot/reset_to_factory.sh [--dry-run] [--yes] [--keep-key] [--delete-ssh-key] [--delete-wifi] [--hostname name]"
-    echo "  --dry-run          only show what would be deleted"
-    echo "  --yes              do not ask before deleting"
-    echo "  --keep-key         keep the OpenAI key in talk/openai.env"
-    echo "  --delete-ssh-key   remove the authorized SSH keys, they are kept for remote support otherwise"
-    echo "  --delete-wifi      forget every saved WiFi network, they are kept otherwise"
-    echo "  --hostname name    rename the robot, like deskman7, so teleport gets its own number"
+    echo "Usage: robot/reset_to_factory.sh [--dry-run] [--yes] [--keep-key] [--delete-ssh-key] [--delete-teleport-key] [--delete-wifi] [--hostname name]"
+    echo "  --dry-run               only show what would be deleted"
+    echo "  --yes                   do not ask before deleting"
+    echo "  --keep-key              keep the OpenAI key in talk/openai.env"
+    echo "  --delete-ssh-key        remove the authorized SSH keys, they are kept for remote support otherwise"
+    echo "  --delete-teleport-key   forget the teleport login key, it is kept otherwise"
+    echo "  --delete-wifi           forget every saved WiFi network, they are kept otherwise"
+    echo "  --hostname name         rename the robot, like deskman7, and give teleport a new key"
 }
 
 # Print a message between rows of stars as wide as the message, so it stands out above the steps
@@ -251,11 +256,18 @@ remove_robot_data() {
     act rm -f -- "${ROBOT_DIR}/log.txt"
 }
 
-# Drop the teleport name and robot key but keep the phone number, a new key and name are made on the next start
+# Drop the teleport name but keep the phone number, and keep the login key unless asked to drop it
 remove_teleport_identity() {
-    # Keep only the kept settings
+    # The login key stays so the next start can still log in as this robot
+    local kept_settings="${TELEPORT_KEPT_SETTINGS}"
+    if [[ "${DELETE_TELEPORT_KEY}" != "${FLAG_ON}" && -z "${NEW_HOSTNAME}" ]]; then
+        kept_settings="${kept_settings} key"
+        keep_note "Keeping the teleport key"
+    fi
+
+    # Rewrite the file down to those settings
     if [[ -f "${TELEPORT_CONFIG_FILE}" ]]; then
-        act python3 -c "${KEEP_SETTINGS_PROGRAM}" "${TELEPORT_CONFIG_FILE}" ${TELEPORT_KEPT_SETTINGS}
+        act python3 -c "${KEEP_SETTINGS_PROGRAM}" "${TELEPORT_CONFIG_FILE}" ${kept_settings}
     fi
 
     # Delete the old name file and old config, both from the build folder where the service runs, and the log
