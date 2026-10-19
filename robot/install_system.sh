@@ -112,12 +112,11 @@ ZRAM_CONF="/etc/systemd/zram-generator.conf"
 ZRAM_SIZE="ram / 2"
 ZRAM_COMPRESSION="zstd"
 
-# Kill a process before memory runs out and the board freezes, llama goes first since talk restarts it, swap is ignored so zram filling still counts
+# Kill a process before memory runs out and the board freezes, only once swap is low too so the language model can use it
 EARLYOOM_CONF="/etc/default/earlyoom"
 EARLYOOM_MEMORY_PERCENT=3
-EARLYOOM_SWAP_PERCENT=100
+EARLYOOM_SWAP_PERCENT=10
 EARLYOOM_REPORT_SECONDS=3600
-EARLYOOM_PREFER="(^|/)llama-server$"
 EARLYOOM_AVOID="(^|/)(Xorg|gnome-shell|robot|sshd|systemd)$"
 
 # Keep Files on the dash, leave Help, Software, and Firefox off
@@ -1346,7 +1345,7 @@ EOF
     systemctl start dev-zram0.swap
 }
 
-# Kill the biggest preferred process when memory runs low, the kernel waits too long and the board locks up
+# Kill a process when memory and swap are both low, the kernel waits too long and the board locks up
 enable_earlyoom() {
     echo "Enabling earlyoom"
 
@@ -1357,7 +1356,7 @@ enable_earlyoom() {
     # Set when it acts and which processes it picks or spares
     cat > "${EARLYOOM_CONF}" <<EOF
 # Written by robot/install_system.sh, kills before the board freezes from low memory
-EARLYOOM_ARGS="-m ${EARLYOOM_MEMORY_PERCENT} -s ${EARLYOOM_SWAP_PERCENT} -r ${EARLYOOM_REPORT_SECONDS} --prefer '${EARLYOOM_PREFER}' --avoid '${EARLYOOM_AVOID}'"
+EARLYOOM_ARGS="-m ${EARLYOOM_MEMORY_PERCENT} -s ${EARLYOOM_SWAP_PERCENT} -r ${EARLYOOM_REPORT_SECONDS} --avoid '${EARLYOOM_AVOID}'"
 EOF
 
     # Start it now and at every boot

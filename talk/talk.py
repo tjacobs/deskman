@@ -113,10 +113,12 @@ TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
 TEXT_CUDA_LIBRARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'libggml-cuda.so')
 TEXT_SERVER_BINARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'llama-server')
 TEXT_UNAVAILABLE = 'The language model is not running.'
+TEXT_SERVER_KILLED_WARNING = 'Low memory stopped the model'
 CLOUD_UNAVAILABLE = "Sorry, I can't reach OpenAI right now."
 LOW_BATTERY_UNSAID = 'Please plug me in.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
+TEXT_SERVER_WATCH_SECONDS = 2.0
 TEXT_SERVER_LOG = os.path.join(TEXT_DIR, 'server.log')
 TEXT_SERVER_PROGRESS_WIDTH = 120
 TEXT_SERVER_RESTART_TRIES = 3
@@ -158,6 +160,8 @@ kokoro_pipelines = {}
 speak_lock = threading.Lock()
 text_server_log_file = None
 text_server_process = None
+text_server_seen_up = False
+text_server_restarting = False
 
 # Import local text model helper and reminders
 sys.path.insert(0, TEXT_DIR)
@@ -509,6 +513,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     # Seed reminders from memory, then check them in the background
     reminders.seed_reminders_from_memory()
     start_reminder_checker(listener, kokoro_pipeline)
+    start_text_server_watch()
 
     # Greet, then wait for the wake word rather than holding the conversation open
     if SAY_HI:
@@ -1176,6 +1181,50 @@ def start_reminder_checker(listener, kokoro_pipeline):
     thread = threading.Thread(target=reminder_loop, args=(listener, kokoro_pipeline), daemon=True)
     thread.start()
 
+# Watch the local model so a kill shows on the face before the next question
+def start_text_server_watch():
+    thread = threading.Thread(target=watch_text_server, daemon=True)
+    thread.start()
+
+# Notice the model going down, and take the warning off once it answers again
+def watch_text_server():
+    while True:
+        note_text_server_health()
+        time.sleep(TEXT_SERVER_WATCH_SECONDS)
+
+# Warn when a model that was up is gone, unless talk itself stopped it for a restart
+def note_text_server_health():
+    global text_server_seen_up, text_server_restarting
+
+    # Cloud has no local server to watch
+    if text_client.use_cloud():
+        return
+
+    # Back up, so the low memory warning can come off
+    if text_server_healthy():
+        text_server_seen_up = True
+        text_server_restarting = False
+        clear_text_server_killed_warning()
+        return
+
+    # A restart talk asked for is not a kill
+    if text_server_restarting or not text_server_seen_up:
+        return
+    show_text_server_killed_warning()
+
+# Put the low memory warning on the face, once
+def show_text_server_killed_warning():
+    if robot_move.shown_warning == TEXT_SERVER_KILLED_WARNING:
+        return
+    print(f'Warning: {TEXT_SERVER_KILLED_WARNING}.', flush=True)
+    robot_move.show_warning(TEXT_SERVER_KILLED_WARNING, '')
+
+# Take the low memory warning off, leaving any other warning up
+def clear_text_server_killed_warning():
+    if robot_move.shown_warning != TEXT_SERVER_KILLED_WARNING:
+        return
+    robot_move.show_warning('', '')
+
 # Poll for due reminders and speak each one once per day
 def reminder_loop(listener, kokoro_pipeline):
     while True:
@@ -1643,7 +1692,7 @@ def print_realtime_model():
 
 # Restart the text server when it died, return true when healthy again
 def ensure_text_server_alive():
-    global text_server_process
+    global text_server_process, text_server_restarting
 
     # Cloud has no local server to restart
     if text_client.use_cloud():
@@ -1651,9 +1700,11 @@ def ensure_text_server_alive():
 
     # Already up
     if text_server_healthy():
+        clear_text_server_killed_warning()
         return True
 
-    # Often out of memory on 8GB machines
+    # Often out of memory on 8GB machines, say so on the face as well as the log
+    show_text_server_killed_warning()
     print('text server is not responding, it may have been killed by an out of memory error.', flush=True)
     print_memory('text server down')
 
@@ -1666,11 +1717,16 @@ def ensure_text_server_alive():
         process = start_text_server(require_success=False)
         if text_server_healthy():
             text_server_process = process
+            text_server_restarting = False
+            clear_text_server_killed_warning()
             if not COLD_MODE:
                 warm_text()
             return True
         stop_text_server(process)
 
+    # Leave the warning up, the restarts did not bring the model back
+    text_server_restarting = False
+    show_text_server_killed_warning()
     print(f'Error: text server still down after {TEXT_SERVER_RESTART_TRIES} restarts.', flush=True)
     print_memory('text server restart failed')
     return False
@@ -1729,6 +1785,10 @@ def text_server_healthy():
 
 # Stop a text model server that talk.py started
 def stop_text_server(process):
+    global text_server_restarting
+
+    # A stop talk asked for is not a kill, so the watcher stays quiet
+    text_server_restarting = True
     if process is None or process.poll() is not None:
         return
     process.terminate()
