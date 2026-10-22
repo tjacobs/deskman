@@ -100,6 +100,17 @@ static const int FACE_TRACK_NUDGE_MS = 50;
 static const int HAT_IDLE_DEGREES = 0;
 static const int HAT_LISTEN_DEGREES = -40;
 
+// Demo mode looks around this often, how far each way, and how long it holds each look
+static const int DEMO_LOOK_SECONDS = 30;
+static const int DEMO_LOOK_PAN_DEGREES = 40;
+static const int DEMO_LOOK_HOLD_MS = 2500;
+static const int DEMO_LOOK_IDLE = -1;
+static const int DEMO_LOOK_LEFT = 0;
+static const int DEMO_LOOK_RIGHT = 1;
+
+// Demo mode flips the camera preview on or off this often
+static const int DEMO_PREVIEW_SECONDS = 60;
+
 // Process and script names to match
 static const char* BINARY_NAME = "robot";
 static const char* TALK_SCRIPT_NAME = "talk.py";
@@ -161,6 +172,9 @@ static bool g_audio_test_had_talk = false;
 static bool g_camera_before_record = false;
 static atomic<bool> g_sweeping{false};
 
+// Whether a demo look is moving the head, face tracking leaves the head alone until it ends
+static bool g_demo_looking = false;
+
 // Renderer holding the face shapes
 VectorRenderer vectorRenderer;
 
@@ -185,6 +199,8 @@ static void draw_face();
 static int start_servos();
 static int sweep_servo_test(bool no_servos);
 static void apply_listen_hat();
+static void apply_demo_look();
+static void apply_demo_preview(FaceTracker& faceTracker);
 static void apply_record_request(FaceTracker& faceTracker);
 static void play_last_recording();
 static void toggle_recording(FaceTracker& faceTracker);
@@ -400,6 +416,10 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Raise the hat while talk listens, lower it when talk goes idle
         apply_listen_hat();
 
+        // Look around and flip the camera preview on timers while demo mode is on
+        apply_demo_look();
+        apply_demo_preview(faceTracker);
+
         // Record and play, from the popup or from a voice command
         apply_record_request(faceTracker);
         if (take_play_request())
@@ -465,7 +485,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         // Point the eyes at the tracked face, and look ahead again once it is lost
         float faceX, faceY;
         static bool eyes_following = false;
-        bool hasFaceTracking = use_camera && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY) && !sweeping();
+        bool hasFaceTracking = use_camera && faceTracker.isTracking() && faceTracker.getFacePosition(faceX, faceY) && !sweeping() && !g_demo_looking;
         if (hasFaceTracking) {
             face.lookTargetX = -faceX * FACE_LOOK_TILT_DEGREES;
             face.lookTargetY = faceY * FACE_LOOK_TILT_DEGREES;
@@ -836,6 +856,71 @@ static void apply_listen_hat() {
     hat_set = true;
     hat_raised = raised;
     set_hat_degrees(raised ? HAT_LISTEN_DEGREES : HAT_IDLE_DEGREES);
+}
+
+// While demo mode is on, look left then right then back where the head was, on a timer
+static void apply_demo_look() {
+    static bool was_on = false;
+    static int step = DEMO_LOOK_IDLE;
+    static int start_pan = 0;
+    static int start_tilt = 0;
+    static int hat = 0;
+    static steady_clock::time_point next_at;
+
+    // Start the minute when demo turns on, and put the head back if it turns off mid look
+    bool on = demo_on();
+    if (on != was_on) {
+        was_on = on;
+        next_at = steady_clock::now() + seconds(DEMO_LOOK_SECONDS);
+        if (step != DEMO_LOOK_IDLE)
+            set_degrees(start_pan, start_tilt, hat);
+        step = DEMO_LOOK_IDLE;
+        g_demo_looking = false;
+    }
+    if (!on || sweeping() || steady_clock::now() < next_at)
+        return;
+
+    // Remember where the head was and stop following the face when a look begins
+    if (step == DEMO_LOOK_IDLE) {
+        get_degrees(start_pan, start_tilt, hat);
+        g_demo_looking = true;
+    }
+
+    // Turn left, then right, holding each look
+    step++;
+    if (step == DEMO_LOOK_LEFT || step == DEMO_LOOK_RIGHT) {
+        int direction = step == DEMO_LOOK_LEFT ? -1 : 1;
+        set_degrees(start_pan + direction * DEMO_LOOK_PAN_DEGREES, start_tilt, hat);
+        next_at = steady_clock::now() + milliseconds(DEMO_LOOK_HOLD_MS);
+        return;
+    }
+
+    // Come back, hand the head to face tracking again, and wait for the next one
+    set_degrees(start_pan, start_tilt, hat);
+    step = DEMO_LOOK_IDLE;
+    g_demo_looking = false;
+    next_at = steady_clock::now() + seconds(DEMO_LOOK_SECONDS);
+}
+
+// While demo mode is on, turn the camera preview on one minute and off the next
+static void apply_demo_preview(FaceTracker& faceTracker) {
+    static bool was_on = false;
+    static steady_clock::time_point next_at;
+
+    // Start the minute when demo turns on
+    bool on = demo_on();
+    if (on != was_on) {
+        was_on = on;
+        next_at = steady_clock::now() + seconds(DEMO_PREVIEW_SECONDS);
+    }
+    if (!on || steady_clock::now() < next_at)
+        return;
+
+    // Flip the preview, a recording owns it while one runs
+    next_at = steady_clock::now() + seconds(DEMO_PREVIEW_SECONDS);
+    if (recording())
+        return;
+    toggle_camera_preview(faceTracker);
 }
 
 // Act on the Record button, or on a start or stop asked for by voice

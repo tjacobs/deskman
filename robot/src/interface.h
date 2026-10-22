@@ -74,6 +74,9 @@ bool listen_open();
 // True while a call is connected
 bool call_open();
 
+// True while demo mode is on, talk stays listening and the head looks around
+bool demo_on();
+
 // Show a warning from inside the robot, the same red line the socket sets
 void show_warning(const string& text);
 

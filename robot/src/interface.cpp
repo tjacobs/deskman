@@ -71,14 +71,14 @@ static const int MENU_WIFI = 6;
 static const int MENU_CALL = 7;
 static const int MENU_EXIT = 8;
 static const int MENU_SETTINGS = 9;
-static const int MENU_BACK = 10;
-static const int MENU_VOLUME = 11;
-static const char* MENU_ITEM_LABELS[] = {"Listen", "Camera", "Record", "Videos", "Move", "Audio", "WiFi", "Call", "Exit", "Settings", "Back", "Volume"};
+static const int MENU_VOLUME = 10;
+static const int MENU_DEMO = 11;
+static const char* MENU_ITEM_LABELS[] = {"Listen", "Camera", "Record", "Videos", "Move", "Audio", "WiFi", "Call", "Exit", "Settings", "Volume", "Demo"};
 
-// Items on the main page, and on the page Settings opens, top to bottom
+// Items in the main column, and in the column Settings adds on its left, top to bottom
 static const int MENU_MAIN_ITEMS[] = {MENU_LISTEN, MENU_CAMERA, MENU_RECORD, MENU_VIDEOS, MENU_CALL, MENU_SETTINGS};
 static const int MENU_MAIN_COUNT = 6;
-static const int MENU_SETTINGS_ITEMS[] = {MENU_MOVE, MENU_AUDIO, MENU_VOLUME, MENU_WIFI, MENU_EXIT, MENU_BACK};
+static const int MENU_SETTINGS_ITEMS[] = {MENU_DEMO, MENU_MOVE, MENU_AUDIO, MENU_VOLUME, MENU_WIFI, MENU_EXIT};
 static const int MENU_SETTINGS_COUNT = 6;
 
 // The Record item says how to end the recording while one is running, and Listen says Quiet while talk listens
@@ -128,6 +128,9 @@ static const char* VOLUME_PYTHON_FROM_REPO = "talk/.venv/bin/python";
 static const char* VOLUME_SAY_TEXT = "Hi";
 static const int VOLUME_OUTPUT_SIZE = 256;
 
+// The speaker level demo mode sets when it turns on
+static const int DEMO_VOLUME_PERCENT = 80;
+
 // Menu button colors
 static const SDL_Color BUTTON_LABEL_COLOR = {255, 255, 255, 255};
 static const SDL_Color EXIT_BUTTON_COLOR = {180, 40, 40, 255};
@@ -140,6 +143,8 @@ static const SDL_Color VIDEO_BACKDROP_COLOR = {20, 20, 25, 235};
 static const SDL_Color WIFI_ACTIVE_COLOR = {30, 140, 70, 255};
 static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
+static const SDL_Color MENU_DEMO_COLOR = {30, 140, 70, 255};
+static const SDL_Color MENU_DEMO_OPEN_COLOR = {20, 100, 50, 255};
 
 // Mode button colors, the running mode lit green like Camera when on, the others dark, and ones that cannot run now dimmer still, all of them grey while talk is not running
 static const SDL_Color TALK_MODE_ON_COLOR = {30, 140, 70, 255};
@@ -213,6 +218,9 @@ static atomic<int> g_record_request{RECORD_REQUEST_NONE};
 static atomic<bool> g_play_request{false};
 static atomic<bool> g_talk_restart_request{false};
 
+// Whether demo mode is on, talk stays listening and the head looks around
+static atomic<bool> g_demo_on{false};
+
 // The recordings list, where the files are and which row asked to be deleted
 static string g_recordings_path;
 static atomic<bool> g_video_list_open{false};
@@ -276,12 +284,12 @@ static bool debounce_tap();
 static bool teleport_running();
 static void start_teleport_for_call();
 static void set_menu_open(bool open);
+static void set_demo(bool on);
 static const char* menu_item_label(int index);
 static SDL_Color menu_item_color(int index);
 static SDL_Rect menu_button_rect();
-static int menu_row_count();
-static int menu_row_item(int row);
 static SDL_Rect menu_item_rect(int row);
+static SDL_Rect settings_item_rect(int row);
 static SDL_Rect talk_mode_rect(int mode);
 static int menu_item_width();
 static void draw_talk_modes(TTF_Font* font);
@@ -565,6 +573,10 @@ static string handle_request(const string& line, int from_fd) {
             g_warning_expires = warning_seconds > 0 ? steady_clock::now() + seconds(warning_seconds) : steady_clock::time_point{};
             reply = {{"ok", true}};
 
+        // Say whether demo mode is on, for a talk that started after the tap
+        } else if (command == "demo") {
+            reply = {{"ok", true}, {"on", g_demo_on.load()}};
+
         // Light the mode talk is running and dim the ones it cannot run. A fallback does not change the saved mode.
         } else if (command == "talk_mode") {
             int mode = talk_mode_from_name(request.value("mode", ""));
@@ -745,6 +757,10 @@ static SDL_Color menu_item_color(int index) {
         return RECORDING_BUTTON_COLOR;
     if (index == MENU_CAMERA && g_camera_showing.load())
         return CAMERA_ON_COLOR;
+    if (index == MENU_DEMO && g_demo_on.load())
+        return CAMERA_ON_COLOR;
+    if (index == MENU_SETTINGS && g_settings_open.load())
+        return MENU_OPEN_COLOR;
     if (index == MENU_EXIT)
         return EXIT_BUTTON_COLOR;
     return MENU_BUTTON_COLOR;
@@ -759,28 +775,27 @@ static SDL_Rect menu_button_rect() {
     return {screen_width - pad - width, bar_y + pad, width, height};
 }
 
-// Count the items on the page showing
-static int menu_row_count() {
-    return g_settings_open.load() ? MENU_SETTINGS_COUNT : MENU_MAIN_COUNT;
-}
-
-// Name the item on one row of the page showing
-static int menu_row_item(int row) {
-    return g_settings_open.load() ? MENU_SETTINGS_ITEMS[row] : MENU_MAIN_ITEMS[row];
-}
-
 // Place a popup row above the menu button, one extra gap under the bottom row, the first row at the top
 static SDL_Rect menu_item_rect(int row) {
     SDL_Rect menu_rect = menu_button_rect();
     int pad = status_bar_pad();
-    int from_bottom = menu_row_count() - row;
+    int from_bottom = MENU_MAIN_COUNT - row;
     int width = menu_item_width();
     return {screen_width - pad - width, menu_rect.y - from_bottom * (menu_rect.h + pad) - pad, width, menu_rect.h};
 }
 
+// Place a Settings row in the column left of the popup, stacked above the mode row so the mode buttons stay reachable
+static SDL_Rect settings_item_rect(int row) {
+    SDL_Rect bottom_rect = menu_item_rect(MENU_MAIN_COUNT - 1);
+    SDL_Rect mode_rect = talk_mode_rect(TALK_MODE_COUNT - 1);
+    int pad = status_bar_pad();
+    int from_bottom = MENU_SETTINGS_COUNT - row;
+    return {mode_rect.x, bottom_rect.y - from_bottom * (bottom_rect.h + pad), bottom_rect.w, bottom_rect.h};
+}
+
 // Place one mode button in the row left of the popup, level with its bottom row, Local on the left
 static SDL_Rect talk_mode_rect(int mode) {
-    SDL_Rect bottom_rect = menu_item_rect(menu_row_count() - 1);
+    SDL_Rect bottom_rect = menu_item_rect(MENU_MAIN_COUNT - 1);
     int pad = status_bar_pad();
     return {pad + mode * (bottom_rect.w + pad), bottom_rect.y, bottom_rect.w, bottom_rect.h};
 }
@@ -891,12 +906,20 @@ static void draw_hamburger_icon(SDL_Rect rect) {
 // Draw the menu button, and the popup above it when it is open
 void draw_menu(TTF_Font* font) {
     if (g_menu_open) {
-        for (int row = 0; row < menu_row_count(); row++) {
-            int item = menu_row_item(row);
+        for (int row = 0; row < MENU_MAIN_COUNT; row++) {
+            int item = MENU_MAIN_ITEMS[row];
             if (item == MENU_LISTEN && !g_talk_running.load())
                 draw_button(menu_item_rect(row), menu_item_label(item), TALK_MODE_UNAVAILABLE_COLOR, TALK_MODE_UNAVAILABLE_LABEL_COLOR, font);
             else
                 draw_bar_button(menu_item_rect(row), menu_item_label(item), menu_item_color(item), font);
+        }
+
+        // Settings column beside it while Settings is lit
+        if (g_settings_open.load()) {
+            for (int row = 0; row < MENU_SETTINGS_COUNT; row++) {
+                int item = MENU_SETTINGS_ITEMS[row];
+                draw_bar_button(settings_item_rect(row), menu_item_label(item), menu_item_color(item), font);
+            }
         }
         draw_talk_modes(font);
     }
@@ -904,6 +927,8 @@ void draw_menu(TTF_Font* font) {
     // Three-line toggle on the right of the status bar
     SDL_Rect menu_rect = menu_button_rect();
     SDL_Color menu_fill = g_menu_open ? MENU_OPEN_COLOR : MENU_BUTTON_COLOR;
+    if (g_demo_on.load())
+        menu_fill = g_menu_open ? MENU_DEMO_OPEN_COLOR : MENU_DEMO_COLOR;
     draw_bar_button(menu_rect, nullptr, menu_fill, font);
     draw_hamburger_icon(menu_rect);
 }
@@ -1298,7 +1323,7 @@ int menu_button_left() {
     return menu_button_rect().x;
 }
 
-// Show or hide the popup list, it always opens on the main page
+// Show or hide the popup list, it always opens with Settings folded away
 static void set_menu_open(bool open) {
     g_menu_open = open;
     g_settings_open = false;
@@ -1342,11 +1367,15 @@ void handle_call_event(const SDL_Event& event) {
     int item = -1;
     int talk_mode = TALK_MODE_NONE;
     if (bar_showing && menu_open()) {
-        for (int row = 0; row < menu_row_count(); row++) {
+        for (int row = 0; row < MENU_MAIN_COUNT; row++) {
             if (tap_in_rect(x, y, menu_item_rect(row))) {
-                item = menu_row_item(row);
+                item = MENU_MAIN_ITEMS[row];
                 break;
             }
+        }
+        for (int row = 0; row < MENU_SETTINGS_COUNT && g_settings_open.load(); row++) {
+            if (tap_in_rect(x, y, settings_item_rect(row)))
+                item = MENU_SETTINGS_ITEMS[row];
         }
         for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
             if (tap_in_rect(x, y, talk_mode_rect(mode)))
@@ -1385,9 +1414,9 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
 
-    // Settings and Back swap the page, the menu stays up
-    if (item == MENU_SETTINGS || item == MENU_BACK) {
-        g_settings_open = item == MENU_SETTINGS;
+    // Settings shows or hides its column, the menu stays up
+    if (item == MENU_SETTINGS) {
+        g_settings_open = !g_settings_open.load();
         return;
     }
 
@@ -1408,6 +1437,12 @@ void handle_call_event(const SDL_Event& event) {
             send_quiet();
         else
             send_to_clients(json{{"command", "wake"}}.dump(), NO_CLIENT);
+        return;
+    }
+    if (item == MENU_DEMO) {
+        set_demo(!g_demo_on.load());
+        if (g_demo_on.load() && !g_talk_running.load())
+            g_talk_start_request = true;
         return;
     }
     if (item == MENU_MOVE) {
@@ -1473,6 +1508,21 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
     set_status_bar_visible(!bar_showing);
+}
+
+// Turn demo mode on or off, tell talk so it holds listening open or lets go, and set the speaker level when it turns on
+static void set_demo(bool on) {
+    g_demo_on = on;
+    if (on) {
+        g_volume_percent = DEMO_VOLUME_PERCENT;
+        run_volume_script(DEMO_VOLUME_PERCENT);
+    }
+    send_to_clients(json{{"command", "demo"}, {"on", on}}.dump(), NO_CLIENT);
+}
+
+// True while demo mode is on
+bool demo_on() {
+    return g_demo_on.load();
 }
 
 // Tell talk to stop what it is doing and go back to ready

@@ -231,8 +231,9 @@ def main():
     # Exit if audio playback is unavailable
     check_ready()
 
-    # Hold a socket so Listen and Quiet arrive as pushes
+    # Hold a socket so Listen and Quiet arrive as pushes, and pick up demo mode if it is already on
     robot_move.start_push_listener()
+    robot_move.sync_demo()
 
     # Clear a warning a past run left on the face, this run has not failed yet
     robot_move.show_warning('', '')
@@ -916,6 +917,11 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
         if text is None:
             return None
 
+        # Demo on the face holds listening open, and turning it off goes back to ready
+        if robot_move.consume_request("demo"):
+            close_conversation()
+            continue
+
         # Quiet on the face ends the turn and goes back to ready
         if robot_move.consume_request("quiet"):
             close_conversation()
@@ -964,6 +970,9 @@ def conversation_open():
 
 # Seconds left in the follow-up window, or 0 when it is closed
 def conversation_remaining():
+    # Demo mode never lets the follow-up window run out
+    if robot_move.demo_on:
+        return FOLLOW_UP_SECONDS
     if LAST_ASK_AT <= 0.0:
         return 0.0
     remaining = FOLLOW_UP_SECONDS - (time.time() - LAST_ASK_AT)
@@ -971,9 +980,14 @@ def conversation_remaining():
         return 0.0
     return remaining
 
-# Close the follow-up window and show ready
+# Close the follow-up window and show ready, demo mode goes straight back to listening
 def close_conversation():
     global LAST_ASK_AT
+    if robot_move.demo_on:
+        LAST_ASK_AT = time.time()
+        set_robot_listening(True)
+        print(TALK_LISTENING, flush=True)
+        return
     LAST_ASK_AT = 0.0
     set_robot_listening(False)
     print(TALK_READY, flush=True)

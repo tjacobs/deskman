@@ -16,10 +16,11 @@ HAT_DOWN_DEGREES = 90
 CONNECT_TIMEOUT_SEC = 2.0
 READ_TIMEOUT_SEC = 5.0
 PUSH_RETRY_SECONDS = 1.0
-PUSH_COMMANDS = ('wake', 'quiet')
+PUSH_COMMANDS = ('wake', 'quiet', 'demo')
 
-# Face menu presses pushed by the robot, one held socket
-pending_requests = {'wake': False, 'quiet': False}
+# Face menu presses pushed by the robot, one held socket, and whether demo mode holds listening open
+pending_requests = {'wake': False, 'quiet': False, 'demo': False}
+demo_on = False
 pending_lock = threading.Lock()
 push_listener_started = False
 
@@ -216,7 +217,7 @@ def read_pushes():
                 line, data = data.split(b'\n', 1)
                 note_push_line(line)
 
-# Remember a Listen or Quiet press from the face
+# Remember a Listen, Quiet, or Demo press from the face
 def note_push_line(line):
     try:
         event = json.loads(line.decode('utf-8', errors='replace'))
@@ -225,13 +226,33 @@ def note_push_line(line):
     command = event.get('command')
     if command not in PUSH_COMMANDS:
         return
+    if command == 'demo':
+        set_demo(bool(event.get('on')))
+        return
     with pending_lock:
         pending_requests[command] = True
+
+# Take demo on or off, and flag the change so a wait for speech ends
+def set_demo(on):
+    global demo_on
+    with pending_lock:
+        if demo_on == on:
+            return
+        demo_on = on
+        pending_requests['demo'] = True
+
+# Ask the robot whether demo is on, for a talk that started after it was tapped
+def sync_demo():
+    try:
+        reply = send_command({"command": "demo"})
+    except Exception:
+        return
+    set_demo(bool(reply.get("on")))
 
 # True when a face menu press is waiting
 def has_pending_request():
     with pending_lock:
-        return pending_requests['wake'] or pending_requests['quiet']
+        return any(pending_requests.values())
 
 # True when the face menu asked for this command, then clear it
 def consume_request(command):
