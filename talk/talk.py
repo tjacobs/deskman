@@ -128,6 +128,15 @@ KEY_SCRIPT_NAME = 'install_openai_key.sh'
 KEY_SCRIPT = os.path.join(utils.SCRIPT_DIR, KEY_SCRIPT_NAME)
 NO_KEY_REASON = 'No OpenAI key.'
 
+# How long the first inference usually takes on a Pi, shown on that loading line
+PI_INFERENCE_LOAD_SECONDS = 25
+
+# Local model preset, the Pi uses the smaller one
+TEXT_SERVER_PRESET_DEFAULT = "e2b"
+TEXT_SERVER_PRESET_PI = "1b"
+PI_BOARD_FILE = "/proc/device-tree/model"
+PI_BOARD_MATCH = "Raspberry Pi"
+
 # Expected RAM use in gigabytes
 TEXT_SERVER_EXPECTED_GB = 2.0
 WHISPER_EXPECTED_GB = 0.4
@@ -1550,6 +1559,27 @@ def check_ready():
     if player == utils.LINUX_PLAYER:
         volume.set_microphone()
 
+# Add the usual wait on a Pi, other boards load faster so the line stays plain
+def load_wait_text(seconds):
+    # Leave the line unchanged on anything but a Pi
+    if not raspberry_pi():
+        return ""
+
+    # Say how long this step usually takes
+    return f" ({seconds} seconds)"
+
+# Read the board name and match a Pi
+def raspberry_pi():
+    # Read the board name, missing on a machine without a device tree
+    try:
+        with open(PI_BOARD_FILE, "rb") as model_file:
+            text = model_file.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return False
+
+    # The file ends with a null, and the match still sits in the text
+    return PI_BOARD_MATCH in text
+
 # Start the local text model server when needed, return the process we started
 def start_text_server(require_success=True):
     # Cloud never starts llama-server
@@ -1562,7 +1592,6 @@ def start_text_server(require_success=True):
         print_memory('after text server')
         return None
 
-    print('Loading model...', flush=True)
     warn_if_low_memory_for('text server', TEXT_SERVER_EXPECTED_GB)
     load_start = time.perf_counter()
 
@@ -1583,13 +1612,23 @@ def start_text_server(require_success=True):
         sys.exit(1)
     return process
 
+# Pick the smaller model on a Pi, the default stays on other boards
+def text_server_preset():
+    # The smaller model is the one that fits a Pi
+    if raspberry_pi():
+        return TEXT_SERVER_PRESET_PI
+    return TEXT_SERVER_PRESET_DEFAULT
+
 # Spawn server.sh and replace the log file handle
 def spawn_text_server():
     global text_server_log_file
     if text_server_log_file is not None:
         text_server_log_file.close()
     text_server_log_file = open(TEXT_SERVER_LOG, 'w')
-    return subprocess.Popen([TEXT_SERVER_SCRIPT], cwd=TEXT_DIR, stdout=text_server_log_file, stderr=subprocess.STDOUT)
+
+    # Pass the preset so a Pi starts the 1b model
+    preset = text_server_preset()
+    return subprocess.Popen([TEXT_SERVER_SCRIPT, preset], cwd=TEXT_DIR, stdout=text_server_log_file, stderr=subprocess.STDOUT)
 
 # Wait until /health answers, streaming server.sh output including curl progress
 def wait_for_text_server(process, load_start, log_state):
@@ -1814,7 +1853,7 @@ def stop_text_server(process):
 
 # Run one hello ask so the system prompt is prefilled into the text model cache
 def warm_text():
-    print('Loading inference...', flush=True)
+    print(f'Loading inference...{load_wait_text(PI_INFERENCE_LOAD_SECONDS)}', flush=True)
     load_start = time.perf_counter()
     try:
         text_ask.ask_model(WARMUP_PROMPT)

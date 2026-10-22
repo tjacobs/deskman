@@ -34,6 +34,11 @@ THREADS_BATCH="4"
 
 # Wait for /health after llama-server starts mapping weights
 READY_TIMEOUT_SECONDS="180"
+
+# How long mapping the weights usually takes on a Pi
+PI_MODEL_LOAD_SECONDS="15"
+PI_BOARD_FILE="/proc/device-tree/model"
+PI_BOARD_MATCH="Raspberry Pi"
 READY_POLL_SECONDS="0.5"
 GROW_POLL_SECONDS="0.5"
 
@@ -134,8 +139,12 @@ wait_until_ready() {
     local deadline=$((SECONDS + READY_TIMEOUT_SECONDS))
     local health_code=""
 
-    # Tell the user weights are still being mapped into memory
-    echo "Loading model..."
+    # Tell the user weights are still being mapped into memory, with the usual wait on a Pi
+    if grep -a -q "${PI_BOARD_MATCH}" "${PI_BOARD_FILE}" 2>/dev/null; then
+        echo "Loading model... (${PI_MODEL_LOAD_SECONDS} seconds)"
+    else
+        echo "Loading model..."
+    fi
 
     # Retry until health is ok, the server dies, or we time out
     while true; do
