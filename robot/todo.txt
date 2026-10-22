@@ -3,7 +3,8 @@
 - [done] make text render use less CPU
 - [done] make eyes smoother and bigger
 - [done] improve face tracking to actually detect faces well
-- make a demo mode so it stays listening and a stay quiet hold
+- [done] make a demo mode so it stays listening and looks around
+- make a hold down of quiet button lock quiet mode on
 - make local gemma talk mode work on pi with 2gb memory
 - make hat go down when asleep at bedtime, up in the morning
 - make it recognize individual people and remember them and say hi name

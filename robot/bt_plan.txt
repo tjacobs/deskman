@@ -1,0 +1,122 @@
+Bluetooth PAN on the Jetson, plan
+
+Goal: reach the robot over Bluetooth with an IP address, no WiFi. The robot offers a
+Bluetooth network (NAP role), a Mac or laptop pairs and joins it (PANU role), gets an
+address by DHCP, then ssh deskman@10.44.0.1.
+
+Already on the Jetson, nothing to install
+- NetworkManager 1.36, can run a Bluetooth NAP attached to a bridge
+- dnsmasq-base, NetworkManager's shared mode uses it to hand out addresses
+- bnep kernel module, loaded, carries IP over Bluetooth
+- BlueZ 5.64, bluetoothd running, controller deskman4 powered on
+
+Steps
+
+1. Make a bridge, pan0 at 10.44.0.1, with a DHCP server on it
+   nmcli connection add type bridge ifname pan0 con-name deskman-pan bridge.stp no ipv4.method shared ipv4.addresses 10.44.0.1/24 ipv6.method ignore
+
+2. Add the Bluetooth NAP on that bridge, NetworkManager registers it with BlueZ
+   nmcli connection add type bluetooth con-name deskman-nap bt-type nap connection.master pan0 connection.slave-type bridge
+
+3. Make the robot pairable for a few minutes, accepting pairing without a PIN
+   bluetoothctl
+     agent NoInputNoOutput
+     default-agent
+     pairable on
+     discoverable on
+   The desktop may also pop its own pairing confirm on screen.
+
+4. Pair from the Mac
+   System Settings, Bluetooth, connect to deskman4
+   Network settings, Bluetooth PAN service, connect, add it with + if it is not listed
+   Check the Mac got 10.44.0.x, then ssh deskman@10.44.0.1
+
+5. Watch from the robot side to see where it stops
+   journalctl -fu bluetooth
+   journalctl -fu NetworkManager
+   ip -br link, look for bnep0 joined to pan0
+   DHCP lease handed out by NetworkManager's dnsmasq
+   Pairing, the PAN connect, or the address, whichever fails first
+
+6. Keep it or remove it
+   Remove: nmcli connection delete deskman-nap deskman-pan
+   Keep: add it to install_system.sh, with pairing started from a button on the robot
+
+Risks
+- The bridge only lives on Bluetooth, WiFi is untouched
+- Shared mode adds NAT for 10.44.0.0/24, so a joined Mac could reach the internet through the robot
+
+Unknowns
+- macOS PAN client is mainly tested against iPhone hotspots, joining a Linux NAP has been hit or miss
+- Newer macOS versions may hide the Bluetooth PAN service
+- Expect about 1 to 2 Mbps, fine for ssh, too slow for video
+
+Fallback without WiFi
+- USB-C device mode networking, plug a laptop into the Jetson, ssh deskman@192.168.55.1
+
+Result, Oct 4 2026
+
+What worked on the robot
+- NetworkManager 1.36 will not put a NAP inside a separate bridge, it makes the NAP its own bridge,
+  so steps 1 and 2 become one connection:
+  nmcli connection add type bluetooth con-name deskman-nap ifname pan0 bt-type nap bluetooth.bdaddr C0:BF:BE:EB:53:08 ipv4.method shared ipv4.addresses 10.44.0.1/24 ipv6.method ignore
+- bluetoothd advertised the NAP service, dnsmasq ran on pan0
+- Shared mode NAT rules failed, the Jetson kernel lacks the nftables nat hook, so a joined device
+  reaches the robot but not the internet through it
+- bluetoothctl keeps its own default agent, so pairing asked to confirm a passkey, which had to be
+  answered yes, then the laptop paired and was trusted
+
+Where it stopped
+- macOS has no Bluetooth PAN client, Add Service only offers Thunderbolt, Wi-Fi, PPPoE, and 6to4,
+  and the Mac did not list the PANU service when it paired
+- iPhones cannot join a PAN either, Windows and most Android phones can
+
+Cleaned up
+- deskman-nap deleted, pan0 gone, laptop unpaired, discoverable and pairable off
+
+For a Mac, use the USB-C cable, macOS already shows a Linux for Tegra service for it
+
+Next plan, IP over Bluetooth with our own programs
+
+Goal: a real IP link between the Mac and the robot over Bluetooth, ping, ssh, browser all work,
+without Bluetooth PAN, which macOS no longer has.
+
+How it works
+- Each side makes a virtual network interface and copies IP packets over a Bluetooth serial
+  channel, RFCOMM, between them
+- Each packet goes as a 2 byte length then the packet bytes, the channel is just a byte stream
+- Robot is 10.44.0.1, Mac is 10.44.0.2, a point to point link
+
+Robot side, Python
+- robot/bt_ip.py, run as a systemd service installed by install_system.sh
+- Opens /dev/net/tun to make bt0, sets 10.44.0.1 peer 10.44.0.2, brings it up
+- Listens on a fixed RFCOMM channel with a BlueZ socket, AF_BLUETOOTH BTPROTO_RFCOMM
+- On a connection, copies tun reads to the socket with length framing, and socket frames to tun
+- One Mac at a time, waits for the next connection when it drops
+- Nothing to install, Python sockets support RFCOMM and the kernel has tun
+
+Mac side, Swift command line tool
+- btip.swift, built on the Mac with swiftc, run as sudo btip deskman4
+- Makes a utun interface through the com.apple.net.utun_control socket, root needs no entitlement
+- ifconfig utunN 10.44.0.2 10.44.0.1 up
+- Opens the RFCOMM channel to the paired robot with IOBluetooth, by channel number, no SDP lookup
+- Copies packets both ways, utun adds a 4 byte address family header that is stripped and added
+- Then ssh deskman@10.44.0.1
+
+Pairing
+- Replace the temporary bluetoothctl helper with an always on pairing agent on the robot,
+  started from a robot menu button so pairing is not open all the time
+- Pair the Mac once, passkey confirm, then trust it
+
+Testing
+- Test the robot side first with a Linux to Linux loop over the same framing
+- Then build and run the Mac tool, first run may ask to let Terminal use Bluetooth
+
+Expectations
+- About 1 to 2 Mbps, fine for ssh, file copies, and robot web pages, not video
+- The Mac keeps its own internet on WiFi, the robot does not share internet over this link,
+  NetworkManager shared mode NAT fails on this kernel
+
+Later
+- Bluetooth LE L2CAP instead of RFCOMM, CoreBluetooth on the Mac is Apple's current API and the
+  same channel would work from an iPhone app, for example to send the robot its WiFi password
