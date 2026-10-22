@@ -56,7 +56,7 @@ CPU_SCALING_DIR = '/sys/devices/system/cpu'
 CPU_INDEX_MAX = 64
 
 # Config quiet hours on the 24 hour clock, the robot makes no sound from bedtime until wake up
-BEDTIME = 22
+BEDTIME = 23
 WAKE_UP = 7
 
 # Config internet check, ping until one reply or the deadline in seconds

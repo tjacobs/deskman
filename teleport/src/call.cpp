@@ -4,6 +4,7 @@
 
 #include "call.h"
 #include "audio.h"
+#include "config.h"
 #include "video.h"
 #include "interface.h"
 
@@ -27,7 +28,10 @@ using namespace std;
 const int CALL_BUTTON_HEIGHT = 88;
 const int CALL_ROW_HEIGHT = 80;
 const int HANGUP_STRIP_HEIGHT = 96;
-const int DIRECTORY_BOTTOM_GAP = 96;
+
+// Status bar size the robot uses, and the screen height those sizes were designed for
+const int STATUS_BAR_HEIGHT = 96;
+const int REFERENCE_SCREEN_HEIGHT = 1024;
 const int CAMERA_ICON_WIDTH = 78;
 const int CAMERA_ICON_HEIGHT = 58;
 const int CAMERA_ICON_PAD = 16;
@@ -39,11 +43,27 @@ const int INCOMING_TITLE_HEIGHT = 56;
 const char* WEB_PEER_PREFIX = "web";
 const int CALL_FONT_SIZE = 32;
 
+// How to call this robot from the web, shown on the call list
+const char* CALL_PAGE = "https://teleportconnect.com/teleport";
+const int CALL_LINK_SIZE = 32;
+const int CALL_LINK_SIZE_NARROW = 24;
+const int CALL_PHONE_SIZE = 48;
+const int CALL_TEXT_X = 30;
+const int CALL_TEXT_TOP_GAP = 28;
+const int CALL_CAPTION_GAP = 8;
+const int CALL_SECTION_GAP = 26;
+const int CALL_PHONE_PAD_X = 28;
+const int CALL_PHONE_PAD_Y = 12;
+const int CALL_LINE_GAP = 6;
+const int CALL_NARROW_WIDTH = 700;
+
 // Call text font, macOS has no DejaVu so use Verdana, the closest match it ships
 #ifdef __APPLE__
 const char* CALL_FONT_PATH = "/System/Library/Fonts/Supplemental/Verdana.ttf";
+const char* CALL_FONT_BOLD_PATH = "/System/Library/Fonts/Supplemental/Verdana Bold.ttf";
 #else
 const char* CALL_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+const char* CALL_FONT_BOLD_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
 #endif
 
 enum CallInterfaceView {
@@ -60,6 +80,7 @@ static CallInterfaceView shownView = CALL_INTERFACE_IDLE;
 static vector<string> callPeers;
 static string incomingPeer;
 static string callStatus;
+static string callPhone;
 static bool acceptingCall = false;
 static string pendingAction;
 static string pendingPeer;
@@ -70,6 +91,8 @@ static SDL_Renderer* drawTarget = nullptr;
 static SDL_Window* cameraWindow = nullptr;
 static SDL_Renderer* cameraRenderer = nullptr;
 static TTF_Font* callFont = nullptr;
+static TTF_Font* callLinkFont = nullptr;
+static TTF_Font* callPhoneFont = nullptr;
 static int windowWidth = 0;
 static int windowHeight = 0;
 static bool overlayMapped = false;
@@ -102,6 +125,15 @@ static void drawIncomingTitle(const string& title);
 static void drawOverlay();
 static void drawButton(const SDL_Rect& rect, const string& label, SDL_Color fill, SDL_Color text);
 static void drawLabel(const char* text, int x, int y, SDL_Color color);
+static string directoryStatus();
+static void ensureEmphasisFonts();
+static int fontHeight(TTF_Font* font);
+static int textWidthOf(TTF_Font* font, const string& text);
+static int directoryBlockHeight();
+static void drawFontLabel(TTF_Font* font, const char* text, int x, int y, SDL_Color color);
+static int drawDirectory(int y);
+static vector<string> wrapText(const string& text, int maxWidth);
+static int drawWrapped(const string& text, int x, int y, int maxWidth, SDL_Color color);
 static void fillCircle(int centerX, int centerY, int radius, SDL_Color color);
 static void fillRoundedRect(int x, int y, int width, int height, int radius, SDL_Color color);
 static void drawCameraIcon(int x, int y, bool recording);
@@ -126,6 +158,7 @@ void startCallInterface() {
         SDL_Quit();
         return;
     }
+    callPhone = loadConfig().phone;
     callFont = TTF_OpenFont(CALL_FONT_PATH, CALL_FONT_SIZE);
     if (!callFont) {
         cout << "Call interface skipped, font missing: " << CALL_FONT_PATH << endl;
@@ -139,6 +172,14 @@ void startCallInterface() {
 void stopCallInterface() {
     callInterfaceReady = false;
     destroyOverlayWindow();
+    if (callLinkFont && callLinkFont != callFont) {
+        TTF_CloseFont(callLinkFont);
+    }
+    callLinkFont = nullptr;
+    if (callPhoneFont && callPhoneFont != callFont) {
+        TTF_CloseFont(callPhoneFont);
+    }
+    callPhoneFont = nullptr;
     if (callFont) {
         TTF_CloseFont(callFont);
         callFont = nullptr;
@@ -246,6 +287,14 @@ bool isCallInterfaceReady() {
     return callInterfaceReady.load();
 }
 
+// Room under the call list so it stops above the status bar
+static int directoryBottomGap() {
+    if (windowHeight <= 0) {
+        return STATUS_BAR_HEIGHT;
+    }
+    return STATUS_BAR_HEIGHT * windowHeight / REFERENCE_SCREEN_HEIGHT;
+}
+
 static void applyRequestedView() {
     CallInterfaceView view;
     {
@@ -271,7 +320,7 @@ static void applyRequestedView() {
         height = incomingStripHeight();
         y = windowHeight - height;
     } else if (view == CALL_INTERFACE_DIRECTORY) {
-        height = windowHeight - DIRECTORY_BOTTOM_GAP;
+        height = windowHeight - directoryBottomGap();
         if (height < CALL_BUTTON_HEIGHT + 40) height = CALL_BUTTON_HEIGHT + 40;
         y = 0;
     }
@@ -527,7 +576,7 @@ static void layoutButtons() {
     int height = windowHeight;
     if (shownView == CALL_INTERFACE_IN_CALL) height = HANGUP_STRIP_HEIGHT;
     else if (shownView == CALL_INTERFACE_INCOMING) height = incomingStripHeight();
-    else if (shownView == CALL_INTERFACE_DIRECTORY) height = windowHeight - DIRECTORY_BOTTOM_GAP;
+    else if (shownView == CALL_INTERFACE_DIRECTORY) height = windowHeight - directoryBottomGap();
     backButton = {20, 20, windowWidth - 40, CALL_BUTTON_HEIGHT};
 
     // In-call bar, Unmute or Mute on the left, Hang up on the right
@@ -554,7 +603,12 @@ static void layoutButtons() {
         declineButton = {20, height / 2 + CALL_BUTTON_HEIGHT + 16, windowWidth - 40, CALL_BUTTON_HEIGHT};
     }
     peerButtons.clear();
-    int top = 20 + CALL_BUTTON_HEIGHT + 16;
+
+    // Leave room under Close for the web call instructions
+    int top = 20 + CALL_BUTTON_HEIGHT + CALL_TEXT_TOP_GAP;
+    if (shownView == CALL_INTERFACE_DIRECTORY) {
+        top += directoryBlockHeight() + CALL_SECTION_GAP;
+    }
     lock_guard<mutex> lock(callInterfaceMutex);
     for (size_t index = 0; index < callPeers.size(); index++) {
         peerButtons.push_back({20, top + static_cast<int>(index) * (CALL_ROW_HEIGHT + 12), windowWidth - 40, CALL_ROW_HEIGHT});
@@ -568,14 +622,12 @@ static void drawOverlay() {
     CallInterfaceView view;
     vector<string> peers;
     string incoming;
-    string status;
     bool connecting = false;
     {
         lock_guard<mutex> lock(callInterfaceMutex);
         view = requestedView;
         peers = callPeers;
         incoming = incomingPeer;
-        status = callStatus;
         connecting = acceptingCall;
     }
     SDL_Color white = {255, 255, 255, 255};
@@ -591,11 +643,10 @@ static void drawOverlay() {
     SDL_RenderClear(callRenderer);
     if (view == CALL_INTERFACE_DIRECTORY) {
         drawButton(backButton, "Close", gray, white);
+        drawDirectory(20 + CALL_BUTTON_HEIGHT + CALL_TEXT_TOP_GAP);
         for (size_t index = 0; index < peers.size() && index < peerButtons.size(); index++) {
             drawButton(peerButtons[index], peers[index], blue, white);
         }
-        if (peers.empty() && !status.empty()) drawLabel(status.c_str(), 30, 20 + CALL_BUTTON_HEIGHT + 20, black);
-        else if (!status.empty()) drawLabel(status.c_str(), 30, windowHeight - DIRECTORY_BOTTOM_GAP - 40, black);
     } else if (view == CALL_INTERFACE_INCOMING && connecting) {
         drawButton(acceptButton, "Connecting...", green, white);
     } else if (view == CALL_INTERFACE_INCOMING) {
@@ -719,6 +770,209 @@ static void drawCameraIcon(int x, int y, bool recording) {
 
     // Recording lamp when the camera is live
     if (recording) fillCircle(x + bodyWidth - 12, bodyY + 12, 5, dot);
+}
+
+// Failure text shown instead of the call instructions
+static string directoryStatus() {
+    string status;
+
+    // Copy under the lock so drawing does not race a failed call
+    {
+        lock_guard<mutex> lock(callInterfaceMutex);
+        status = callStatus;
+    }
+    return status;
+}
+
+// Bold faces for the address and the phone number, opened once the screen width is known
+static void ensureEmphasisFonts() {
+    if (callLinkFont) {
+        return;
+    }
+
+    // A narrow portrait panel needs a smaller address so it stays on one line
+    int linkSize = CALL_LINK_SIZE;
+    if (windowWidth > 0 && windowWidth < CALL_NARROW_WIDTH) {
+        linkSize = CALL_LINK_SIZE_NARROW;
+    }
+    callLinkFont = TTF_OpenFont(CALL_FONT_BOLD_PATH, linkSize);
+    callPhoneFont = TTF_OpenFont(CALL_FONT_BOLD_PATH, CALL_PHONE_SIZE);
+    if (!callLinkFont) {
+        callLinkFont = callFont;
+    }
+    if (!callPhoneFont) {
+        callPhoneFont = callFont;
+    }
+}
+
+// Pixel height of one line in this font
+static int fontHeight(TTF_Font* font) {
+    int height = CALL_FONT_SIZE;
+
+    // Measure a tall pair so the line box covers ascenders
+    if (font) {
+        TTF_SizeUTF8(font, "Ag", nullptr, &height);
+    }
+    return height;
+}
+
+// Pixel width of a string in this font
+static int textWidthOf(TTF_Font* font, const string& text) {
+    int width = 0;
+
+    // Missing font or empty text takes no space
+    if (!font || text.empty()) {
+        return 0;
+    }
+    TTF_SizeUTF8(font, text.c_str(), &width, nullptr);
+    return width;
+}
+
+// How tall the instructions are, so peer buttons start below them
+static int directoryBlockHeight() {
+    string status = directoryStatus();
+    int textWidth = windowWidth - CALL_TEXT_X * 2;
+
+    // A failure replaces the instructions and wraps like a normal sentence
+    if (!status.empty()) {
+        int lines = (int)wrapText(status, textWidth).size();
+        if (lines < 1) {
+            lines = 1;
+        }
+        return lines * (fontHeight(callFont) + CALL_LINE_GAP);
+    }
+
+    // Go to, the address, and the closing line, plus the phone when this robot has one
+    ensureEmphasisFonts();
+    int height = fontHeight(callFont) + CALL_CAPTION_GAP + fontHeight(callLinkFont);
+    if (!callPhone.empty()) {
+        int phoneHeight = fontHeight(callPhoneFont) + CALL_PHONE_PAD_Y * 2;
+        height += CALL_SECTION_GAP + fontHeight(callFont) + CALL_CAPTION_GAP + phoneHeight;
+    }
+    height += CALL_SECTION_GAP + fontHeight(callFont);
+    return height;
+}
+
+// Draw one line with a chosen font
+static void drawFontLabel(TTF_Font* font, const char* text, int x, int y, SDL_Color color) {
+    if (!font || !text || !text[0]) {
+        return;
+    }
+    SDL_Surface* surface = TTF_RenderUTF8_Solid(font, text, color);
+    if (!surface) {
+        return;
+    }
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(drawTarget, surface);
+    SDL_Rect dest = {x, y, surface->w, surface->h};
+    SDL_RenderCopy(drawTarget, texture, NULL, &dest);
+    SDL_FreeSurface(surface);
+    SDL_DestroyTexture(texture);
+}
+
+// Center a line and return the y under it
+static int drawCentered(TTF_Font* font, const string& text, int y, SDL_Color color) {
+    int width = textWidthOf(font, text);
+    int x = (windowWidth - width) / 2;
+
+    // Keep a margin when the line is wider than the screen
+    if (x < CALL_TEXT_X) {
+        x = CALL_TEXT_X;
+    }
+    drawFontLabel(font, text.c_str(), x, y, color);
+    return y + fontHeight(font);
+}
+
+// Phone as typed, with a gap before the last digit
+static string shownPhone() {
+    if (callPhone.size() <= 1) {
+        return callPhone;
+    }
+    return callPhone.substr(0, callPhone.size() - 1) + " " + callPhone.substr(callPhone.size() - 1);
+}
+
+// The address and phone, stacked and centered under Close
+static int drawInstructions(int y) {
+    SDL_Color caption = {70, 74, 82, 255};
+    SDL_Color phoneColor = {24, 48, 96, 255};
+    SDL_Color pill = {214, 228, 246, 255};
+
+    // Where to open the page
+    ensureEmphasisFonts();
+    y = drawCentered(callFont, "Go to", y, caption) + CALL_CAPTION_GAP;
+    y = drawCentered(callLinkFont, CALL_PAGE, y, caption);
+
+    // This robot's number, in a pill so it is the thing to type
+    if (!callPhone.empty()) {
+        string phone = shownPhone();
+        y += CALL_SECTION_GAP;
+        y = drawCentered(callFont, "and enter", y, caption) + CALL_CAPTION_GAP;
+        int phoneWidth = textWidthOf(callPhoneFont, phone);
+        int phoneHeight = fontHeight(callPhoneFont);
+        int pillWidth = phoneWidth + CALL_PHONE_PAD_X * 2;
+        int pillHeight = phoneHeight + CALL_PHONE_PAD_Y * 2;
+        int pillX = (windowWidth - pillWidth) / 2;
+        fillRoundedRect(pillX, y, pillWidth, pillHeight, pillHeight / 2, pill);
+        drawFontLabel(callPhoneFont, phone.c_str(), pillX + CALL_PHONE_PAD_X, y + CALL_PHONE_PAD_Y, phoneColor);
+        y += pillHeight;
+    }
+
+    // What the number is for
+    y += CALL_SECTION_GAP;
+    return drawCentered(callFont, "to call your robot.", y, caption);
+}
+
+// Instructions, or a call failure when one is waiting
+static int drawDirectory(int y) {
+    string status = directoryStatus();
+    SDL_Color black = {0, 0, 0, 255};
+
+    // Keep the old wrapped failure line when a call could not start
+    if (!status.empty()) {
+        return y + drawWrapped(status, CALL_TEXT_X, y, windowWidth - CALL_TEXT_X * 2, black);
+    }
+    return drawInstructions(y);
+}
+
+// Break a sentence into lines that fit the call list
+static vector<string> wrapText(const string& text, int maxWidth) {
+    vector<string> lines;
+    if (!callFont || maxWidth <= 0) {
+        if (!text.empty()) lines.push_back(text);
+        return lines;
+    }
+    string current;
+    size_t start = 0;
+    while (start < text.size()) {
+        while (start < text.size() && text[start] == ' ') start++;
+        if (start >= text.size()) break;
+        size_t end = text.find(' ', start);
+        if (end == string::npos) end = text.size();
+        string word = text.substr(start, end - start);
+        string trial = current.empty() ? word : current + " " + word;
+        int width = 0;
+        TTF_SizeUTF8(callFont, trial.c_str(), &width, nullptr);
+        if (!current.empty() && width > maxWidth) {
+            lines.push_back(current);
+            current = word;
+        } else {
+            current = trial;
+        }
+        start = end + 1;
+    }
+    if (!current.empty()) lines.push_back(current);
+    return lines;
+}
+
+// Draw wrapped lines and return how tall they were
+static int drawWrapped(const string& text, int x, int y, int maxWidth, SDL_Color color) {
+    vector<string> lines = wrapText(text, maxWidth);
+    int lineHeight = CALL_FONT_SIZE;
+    if (callFont) TTF_SizeUTF8(callFont, "Ag", nullptr, &lineHeight);
+    for (const string& line : lines) {
+        drawLabel(line.c_str(), x, y, color);
+        y += lineHeight + CALL_LINE_GAP;
+    }
+    return (int)lines.size() * (lineHeight + CALL_LINE_GAP);
 }
 
 static void drawLabel(const char* text, int x, int y, SDL_Color color) {
