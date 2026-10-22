@@ -57,7 +57,7 @@ static const char* WIRELESS_TYPE = "802-11-wireless";
 // What the header says while there is nothing to report yet, and before the joined network
 static const char* STATUS_LOOKING = "Looking...";
 static const char* STATUS_OFFLINE = "Not connected";
-static const char* STATUS_CONNECTED = "Connected: ";
+static const char* STATUS_CONNECTED = "WiFi: ";
 
 // Longest line nmcli is expected to answer with
 static const int COMMAND_LINE_SIZE = 512;

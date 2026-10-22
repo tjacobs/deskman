@@ -119,6 +119,14 @@ static const char* WIFI_DROP_LABEL = "Drop";
 static const int WIFI_REFRESH_MS = 10000;
 static const char* WIFI_CONNECTED_MARK = "Connected";
 
+// How to log in from a computer, shown above the networks
+static const char* WIFI_LOGIN_TITLE = "Cursor, Claude, SSH:";
+static const char* WIFI_LOGIN_USER = "deskman";
+static const char* WIFI_LOGIN_PASSWORD = "Password: deskman";
+static const char* WIFI_LOGIN_DOMAIN = ".local";
+static const int WIFI_HOSTNAME_SIZE = 64;
+static const int WIFI_LOGIN_TOP = 8;
+
 // The volume picker, a column of levels a fifth apart with the loudest at the top, set through the talk volume script
 static const int VOLUME_STEP_PERCENT = 20;
 static const int VOLUME_LEVEL_COUNT = 6;
@@ -1143,6 +1151,17 @@ void draw_wifi_list(TTF_Font* font) {
         SDL_Color dropColor = confirming ? VIDEO_CONFIRM_COLOR : VIDEO_DELETE_COLOR;
         draw_bar_button(video_delete_rect(row + 1), dropLabel, dropColor, font);
     }
+
+    // Where to log in from a computer, at the top of the screen
+    char hostname[WIFI_HOSTNAME_SIZE] = "";
+    gethostname(hostname, sizeof(hostname) - 1);
+    string address = string(WIFI_LOGIN_USER) + "@" + hostname + WIFI_LOGIN_DOMAIN;
+    int line_y = WIFI_LOGIN_TOP;
+    int line_x = VIDEO_LIST_PAD + VIDEO_TEXT_PAD;
+    int line_gap = TTF_FontLineSkip(font);
+    draw_text(WIFI_LOGIN_TITLE, line_x, line_y, font, BUTTON_LABEL_COLOR);
+    draw_text(address.c_str(), line_x, line_y + line_gap, font, BUTTON_LABEL_COLOR);
+    draw_text(WIFI_LOGIN_PASSWORD, line_x, line_y + line_gap * 2, font, BUTTON_LABEL_COLOR);
 }
 
 // Join the network that was tapped, and say whether the tap belonged to the list
