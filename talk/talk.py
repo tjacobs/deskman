@@ -32,7 +32,7 @@ WAKE_WORDS = ('robot', 'deskman', 'desk man')
 NEAR_WAKE_WORDS = ('rob', 'rub')
 WAKE_WORD_PATTERN = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in WAKE_WORDS) + r')\b', re.IGNORECASE)
 GREETING = 'Hi!'
-SAY_HI = False
+SAY_HI = True
 TALK_READY = 'Idle.'
 TALK_LISTENING = 'Listening...'
 ACKNOWLEDGEMENT = 'Question for me?'
@@ -529,10 +529,14 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     start_reminder_checker(listener, kokoro_pipeline)
     start_text_server_watch()
 
-    # Greet, then wait for the wake word rather than holding the conversation open
+    # Say hi once loading is done, then listen for one follow-up window
     if SAY_HI:
         greet(listener, kokoro_pipeline)
-    set_robot_listening(False)
+        LAST_ASK_AT = time.time()
+
+    # Stay idle when there is no greeting to follow
+    else:
+        set_robot_listening(False)
     print_talk_help()
     try:
         while True:
