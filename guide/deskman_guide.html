@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Deskman Guide</title>
+</head>
+<body>
+
+<header>
+<h1>Deskman</h1>
+<div class="tag">Deskman is your home assistant. Talk with him, set reminders, and make video calls.</div>
+</header>
+
+<h2>Talking to Deskman</h2>
+<ul>
+<li>Say <b>"robot"</b> or <b>"deskman"</b>, then your request: <span class="say">"robot, what time is it?"</span></li>
+<li>After a reply you can keep talking for 20 seconds without the name.</li>
+<li>He cannot hear you while he is speaking, wait for him to finish.</li>
+<li>Say <span class="say">"be quiet"</span> to put him back to idle.</li>
+</ul>
+
+<h2>Modes</h2>
+<ul>
+<li><b>Local</b>: Runs on the robot, no internet needed.</li>
+<li><b>Cloud</b>: OpenAI for answers, faster and smarter.</li>
+<li><b>Realtime</b>: OpenAI hears and speaks directly, most natural.</li>
+</ul>
+
+<h2>What he can do</h2>
+<ul>
+<li><b>Watch</b>: His eyes follow your face using the camera, and his head follows you when he is listening.</li>
+<li><b>Look</b>: Say <span class="say">"look left"</span>, <span class="say">"look right"</span>, <span class="say">"look up"</span>, <span class="say">"look down"</span>, and <span class="say">"look center"</span> to move his head.</li>
+<li><b>Time</b>: Say <span class="say">"what time is it?"</span>, or <span class="say">"how many days until December 15"</span>.</li>
+<li><b>Volume</b>: Say <span class="say">"volume 80"</span> to set a percent of volume.</li>
+<li><b>Remember</b>: Say <span class="say">"remember my name is Tom"</span>, and he will remember your name over power restarts.</li>
+<li><b>Remind</b>: Say <span class="say">"remind me at 10 PM for bedtime"</span> for a daily spoken reminder.</li>
+<li><b>Videos</b>: Say <span class="say">"record a video"</span>, or <span class="say">"play a video"</span>.</li>
+<li><b>Status</b>: Say <span class="say">"how is your battery?"</span>, or <span class="say">"what system are you running on?"</span></li>
+<li><b>Calls</b>: Call robot to robot, or from a web browser, at <span class="mono">https://teleportconnect.com/teleport</span></li>
+<li><b>Calendar</b>: Connect your calendar using the tool script.</li>
+</ul>
+
+<h2>The touch menu</h2>
+Tap the button on the right of the status bar. The mode row (Local, Cloud, Realtime) shows along the bottom.
+<table>
+<tr><td>Listen</td><td>Turn voice listening on or off.</td></tr>
+<tr><td>Camera</td><td>Show or hide the camera preview with face tracking.</td></tr>
+<tr><td>Record</td><td>Start recording a video, tap Stop to finish.</td></tr>
+<tr><td>Videos</td><td>Play or delete saved recordings.</td></tr>
+<tr><td>Call</td><td>Start a video call.</td></tr>
+<tr><td>Settings</td><td>Opens a column to the left with Demo, Move, Audio, Volume, WiFi, and Exit.</td></tr>
+<tr><td>Demo</td><td>Stays listening, looks around every 30 seconds, volume 80%, goes green.</td></tr>
+<tr><td>Move</td><td>Sweeps the servos.</td></tr>
+<tr><td>Audio</td><td>Microphone and speaker test.</td></tr>
+</table>
+
+<div class="cols">
+<div>
+<h2>Get on WiFi</h2>
+<ol>
+<li>Tap the menu, then <b>Settings</b>, then <b>WiFi</b>.</li>
+<li>Tap your network in the list.</li>
+<li>Type the password and confirm.</li>
+<li>Top line shows <span class="mono">WiFi: name</span> when connected.</li>
+</ol>
+<div class="box">Local needs no WiFi. Cloud and Realtime need internet.</div>
+</div>
+<div>
+<h2>Connect by SSH</h2>
+Address is at the top of the WiFi screen:
+<div class="box">
+<span class="mono">ssh deskman@deskman4.local</span><br>
+Password: <b>deskman</b>
+</div>
+<ul>
+<li>Use your robot's name instead of <b>deskman4</b>.</li>
+<li>Cursor or Claude Code: use the same address.</li>
+</ul>
+</div>
+</div>
+
+<h2>Handy commands</h2>
+<div class="box">
+<table class="cmds">
+<tr><td class="mono">tail -f robot/log.txt</td><td>Show the log on screen</td></tr>
+<tr><td class="mono">robot/restart_services.sh</td><td>Restart the robot and video call services, no password</td></tr>
+<tr><td class="mono">cd talk &amp;&amp; ./talk.py</td><td>Run the voice program by hand</td></tr>
+<tr><td class="mono">sudo service robot stop</td><td>Stop the robot first if one is running</td></tr>
+</table>
+</div>
+
+<footer>Deskman runs on a Jetson Orin Nano or Raspberry Pi 5. Website: teleportconnect.com</footer>
+
+<style>
+@page { size: Letter; margin: 0.4in 0.5in; }
+* { box-sizing: border-box; }
+body { font-family: "DejaVu Sans", Helvetica, Arial, sans-serif; font-size: 8.8pt; line-height: 1.3; color: #1c2430; margin: 0; }
+header { border-bottom: 3px solid #1e8c46; padding-bottom: 6px; margin-bottom: 10px; }
+h1 { font-size: 21pt; margin: 0; color: #14612f; }
+.tag { color: #556; font-size: 10pt; margin-top: 2px; }
+h2 { font-size: 12pt; color: #14612f; margin: 8px 0 3px; border-bottom: 1px solid #cfe3d5; padding-bottom: 2px; }
+.cols { display: flex; gap: 20px; }
+.cols > div { flex: 1; }
+ul { margin: 2px 0 0 16px; padding: 0; }
+li { margin-bottom: 2px; }
+code, .mono { font-family: "DejaVu Sans Mono", monospace; background: #eef4f0; padding: 0 3px; border-radius: 3px; font-size: 9pt; }
+.box { background: #f3f8f5; border: 1px solid #cfe3d5; border-radius: 6px; padding: 7px 10px; margin-top: 4px; }
+.say { font-style: italic; }
+table { border-collapse: collapse; width: 100%; margin-top: 3px; }
+td { padding: 1.5px 4px; vertical-align: top; }
+td:first-child { font-weight: bold; white-space: nowrap; width: 62px; color: #14612f; }
+ol { margin: 2px 0 0 18px; padding: 0; }
+.box .mono { padding: 0; background: none; }
+.cmds td { padding: 1px 10px 1px 0; font-weight: normal; width: auto; color: inherit; }
+.cmds td.mono { background: none; padding-right: 14px; }
+footer { margin-top: 10px; color: #667; font-size: 8.3pt; border-top: 1px solid #ddd; padding-top: 4px; }
+</style>
+
+</body></html>
