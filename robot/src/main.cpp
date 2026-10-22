@@ -96,7 +96,7 @@ static const int FACE_LOOK_TILT_DEGREES = 30;
 // How often the head is nudged toward the tracked face
 static const int FACE_TRACK_NUDGE_MS = 50;
 
-// Hat down to level while idle, all the way up while talk listens or a call is connected
+// Hat down to level while idle, all the way up while talk listens, a call is connected, or a recording runs
 static const int HAT_IDLE_DEGREES = 0;
 static const int HAT_LISTEN_DEGREES = -40;
 
@@ -833,21 +833,24 @@ static int sweep_servo_test(bool no_servos) {
     return 0;
 }
 
-// Move the hat once when talk starts or stops listening, or a call connects or ends, and center the head when a call connects or ends or talk goes back to idle
+// Move the hat once when talk starts or stops listening, a call connects or ends, or a recording starts or stops, and center the head when a call connects or ends or talk goes back to idle
 static void apply_listen_hat() {
     static bool hat_set = false;
     static bool hat_raised = false;
     static bool call_was_open = false;
+    static bool listening_was_open = false;
     bool call = call_open();
-    bool raised = listen_open() || call;
+    bool listening = listen_open() || call;
+    bool raised = listening || recording();
     if (sweeping()) {
         return;
     }
 
-    // Point the head straight ahead with the hat when a call connects or ends, or listening stops
+    // Point the head straight ahead with the hat when a call connects or ends, or listening stops, a recording alone only moves the hat
     bool call_changed = call != call_was_open;
-    bool went_idle = hat_set && hat_raised && !raised;
+    bool went_idle = hat_set && hat_raised && !raised && listening_was_open;
     call_was_open = call;
+    listening_was_open = listening;
     if (call_changed || went_idle) {
         hat_set = true;
         hat_raised = raised;
