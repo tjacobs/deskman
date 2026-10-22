@@ -882,12 +882,12 @@ static int drawCentered(TTF_Font* font, const string& text, int y, SDL_Color col
     return y + fontHeight(font);
 }
 
-// Phone as typed, with a gap before the last five digits
+// Phone as typed, with a gap before the last digit
 static string shownPhone() {
-    if (callPhone.size() <= 5) {
+    if (callPhone.size() <= 1) {
         return callPhone;
     }
-    return callPhone.substr(0, callPhone.size() - 5) + " " + callPhone.substr(callPhone.size() - 5);
+    return callPhone.substr(0, callPhone.size() - 1) + " " + callPhone.substr(callPhone.size() - 1);
 }
 
 // The address and phone, stacked and centered under Close
