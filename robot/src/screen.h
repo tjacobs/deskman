@@ -26,6 +26,9 @@ extern mutex statusMutex;
 
 // Open and close the fullscreen window
 bool create_window();
+
+// Match the layout to the window, the desktop can resize it after startup
+void sync_window_size();
 bool close_window();
 
 // Hide the face while a system prompt needs the screen, and show it again

@@ -362,6 +362,22 @@ static void install_blank_cursor() {
     SDL_FreeSurface(surface);
 }
 
+// Match the layout to the window, the desktop can resize it after startup
+void sync_window_size() {
+    if (!window)
+        return;
+
+    // Read the size the window has now
+    int width = 0;
+    int height = 0;
+    SDL_GetWindowSize(window, &width, &height);
+    if (width <= 0 || height <= 0)
+        return;
+
+    screen_width = width;
+    screen_height = height;
+}
+
 // Create window
 bool create_window() {
     // Cover the whole screen on the robot, use a plain window elsewhere
@@ -429,7 +445,7 @@ bool create_window() {
     }
 
     // Use the desktop size the window actually covered
-    SDL_GetWindowSize(window, &screen_width, &screen_height);
+    sync_window_size();
 
     // Keep the pointer off the face
     hide_cursor();

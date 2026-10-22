@@ -482,6 +482,9 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
             handle_call_event(event);
         }
 
+        // The desktop can resize the window after it opens, so follow that size
+        sync_window_size();
+
         // Point the eyes at the tracked face, and look ahead again once it is lost
         float faceX, faceY;
         static bool eyes_following = false;
@@ -784,6 +787,9 @@ static void draw_face() {
         if (event.type == SDL_QUIT)
             g_quit = true;
     }
+
+    // The desktop can resize the window while these first frames are drawing
+    sync_window_size();
 
     // Animate the face and keep the battery strip on the first frames
     hide_cursor();
