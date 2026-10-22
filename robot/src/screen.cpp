@@ -90,6 +90,13 @@ static const int HOURS_PER_HALF_DAY = 12;
 static const char* IBUS_ADDRESS_VARIABLE = "IBUS_ADDRESS";
 static const char* DEAD_IBUS_ADDRESS = "unix:path=/nonexistent";
 
+// The Pi touch keyboard only answers Wayland text fields, so children join the desktop's Wayland socket
+static const char* WAYLAND_SOCKET_NAME = "wayland-0";
+static const char* WAYLAND_DISPLAY_VARIABLE = "WAYLAND_DISPLAY";
+static const char* SESSION_TYPE_VARIABLE = "XDG_SESSION_TYPE";
+static const char* WAYLAND_SESSION_TYPE = "wayland";
+static const char* RUNTIME_DIRECTORY_VARIABLE = "XDG_RUNTIME_DIR";
+
 // Screen globals
 SDL_Window* window = nullptr;
 static bool g_window_hidden = false;
@@ -279,6 +286,18 @@ static void write_log_chunk(int descriptor, const char* buffer, ssize_t count) {
 // Give a child process the input method back, so GNOME shows its touch keyboard for the child's text fields
 void allow_screen_keyboard() {
     unsetenv(IBUS_ADDRESS_VARIABLE);
+
+    // Find the desktop's Wayland socket, an X11 desktop has none
+    const char* runtime_directory = getenv(RUNTIME_DIRECTORY_VARIABLE);
+    if (!runtime_directory || !runtime_directory[0])
+        return;
+    error_code error;
+    if (!filesystem::exists(filesystem::path(runtime_directory) / WAYLAND_SOCKET_NAME, error))
+        return;
+
+    // Open the child's windows on Wayland, Chromium also needs the session type before it leaves X11
+    setenv(WAYLAND_DISPLAY_VARIABLE, WAYLAND_SOCKET_NAME, 1);
+    setenv(SESSION_TYPE_VARIABLE, WAYLAND_SESSION_TYPE, 1);
 }
 
 // Hide the pointer, and replace it with an empty cursor
