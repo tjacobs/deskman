@@ -128,7 +128,8 @@ KEY_SCRIPT_NAME = 'install_openai_key.sh'
 KEY_SCRIPT = os.path.join(utils.SCRIPT_DIR, KEY_SCRIPT_NAME)
 NO_KEY_REASON = 'No OpenAI key.'
 
-# How long the first inference usually takes on a Pi, shown on that loading line
+# How long Kokoro and the first inference usually take on a Pi, shown on those loading lines
+PI_KOKORO_LOAD_SECONDS = 30
 PI_INFERENCE_LOAD_SECONDS = 25
 
 # Local model preset, the Pi uses the smaller one
@@ -144,6 +145,9 @@ KOKORO_EXPECTED_GB = 0.7
 SPEECH_MODELS_EXPECTED_GB = WHISPER_EXPECTED_GB + KOKORO_EXPECTED_GB
 SPEECH_STACK_EXPECTED_GB = TEXT_SERVER_EXPECTED_GB + SPEECH_MODELS_EXPECTED_GB
 MEMORY_LOW_GB = 0.5
+
+# How far under an expected load still counts as enough, so a Pi near the estimate stays quiet
+MEMORY_WARN_MARGIN_GB = 1.0
 
 # Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
 TALK_MODE_NAMES = ('local', 'cloud', 'realtime')
@@ -811,7 +815,7 @@ def load_kokoro_pipeline():
     global kokoro, torch, soundfile, kokoro_model
 
     # Suppress torch warnings before kokoro imports torch
-    print('Loading kokoro...', flush=True)
+    print(f'Loading kokoro...{load_wait_text(PI_KOKORO_LOAD_SECONDS)}', flush=True)
     warn_if_low_memory_for('kokoro', KOKORO_EXPECTED_GB)
     load_start = time.perf_counter()
     utils.configure_torch_threads()
@@ -1136,6 +1140,13 @@ def should_print_memory(available_gb, expected_gb):
 # Return true when available RAM is below the expected amount
 def memory_is_low(available_gb, expected_gb):
     return available_gb >= 0 and available_gb < expected_gb
+
+# Return true when available RAM is short of the expected load by more than the margin
+def memory_is_short(available_gb, expected_gb):
+    # An unknown reading is not a warning
+    if available_gb < 0:
+        return False
+    return available_gb + MEMORY_WARN_MARGIN_GB < expected_gb
 
 # Format gigabytes as 1.1 GB
 def format_gigabytes(gigabytes):
@@ -1880,10 +1891,10 @@ def warn_if_low_memory():
         expected_gb = SPEECH_MODELS_EXPECTED_GB
     else:
         expected_gb = SPEECH_STACK_EXPECTED_GB
-    low = memory_is_low(available_gb, expected_gb)
+    low = memory_is_short(available_gb, expected_gb)
 
     # Print the remaining load cost when RAM is short or --memory
-    if should_print_memory(available_gb, expected_gb):
+    if low or MEMORY_MODE:
         if text_server_running:
             print(f'Memory: expect about {format_gigabytes(expected_gb)} for whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}) and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
         else:
@@ -1898,7 +1909,7 @@ def warn_if_low_memory():
 # Warn when free RAM is below one load step
 def warn_if_low_memory_for(name, expected_gb):
     available_gb = available_memory_gb()
-    if memory_is_low(available_gb, expected_gb):
+    if memory_is_short(available_gb, expected_gb):
         print(f'Warning: only {format_gigabytes(available_gb)} available before {name}, expect about {format_gigabytes(expected_gb)}.', flush=True)
 
 # Make sure only one running
