@@ -5,7 +5,7 @@
 - [done] improve face tracking to actually detect faces well
 - [done] make a demo mode so it stays listening and looks around
 - [done] put SSH details on wifi screen for new users to see
-- make a nice one page intro guide document on how to use
+- [done] make a nice one page intro guide document on how to use
 - make a nice what can I say screen for new users to learn
 - make a hold down of quiet button lock quiet mode on
 - make local gemma talk mode work on pi with 2gb memory
