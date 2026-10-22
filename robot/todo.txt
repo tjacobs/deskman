@@ -4,6 +4,7 @@
 - [done] make eyes smoother and bigger
 - [done] improve face tracking to actually detect faces well
 - [done] make a demo mode so it stays listening and looks around
+- [done] put SSH details on wifi screen for new users to see
 - make a hold down of quiet button lock quiet mode on
 - make local gemma talk mode work on pi with 2gb memory
 - make hat go down when asleep at bedtime, up in the morning
