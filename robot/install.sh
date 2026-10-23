@@ -30,9 +30,6 @@ main() {
 
 # Install Linux packages with apt
 install_linux() {
-    # Check the disk holds the packages and the build
-    require_free_space "${ROBOT_REQUIRED_GB}" "the robot packages"
-
     # Keep the ffmpeg that can record, then refresh package lists
     prefer_ubuntu_ffmpeg
     apt_get update -y

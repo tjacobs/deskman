@@ -4,7 +4,7 @@
 # Main
 main() {
     # Check the install fits before changing the system
-    check_full_install_space
+    check_disk_space
 
     # Ask for the sudo password once
     prime_sudo
@@ -31,35 +31,30 @@ main() {
     free_disk_space
 }
 
-# Quit before any work when the disk cannot hold everything still to install
-check_full_install_space() {
-    local needed_gigabytes
-    needed_gigabytes="$("${ROOT_DIR}/talk/install.sh" --print-required-gigabytes)"
+# Stop before any work when the disk is short, unless the user types y to continue
+check_disk_space() {
+    # Say what is being checked
+    echo "Checking disk space..."
 
-    # Count the robot and teleport builds when they do not exist yet
-    if [[ ! -d "${ROOT_DIR}/robot/build" ]]; then
-        needed_gigabytes=$((needed_gigabytes + ROBOT_REQUIRED_GB))
-    fi
-    if [[ ! -d "${ROOT_DIR}/teleport/build" ]]; then
-        needed_gigabytes=$((needed_gigabytes + TELEPORT_REQUIRED_GB))
-    fi
-    require_free_space "${needed_gigabytes}" "the full install"
-}
-
-# Quit early with a clear message when the disk is too small for a step
-require_free_space() {
-    local needed_gigabytes="$1"
-    local label="$2"
+    # Pass when there is enough room
     local available_gigabytes
     available_gigabytes="$(free_gigabytes)"
-
-    # Stop before any work is done, not halfway through a long build
-    if (( available_gigabytes < needed_gigabytes )); then
-        echo "Not enough disk space for ${label}, need about ${needed_gigabytes} GB free and have ${available_gigabytes} GB on ${DISK_CHECK_PATH}."
-        echo "Delete files or use bigger storage, then run again."
-        exit 1
+    if (( available_gigabytes >= REQUIRED_DISK_GB )); then
+        echo "Disk space OK, ${available_gigabytes} GB free, need ${REQUIRED_DISK_GB} GB."
+        return 0
     fi
-    echo "Disk space OK for ${label}, ${available_gigabytes} GB free, need about ${needed_gigabytes} GB."
+
+    # Ask on a terminal, Enter keeps the default and stops
+    local answer
+    echo "Not enough disk space, need ${REQUIRED_DISK_GB} GB free and have ${available_gigabytes} GB."
+    if [[ -t 0 ]]; then
+        read -r -p "Continue with low disk space? [y/N] " answer
+        if [[ "${answer}" == "y" || "${answer}" == "Y" ]]; then
+            return 0
+        fi
+    fi
+    echo "Delete files or use bigger storage, then run again."
+    exit 1
 }
 
 # Return the whole gigabytes free on the install disk
@@ -160,9 +155,8 @@ SUDO_REFRESH_SECONDS=60
 DISK_CHECK_PATH="/"
 KILOBYTES_PER_GIGABYTE=1048576
 
-# Config disk space in gigabytes the robot and teleport builds need when not built yet
-ROBOT_REQUIRED_GB=2
-TELEPORT_REQUIRED_GB=2
+# Config the free disk space in gigabytes the install needs
+REQUIRED_DISK_GB=10
 
 # Config build parallelism, each compile job can use this much memory
 MEMORY_PER_BUILD_JOB_GB=2

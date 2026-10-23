@@ -22,8 +22,7 @@ fi
 
 # Install Linux packages
 if [ "$OS" = "Linux" ]; then
-    # Check the disk and ask for the sudo password once
-    require_free_space "${TELEPORT_REQUIRED_GB}" "the teleport packages"
+    # Ask for the sudo password once
     prime_sudo
 
     # Install the build tools and GStreamer without prompts
