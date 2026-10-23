@@ -15,7 +15,7 @@ main() {
 
     # Re-run as root, keep the calling user for session settings
     if [[ "${EUID}" -ne 0 ]]; then
-        exec sudo --preserve-env=SUDO_USER,HOME bash "${BASH_SOURCE[0]}" "$@"
+        exec sudo --preserve-env=SUDO_USER,HOME,DEBIAN_FRONTEND,NEEDRESTART_MODE bash "${BASH_SOURCE[0]}" "$@"
     fi
 
     # Resolve the user who invoked sudo
@@ -29,6 +29,19 @@ main() {
     # Pick Jetson GNOME or Pi LXDE, then apply boot, login, and desktop settings
     detect_machine
     echo "Configuring ${MACHINE} for ${RUN_USER}"
+
+    # Fix only the Avahi hostname when asked, then stop
+    if [[ "${AVAHI_ONLY}" == true ]]; then
+        fix_avahi_hostname
+        echo "Done."
+        exit 0
+    fi
+
+    # Keep the network steady first, so a long install keeps its Wi-Fi and the .local name
+    keep_wifi_awake
+    fix_avahi_hostname
+
+    # Configure boot, login, and the desktop
     enable_graphical_boot
     enable_autologin
     disable_hot_surface_alert
@@ -46,9 +59,7 @@ main() {
     enable_screen_keyboard
     install_browser
     quiet_fan_when_cool
-    keep_wifi_awake
     allow_network_control
-    fix_mdns_name
     hide_builtin_usb
     enable_zram_swap
     enable_earlyoom
@@ -60,9 +71,16 @@ parse_args() {
     # Walk each argument
     for argument in "$@"; do
 
+        # Fix only the Avahi hostname
+        if [[ "${argument}" == "--avahi" ]]; then
+            AVAHI_ONLY=true
+            continue
+        fi
+
         # Print help and quit
         if [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
-            echo "Usage: ./install_system.sh"
+            echo "Usage: ./install_system.sh [--avahi]"
+            echo "  --avahi  only fix the Avahi hostname and restart Avahi"
             echo "  Boot to X, auto-login, black empty desktop. Jetson Ubuntu or Raspberry Pi OS."
             exit 0
         fi
@@ -86,6 +104,9 @@ GETTY_AUTOLOGIN_CONF="${GETTY_AUTOLOGIN_DIR}/autologin.conf"
 
 # Set in detect_machine to jetson or pi
 MACHINE=""
+
+# State, set by --avahi to skip every step but the Avahi hostname fix
+AVAHI_ONLY=false
 
 # NetworkManager drop-in that keeps the Wi-Fi radio awake for calls
 NETWORK_MANAGER_CONF_DIR="/etc/NetworkManager/conf.d"
@@ -1201,7 +1222,6 @@ hold_working_snapd() {
     snap refresh --hold snapd
 }
 
-# Publish this machine as hostname.local, Avahi renames itself when IPv6 addresses come and go
 # Stop Wi-Fi power save, it parks the radio between beacons and drops incoming call media
 keep_wifi_awake() {
     # Tell NetworkManager to leave the radio on for every Wi-Fi connection
@@ -1253,7 +1273,8 @@ EOF
     echo "Wrote ${POLKIT_RULES_PATH}"
 }
 
-fix_mdns_name() {
+# Publish this machine as hostname.local, Avahi renames itself to hostname-2 when IPv6 addresses come and go
+fix_avahi_hostname() {
     if [[ ! -f "${AVAHI_CONF}" ]]; then
         echo "No Avahi config, skip mDNS"
         return

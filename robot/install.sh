@@ -4,6 +4,11 @@
 # Stop on errors
 set -euo pipefail
 
+# Load the shared sudo, disk space, and cleanup helpers
+ROBOT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../install.sh
+source "${ROBOT_SCRIPT_DIR}/../install.sh"
+
 # Prefer Ubuntu's ffmpeg on a Jetson, the NVIDIA repo build has no camera or microphone input, a priority over 1000 lets apt replace it
 JETSON_RELEASE_FILE="/etc/nv_tegra_release"
 FFMPEG_PIN_PATH="/etc/apt/preferences.d/deskman-ffmpeg"
@@ -11,6 +16,7 @@ FFMPEG_PIN_PRIORITY=1001
 
 # Main
 main() {
+    prime_sudo
     os_name="$(uname -s)"
     case "$os_name" in
         Linux) install_linux ;;
@@ -24,14 +30,18 @@ main() {
 
 # Install Linux packages with apt
 install_linux() {
-    export DEBIAN_FRONTEND=noninteractive
+    # Check the disk holds the packages and the build
+    require_free_space "${ROBOT_REQUIRED_GB}" "the robot packages"
 
     # Keep the ffmpeg that can record, then refresh package lists
     prefer_ubuntu_ffmpeg
-    sudo apt-get update -y
+    apt_get update -y
 
     # Install SDL, OpenCV, GStreamer, the compiler, and ffmpeg for video recording
-    sudo apt-get install -y --allow-downgrades build-essential cmake pkg-config libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libjpeg-dev libpng-dev libwebp-dev libcurl4-openssl-dev libopencv-dev libgstreamer1.0-dev i2c-tools ffmpeg
+    apt_get install -y --allow-downgrades build-essential cmake pkg-config libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev libjpeg-dev libpng-dev libwebp-dev libcurl4-openssl-dev libopencv-dev libgstreamer1.0-dev i2c-tools ffmpeg
+
+    # Delete the downloaded package files to save space
+    clean_apt_cache
 
     # Let this user open the servo serial port
     sudo usermod -aG dialout "${SUDO_USER:-$(id -un)}"

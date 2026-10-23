@@ -8,8 +8,12 @@
 # Exit on error, undefined variables, and pipe failure
 set -euo pipefail
 
-# Config venv and packages
+# Load the shared sudo, disk space, and cleanup helpers
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../install.sh
+source "${SCRIPT_DIR}/../install.sh"
+
+# Config venv and packages
 VENV_DIR="${SCRIPT_DIR}/.venv"
 PYTHON_VERSION="3.12"
 JETSON_PYTHON_VERSION="3.10"
@@ -58,7 +62,7 @@ CTRANSLATE2_DIR="${LIBS_DIR}/CTranslate2"
 CTRANSLATE2_LIBRARY="/usr/local/lib/libctranslate2.so"
 CUDA_BIN="/usr/local/cuda/bin"
 CUDA_ARCHITECTURE=87
-BUILD_JOBS=6
+BUILD_JOBS="$(build_jobs)"
 CTRANSLATE2_CXX_WARNINGS="-Wno-unused-parameter -Wno-unused-variable -Wno-implicit-fallthrough -Wno-reorder"
 CTRANSLATE2_CUDA_WARNINGS="-diag-suppress=177 -Xcompiler=-Wno-unused-parameter,-Wno-unused-variable,-Wno-reorder"
 
@@ -75,6 +79,21 @@ LLAMA_SERVER="${LLAMA_CPP_DIR}/build/bin/llama-server"
 LLAMA_LIBRARY_DIR="${LLAMA_CPP_DIR}/build/bin"
 LLAMA_CUDA_LIBRARY="${LLAMA_LIBRARY_DIR}/libggml-cuda.so"
 
+# Config disk space in gigabytes, estimated from a Jetson Orin Nano SD card install
+# Kept is what a finished step leaves on disk, peak is what it needs while running
+CUDA_TOOLKIT_KEPT_GB=5
+CUDA_TOOLKIT_PEAK_GB=9
+TORCH_KEPT_GB=6
+TORCH_PEAK_GB=7
+TORCH_CPU_KEPT_GB=2
+CTRANSLATE2_KEPT_GB=1
+CTRANSLATE2_PEAK_GB=3
+LLAMA_CPP_KEPT_GB=2
+LLAMA_CPP_PEAK_GB=3
+TEXT_MODEL_KEPT_GB=3
+TEXT_MODEL_PEAK_GB=4
+SAFETY_MARGIN_GB=1
+
 # State, speech to text and the local model install by default
 INSTALL_LISTEN=true
 INSTALL_TALK=true
@@ -82,6 +101,8 @@ INSTALL_TALK=true
 # Main
 main() {
     parse_args "$@"
+    check_disk_space
+    prime_sudo
     install_uv
     install_system_packages
     create_venv
@@ -93,6 +114,7 @@ main() {
     if [[ "${INSTALL_TALK}" == true ]]; then
         install_text
     fi
+    free_disk_space
     print_done
 }
 
@@ -105,6 +127,10 @@ parse_args() {
                 ;;
             --talk|--text)
                 INSTALL_TALK=true
+                ;;
+            --print-required-gigabytes)
+                pending_gigabytes
+                exit 0
                 ;;
             -h|--help)
                 print_usage
@@ -125,6 +151,85 @@ print_usage() {
     echo "  (no arg)  install text to speech, speech to text, llama.cpp, and Gemma 4 E2B"
     echo "  --listen  install speech to text for listen.py and talk.py"
     echo "  --talk    install llama.cpp and Gemma 4 E2B for talk.py"
+    echo "  --print-required-gigabytes  print the free disk space the steps still to do need"
+}
+
+# Quit before any work when the disk cannot hold the steps still to do
+check_disk_space() {
+    require_free_space "$(pending_gigabytes)" "the talk install"
+}
+
+# Return the gigabytes the steps still to do need, steps already done add nothing
+pending_gigabytes() {
+    local total=0
+
+    # Count the cuda toolkit when a Jetson lacks it
+    if is_jetson && [[ ! -x "${CUDA_BIN}/nvcc" ]]; then
+        total=$((total + CUDA_TOOLKIT_KEPT_GB))
+    fi
+
+    # Count torch when the venv cannot import it
+    if ! "${VENV_DIR}/bin/python" -c 'import torch' >/dev/null 2>&1; then
+        total=$((total + $(torch_kept_gigabytes)))
+    fi
+
+    # Count the ctranslate2 build when speech to text still has to be built
+    if [[ "${INSTALL_LISTEN}" == true ]] && builds_ctranslate2 && ! ctranslate2_ready; then
+        total=$((total + CTRANSLATE2_KEPT_GB))
+    fi
+
+    # Count the local model and llama.cpp when missing
+    if [[ "${INSTALL_TALK}" == true ]]; then
+        if [[ ! -f "${TEXT_MODEL_PATH}" ]]; then
+            total=$((total + TEXT_MODEL_KEPT_GB))
+        fi
+        if [[ ! -x "${LLAMA_SERVER}" ]]; then
+            total=$((total + LLAMA_CPP_KEPT_GB))
+        fi
+    fi
+
+    # Add a margin for logs and package updates when there is work to do
+    if (( total > 0 )); then
+        total=$((total + SAFETY_MARGIN_GB))
+    fi
+    echo "${total}"
+}
+
+# Return the gigabytes torch keeps, the cpu build is far smaller than the cuda build
+torch_kept_gigabytes() {
+    if [[ "$(uname -s)" == "Darwin" ]] || is_raspberry_pi; then
+        echo "${TORCH_CPU_KEPT_GB}"
+    else
+        echo "${TORCH_KEPT_GB}"
+    fi
+}
+
+# Return the gigabytes needed while torch installs
+torch_peak_gigabytes() {
+    if [[ "$(uname -s)" == "Darwin" ]] || is_raspberry_pi; then
+        echo "${TORCH_CPU_KEPT_GB}"
+    else
+        echo "${TORCH_PEAK_GB}"
+    fi
+}
+
+# Return true when speech to text is built here against cuda, not installed from cpu wheels
+builds_ctranslate2() {
+    if [[ "$(uname -s)" == "Darwin" ]] || is_raspberry_pi; then
+        return 1
+    fi
+    if is_jetson || [[ -x "${CUDA_BIN}/nvcc" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# Return true when ctranslate2 and faster-whisper are installed and see the gpu
+ctranslate2_ready() {
+    if [[ ! -f "${CTRANSLATE2_LIBRARY}" ]]; then
+        return 1
+    fi
+    (cd "${SCRIPT_DIR}" && "${VENV_DIR}/bin/python" -c 'import ctranslate2, faster_whisper, sys; sys.exit(0 if ctranslate2.get_cuda_device_count() > 0 else 1)' >/dev/null 2>&1)
 }
 
 # Install uv when missing
@@ -158,6 +263,10 @@ install_system_packages() {
 
 # Install the JetPack cuda toolkit and quit when nvcc is still missing
 install_jetson_cuda() {
+    # Check the disk holds the downloads and the install before pulling gigabytes
+    if [[ ! -x "${CUDA_BIN}/nvcc" ]]; then
+        require_free_space "${CUDA_TOOLKIT_PEAK_GB}" "the CUDA toolkit"
+    fi
     install_linux_packages "${JETSON_CUDA_PACKAGES[@]}"
     if [[ ! -x "${CUDA_BIN}/nvcc" ]]; then
         echo "CUDA toolkit install failed, ${CUDA_BIN}/nvcc not found."
@@ -206,9 +315,12 @@ install_linux_packages() {
         return 0
     fi
 
-    # Install the missing packages
-    sudo apt-get update
-    sudo apt-get install -y "${missing[@]}"
+    # Install the missing packages without prompts
+    apt_get update
+    apt_get install -y "${missing[@]}"
+
+    # Delete the downloaded package files, the CUDA toolkit alone leaves gigabytes behind
+    clean_apt_cache
 }
 
 # Create the venv when missing or on the wrong python
@@ -244,6 +356,11 @@ install_python_packages() {
 
 # Install torch, JetPack 7 CUDA 13.2 wheels, JetPack 6 Orin wheels, CPU on pi, CUDA 12.6 elsewhere
 install_torch() {
+    # Check the disk holds torch and its CUDA libraries, skip when torch already imports
+    if ! "${VENV_DIR}/bin/python" -c 'import torch' >/dev/null 2>&1; then
+        require_free_space "$(torch_peak_gigabytes)" "torch"
+    fi
+
     # JetPack 7 has no system libcudart.so.12, so use the upstream wheel that ships CUDA 13.2
     if is_jetpack7; then
         echo "Installing torch ${TORCH_JETPACK7_PACKAGES[*]} from ${TORCH_JETPACK7_INDEX_URL}."
@@ -343,15 +460,34 @@ install_listen() {
     fi
 }
 
-# Build and install faster-whisper against a cuda build of ctranslate2
+# Install faster-whisper against a cuda build of ctranslate2
 install_listen_cuda() {
+    # Skip when the library and the venv already see the gpu
+    if ctranslate2_ready; then
+        echo "CTranslate2 already installed."
+        return 0
+    fi
+
+    # Build, install, and check the gpu works
     check_build_tools
+    require_free_space "${CTRANSLATE2_PEAK_GB}" "the CTranslate2 build"
     clone_repository "${CTRANSLATE2_URL}" "${CTRANSLATE2_DIR}" --depth 1 --recursive --shallow-submodules
     clone_repository "${FASTER_WHISPER_URL}" "${FASTER_WHISPER_DIR}" --depth 1
     build_ctranslate2
     install_ctranslate2
     install_listen_packages
     verify_cuda
+
+    # Delete the sources and build, the install copied what it needs
+    remove_listen_sources
+}
+
+# Delete the ctranslate2 and faster-whisper clones and build, they are gigabytes on a small SD card
+remove_listen_sources() {
+    # Leave the folder first, the build step moved the shell into it
+    cd "${SCRIPT_DIR}"
+    rm -rf "${CTRANSLATE2_DIR}" "${FASTER_WHISPER_DIR}"
+    rmdir "${LIBS_DIR}" 2>/dev/null || true
 }
 
 # Quit early when the build tools are missing
@@ -372,9 +508,9 @@ build_ctranslate2() {
         return 0
     fi
 
-    # Configure and build, silence unused-code warnings from upstream sources
+    # Configure and build, silence unused-code warnings and the FindCUDA policy warning from upstream sources
     cd "${CTRANSLATE2_DIR}"
-    PATH="${CUDA_BIN}:${PATH}" cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=ON -DWITH_MKL=OFF -DWITH_OPENBLAS=ON -DOPENMP_RUNTIME=COMP -DBUILD_CLI=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DCMAKE_CXX_FLAGS="${CTRANSLATE2_CXX_WARNINGS}" -DCUDA_NVCC_FLAGS="${CTRANSLATE2_CUDA_WARNINGS}"
+    PATH="${CUDA_BIN}:${PATH}" cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=ON -DWITH_MKL=OFF -DWITH_OPENBLAS=ON -DOPENMP_RUNTIME=COMP -DBUILD_CLI=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DCMAKE_CXX_FLAGS="${CTRANSLATE2_CXX_WARNINGS}" -DCUDA_NVCC_FLAGS="${CTRANSLATE2_CUDA_WARNINGS}" -DCMAKE_POLICY_DEFAULT_CMP0146=OLD
     silence_ctranslate2_cxx_warnings
     PATH="${CUDA_BIN}:${PATH}" cmake --build build "-j${BUILD_JOBS}"
 }
@@ -396,6 +532,7 @@ install_ctranslate2() {
     fi
     sudo cmake --install "${CTRANSLATE2_DIR}/build"
     sudo ldconfig
+    echo "CTranslate2 library installed."
 }
 
 # Install the local ctranslate2 wrapper and faster-whisper into the venv
@@ -410,10 +547,15 @@ install_listen_packages() {
     install_packages "${FASTER_WHISPER_DIR}"
 }
 
+# Return how many GPUs the installed ctranslate2 sees, zero when it fails to load
+cuda_device_count() {
+    (cd "${SCRIPT_DIR}" && "${VENV_DIR}/bin/python" -c 'import ctranslate2; print(ctranslate2.get_cuda_device_count())' 2>/dev/null || echo 0)
+}
+
 # Quit when the installed ctranslate2 cannot see the gpu
 verify_cuda() {
     local device_count
-    device_count="$(cd "${SCRIPT_DIR}" && "${VENV_DIR}/bin/python" -c 'import ctranslate2; print(ctranslate2.get_cuda_device_count())' 2>/dev/null || echo 0)"
+    device_count="$(cuda_device_count)"
     if [[ "${device_count}" -lt 1 ]]; then
         echo "CUDA verification failed, ctranslate2 sees no GPU."
         exit 1
@@ -427,6 +569,7 @@ install_text() {
     clone_repository "${LLAMA_CPP_URL}" "${LLAMA_CPP_DIR}" --depth 1
     download_text_model
     build_llama_cpp
+    remove_llama_objects
     chmod +x "${TEXT_DIR}/server.sh" "${TEXT_DIR}/ask.py"
     verify_text
 }
@@ -438,6 +581,9 @@ download_text_model() {
         echo "${TEXT_MODEL_NAME} already downloaded."
         return 0
     fi
+
+    # Check the disk holds the model before a long download
+    require_free_space "${TEXT_MODEL_PEAK_GB}" "the text model"
 
     # Download to a partial file and rename only after success
     mkdir -p "${TEXT_MODEL_DIR}"
@@ -454,6 +600,9 @@ build_llama_cpp() {
         return 0
     fi
 
+    # Check the disk holds the build before starting it
+    require_free_space "${LLAMA_CPP_PEAK_GB}" "the llama.cpp build"
+
     # Configure CUDA on Jetson or CPU elsewhere
     if [[ -x "${CUDA_BIN}/nvcc" ]] && ! is_raspberry_pi; then
         PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER="${CUDA_BIN}/nvcc" -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
@@ -463,6 +612,11 @@ build_llama_cpp() {
 
     # Build only the server, skips cli and bench to cut Jetson compile time
     PATH="${CUDA_BIN}:${PATH}" cmake --build "${LLAMA_CPP_DIR}/build" --target llama-server "-j${BUILD_JOBS}"
+}
+
+# Delete the compiled object files, llama-server and its libraries stay in build/bin
+remove_llama_objects() {
+    find "${LLAMA_CPP_DIR}/build" -name '*.o' -delete
 }
 
 # Quit when llama-server or the model is unavailable
