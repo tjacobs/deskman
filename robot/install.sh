@@ -10,7 +10,6 @@ ROBOT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${ROBOT_SCRIPT_DIR}/../install.sh"
 
 # Prefer Ubuntu's ffmpeg on a Jetson, the NVIDIA repo build has no camera or microphone input, a priority over 1000 lets apt replace it
-JETSON_RELEASE_FILE="/etc/nv_tegra_release"
 FFMPEG_PIN_PATH="/etc/apt/preferences.d/deskman-ffmpeg"
 FFMPEG_PIN_PRIORITY=1001
 

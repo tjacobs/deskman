@@ -42,8 +42,6 @@ EXCLUDED_PACKAGE="triton"
 CUDA_BUILD_MEMORY_PER_JOB_MB=768
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
-JETSON_RELEASE_FILE="/etc/nv_tegra_release"
-
 # Config system packages and players, cmake and a compiler build the local model
 LINUX_PACKAGES=(espeak-ng alsa-utils htop zenity wl-clipboard xsel build-essential cmake libssl-dev)
 MAC_PACKAGES=(espeak-ng)

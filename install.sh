@@ -188,6 +188,11 @@ remove_unused_firmware() {
     local name
     local directories=()
 
+    # Only trim a Jetson, a Raspberry Pi needs its Wi-Fi and Bluetooth firmware
+    if [[ ! -f "${JETSON_RELEASE_FILE}" ]]; then
+        return 0
+    fi
+
     # Skip NVIDIA and Realtek, this board uses those
     shopt -s nullglob
     for directory in /usr/lib/firmware/*/; do
@@ -354,6 +359,9 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 # Config the places that hold caches an install no longer needs
 UV_BIN_DIR="${HOME}/.local/bin"
 PIP_CACHE_DIR="${HOME}/.cache/pip"
+
+# Config the file L4T ships on a Jetson, other boards do not have it
+JETSON_RELEASE_FILE="/etc/nv_tegra_release"
 
 # Config stored Jetson flash images, owned by the bootloader package
 OTA_PACKAGE_DIR="/opt/ota_package"
