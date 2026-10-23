@@ -1,28 +1,6 @@
 #!/usr/bin/env bash
 # Install robot, talk, and teleport, then the robot and teleport services and system setup.
 
-# Config sudo, keep the password fresh while the install runs
-SUDO_REFRESH_SECONDS=60
-
-# Config disk checks, the path whose free space is measured
-DISK_CHECK_PATH="/"
-KILOBYTES_PER_GIGABYTE=1048576
-
-# Config disk space in gigabytes the robot and teleport builds need when not built yet
-ROBOT_REQUIRED_GB=2
-TELEPORT_REQUIRED_GB=2
-
-# Config build parallelism, each compile job can use this much memory
-MEMORY_PER_BUILD_JOB_GB=2
-
-# Config apt so nothing stops to ask a question
-APT_ENVIRONMENT=(DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a)
-export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-
-# Config the places that hold caches an install no longer needs
-UV_BIN_DIR="${HOME}/.local/bin"
-PIP_CACHE_DIR="${HOME}/.cache/pip"
-
 # Repo root, so the script works from any directory
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -182,6 +160,28 @@ keep_sudo_fresh() {
         sleep "${SUDO_REFRESH_SECONDS}"
     done
 }
+
+# Config sudo, keep the password fresh while the install runs
+SUDO_REFRESH_SECONDS=60
+
+# Config disk checks, the path whose free space is measured
+DISK_CHECK_PATH="/"
+KILOBYTES_PER_GIGABYTE=1048576
+
+# Config disk space in gigabytes the robot and teleport builds need when not built yet
+ROBOT_REQUIRED_GB=2
+TELEPORT_REQUIRED_GB=2
+
+# Config build parallelism, each compile job can use this much memory
+MEMORY_PER_BUILD_JOB_GB=2
+
+# Config apt so nothing stops to ask a question
+APT_ENVIRONMENT=(DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a)
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+
+# Config the places that hold caches an install no longer needs
+UV_BIN_DIR="${HOME}/.local/bin"
+PIP_CACHE_DIR="${HOME}/.cache/pip"
 
 # Run install only when executed, sourcing this file just loads the functions
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

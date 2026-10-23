@@ -30,13 +30,6 @@ main() {
     detect_machine
     echo "Configuring ${MACHINE} for ${RUN_USER}"
 
-    # Fix only the Avahi hostname when asked, then stop
-    if [[ "${AVAHI_ONLY}" == true ]]; then
-        fix_avahi_hostname
-        echo "Done."
-        exit 0
-    fi
-
     # Keep the network steady first, so a long install keeps its Wi-Fi and the .local name
     keep_wifi_awake
     fix_avahi_hostname
@@ -71,16 +64,9 @@ parse_args() {
     # Walk each argument
     for argument in "$@"; do
 
-        # Fix only the Avahi hostname
-        if [[ "${argument}" == "--avahi" ]]; then
-            AVAHI_ONLY=true
-            continue
-        fi
-
         # Print help and quit
         if [[ "${argument}" == "-h" || "${argument}" == "--help" ]]; then
-            echo "Usage: ./install_system.sh [--avahi]"
-            echo "  --avahi  only fix the Avahi hostname and restart Avahi"
+            echo "Usage: ./install_system.sh"
             echo "  Boot to X, auto-login, black empty desktop. Jetson Ubuntu or Raspberry Pi OS."
             exit 0
         fi
@@ -104,9 +90,6 @@ GETTY_AUTOLOGIN_CONF="${GETTY_AUTOLOGIN_DIR}/autologin.conf"
 
 # Set in detect_machine to jetson or pi
 MACHINE=""
-
-# State, set by --avahi to skip every step but the Avahi hostname fix
-AVAHI_ONLY=false
 
 # NetworkManager drop-in that keeps the Wi-Fi radio awake for calls
 NETWORK_MANAGER_CONF_DIR="/etc/NetworkManager/conf.d"
