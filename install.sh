@@ -3,34 +3,34 @@
 
 # Main
 main() {
-    # Check the install fits before changing the system
+    # Check the install fits
     check_disk_space
 
     # Ask for the sudo password once
     prime_sudo
 
-    # Configure the system first, it keeps Wi-Fi awake and fixes the .local name so a long unattended install keeps its network
+    # Configure the system first, it keeps Wi-Fi awake and fixes the hostname.local name
     "${ROOT_DIR}/robot/install_system.sh"
 
-    # Install robot libraries
+    # Install robot face
     "${ROOT_DIR}/robot/install.sh"
 
     # Install talk voice interaction
     "${ROOT_DIR}/talk/install.sh"
 
-    # Install teleport libraries
+    # Install teleport video calls
     "${ROOT_DIR}/teleport/install.sh"
 
-    # Install and enable the robot service
+    # Install robot service
     "${ROOT_DIR}/robot/install_robot_service.sh"
 
-    # Install and enable the teleport service
+    # Install teleport service
     "${ROOT_DIR}/teleport/install_teleport_service.sh"
 
-    # Drop Nsight and desktop apps after the CUDA toolkit install, that metapackage pulls Nsight back in
+    # Remove unused apps
     remove_unused_apps
 
-    # Delete caches the install no longer needs
+    # Delete caches we no longer need
     free_disk_space
 }
 
@@ -162,9 +162,12 @@ remove_cuda_static_libraries() {
     local library
     local libraries=()
 
-    # Collect static archives under the CUDA toolkit
+    # Collect static archives, keep the runtime one nvcc needs to identify the compiler
     shopt -s nullglob
     for library in /usr/local/cuda-*/targets/*/lib/*_static.a; do
+        if [[ "$(basename "${library}")" == "libcudart_static.a" ]]; then
+            continue
+        fi
         libraries+=("${library}")
     done
     shopt -u nullglob
