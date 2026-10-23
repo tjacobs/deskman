@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Configure Jetson Ubuntu or Raspberry Pi OS so X starts, deskman auto-logs in, and the UI stays out of the way.
 
+# Load the shared apt helpers and unused-app cleanup
+SYSTEM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../install.sh
+source "${SYSTEM_SCRIPT_DIR}/../install.sh"
+
 # Main
 main() {
     # Parse flags then configure the machine
@@ -33,6 +38,9 @@ main() {
     # Keep the network steady first, so a long install keeps its Wi-Fi and the .local name
     keep_wifi_awake
     fix_avahi_hostname
+
+    # Free disk used by profilers, desktop apps, and other unused installs
+    remove_unused_apps
 
     # Configure boot, login, and the desktop
     enable_graphical_boot

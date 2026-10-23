@@ -27,6 +27,9 @@ main() {
     # Install and enable the teleport service
     "${ROOT_DIR}/teleport/install_teleport_service.sh"
 
+    # Drop Nsight and desktop apps after the CUDA toolkit install, that metapackage pulls Nsight back in
+    remove_unused_apps
+
     # Delete caches the install no longer needs
     free_disk_space
 }
@@ -94,6 +97,186 @@ keep_sudo_fresh() {
         sudo -n -v 2>/dev/null || true
         sleep "${SUDO_REFRESH_SECONDS}"
     done
+}
+
+# Remove profilers, desktop apps, and other installs the robot does not run
+remove_unused_apps() {
+    # Remove desktop apps, then the extra CUDA, firmware, and images
+    remove_desktop_packages
+    remove_cuda_static_libraries
+    remove_unused_firmware
+    remove_ota_payloads
+    remove_triton
+    remove_qemu_image
+    remove_cuda_gdb
+}
+
+# Remove Nsight and the desktop apps the robot does not run
+remove_desktop_packages() {
+    local package
+    local packages=()
+
+    # Collect profilers and office apps that are installed
+    while read -r package; do
+        packages+=("${package}")
+    done < <(dpkg-query -W -f '${Package}\n' | grep -E '^(firefox|thunderbird|libreoffice-|nsight-compute|nsight-systems|cuda-nsight-compute|cuda-nsight-systems)' || true)
+
+    # Nothing to remove
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    # Keep the CUDA libraries, the toolkit metapackage leaves with Nsight
+    keep_cuda_packages
+
+    # Remove the profilers and desktop apps, then drop the downloaded package files
+    echo "Removing Nsight, Firefox, Thunderbird, and LibreOffice."
+    apt_get purge -y "${packages[@]}"
+    clean_apt_cache
+}
+
+# Mark the CUDA compiler and libraries manual so they stay when the toolkit metapackage is removed
+keep_cuda_packages() {
+    local package
+    local packages=()
+
+    # Skip Nsight itself, everything else under these names is the compiler and libraries
+    while read -r package; do
+        case "${package}" in
+            cuda-nsight-*|nsight-*)
+                continue
+                ;;
+        esac
+        packages+=("${package}")
+    done < <(dpkg-query -W -f '${Package}\n' 'cuda-*' 'libcublas*' 'libcufft*' 'libcusparse*' 'libcusolver*' 'libcudnn*' 'libcurand*' 'libnpp*' 'nvidia-cuda*' 2>/dev/null || true)
+
+    # Nothing to mark
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        return 0
+    fi
+    sudo apt-mark manual "${packages[@]}" >/dev/null
+}
+
+# Delete CUDA static archives, the shared libraries stay for the compiler and the builds
+remove_cuda_static_libraries() {
+    local library
+    local libraries=()
+
+    # Collect static archives under the CUDA toolkit
+    shopt -s nullglob
+    for library in /usr/local/cuda-*/targets/*/lib/*_static.a; do
+        libraries+=("${library}")
+    done
+    shopt -u nullglob
+
+    # Nothing to remove
+    if [[ ${#libraries[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    # Delete the archives
+    echo "Removing CUDA static libraries."
+    sudo rm -f "${libraries[@]}"
+}
+
+# Delete firmware for devices this board does not have
+remove_unused_firmware() {
+    local directory
+    local name
+    local directories=()
+
+    # Skip NVIDIA and Realtek, this board uses those
+    shopt -s nullglob
+    for directory in /usr/lib/firmware/*/; do
+        name="$(basename "${directory}")"
+        case "${name}" in
+            nvidia|rtw88|rtl_nic|rtl_bt|realtek)
+                continue
+                ;;
+        esac
+        directories+=("${directory}")
+    done
+    shopt -u nullglob
+
+    # Nothing to remove
+    if [[ ${#directories[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    # Delete the other device firmware
+    echo "Removing firmware for other devices."
+    sudo rm -rf "${directories[@]}"
+}
+
+# Delete stored Jetson flash images, the bootloader package itself stays
+remove_ota_payloads() {
+    # Nothing to remove
+    if [[ ! -d "${OTA_PACKAGE_DIR}" ]]; then
+        return 0
+    fi
+
+    # Delete the image files and leave the package folders
+    echo "Removing Jetson OTA flash images."
+    sudo find "${OTA_PACKAGE_DIR}" -type f -delete
+}
+
+# Delete Triton from the talk venv, speech does not compile kernels
+remove_triton() {
+    local path
+    local paths=()
+
+    # Collect the package and its install metadata
+    shopt -s nullglob
+    for path in "${ROOT_DIR}/talk/.venv/lib/python"*/site-packages/triton "${ROOT_DIR}/talk/.venv/lib/python"*/site-packages/triton-*.dist-info; do
+        paths+=("${path}")
+    done
+    shopt -u nullglob
+
+    # Nothing to remove
+    if [[ ${#paths[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    # Delete the package
+    echo "Removing Triton."
+    rm -rf "${paths[@]}"
+}
+
+# Delete the QEMU UEFI image, the robot does not run virtual machines
+remove_qemu_image() {
+    # Nothing to remove
+    if ! dpkg -s qemu-efi-aarch64 >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Remove the image package
+    echo "Removing the QEMU UEFI image."
+    apt_get purge -y qemu-efi-aarch64
+}
+
+# Delete the CUDA debugger
+remove_cuda_gdb() {
+    local status
+    local package
+    local packages=()
+
+    # Collect installed debugger packages
+    while read -r status package; do
+        if [[ "${status}" != "ii" ]]; then
+            continue
+        fi
+        packages+=("${package}")
+    done < <(dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 'cuda-gdb*' 2>/dev/null || true)
+
+    # Nothing to remove
+    if [[ ${#packages[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    # Remove the debugger
+    echo "Removing the CUDA debugger."
+    apt_get purge -y "${packages[@]}"
+    clean_apt_cache
 }
 
 # Delete caches an install leaves behind and report the space that is free
@@ -168,6 +351,9 @@ export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
 # Config the places that hold caches an install no longer needs
 UV_BIN_DIR="${HOME}/.local/bin"
 PIP_CACHE_DIR="${HOME}/.cache/pip"
+
+# Config stored Jetson flash images, owned by the bootloader package
+OTA_PACKAGE_DIR="/opt/ota_package"
 
 # Run install only when executed, sourcing this file just loads the functions
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

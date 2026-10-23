@@ -177,7 +177,19 @@ install_system_packages() {
 
 # Install the JetPack cuda toolkit and quit when nvcc is still missing
 install_jetson_cuda() {
-    install_linux_packages "${JETSON_CUDA_PACKAGES[@]}"
+    local package
+    local packages=()
+
+    # Skip the toolkit metapackage once nvcc is present, installing it again brings Nsight back
+    for package in "${JETSON_CUDA_PACKAGES[@]}"; do
+        if [[ "${package}" == "nvidia-cuda-dev" && -x "${CUDA_BIN}/nvcc" ]]; then
+            continue
+        fi
+        packages+=("${package}")
+    done
+    if [[ ${#packages[@]} -gt 0 ]]; then
+        install_linux_packages "${packages[@]}"
+    fi
     if [[ ! -x "${CUDA_BIN}/nvcc" ]]; then
         echo "CUDA toolkit install failed, ${CUDA_BIN}/nvcc not found."
         exit 1
