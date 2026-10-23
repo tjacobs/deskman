@@ -101,14 +101,10 @@ keep_sudo_fresh() {
 
 # Remove profilers, desktop apps, and other installs the robot does not run
 remove_unused_apps() {
-    # Remove desktop apps, then the extra CUDA, firmware, and images
+    # Remove desktop apps, then the extra images
     remove_desktop_packages
-    remove_cuda_static_libraries
-    remove_unused_firmware
-    remove_ota_payloads
     remove_triton
     remove_qemu_image
-    remove_cuda_gdb
 }
 
 # Remove Nsight and the desktop apps the robot does not run
@@ -157,77 +153,6 @@ keep_cuda_packages() {
     sudo apt-mark manual "${packages[@]}" >/dev/null
 }
 
-# Delete CUDA static archives, the shared libraries stay for the compiler and the builds
-remove_cuda_static_libraries() {
-    local library
-    local libraries=()
-
-    # Collect static archives, keep the runtime one nvcc needs to identify the compiler
-    shopt -s nullglob
-    for library in /usr/local/cuda-*/targets/*/lib/*_static.a; do
-        if [[ "$(basename "${library}")" == "libcudart_static.a" ]]; then
-            continue
-        fi
-        libraries+=("${library}")
-    done
-    shopt -u nullglob
-
-    # Nothing to remove
-    if [[ ${#libraries[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    # Delete the archives
-    echo "Removing CUDA static libraries."
-    sudo rm -f "${libraries[@]}"
-}
-
-# Delete firmware for devices this board does not have
-remove_unused_firmware() {
-    local directory
-    local name
-    local directories=()
-
-    # Only trim a Jetson, a Raspberry Pi needs its Wi-Fi and Bluetooth firmware
-    if [[ ! -f "${JETSON_RELEASE_FILE}" ]]; then
-        return 0
-    fi
-
-    # Skip NVIDIA and Realtek, this board uses those
-    shopt -s nullglob
-    for directory in /usr/lib/firmware/*/; do
-        name="$(basename "${directory}")"
-        case "${name}" in
-            nvidia|rtw88|rtl_nic|rtl_bt|realtek)
-                continue
-                ;;
-        esac
-        directories+=("${directory}")
-    done
-    shopt -u nullglob
-
-    # Nothing to remove
-    if [[ ${#directories[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    # Delete the other device firmware
-    echo "Removing firmware for other devices."
-    sudo rm -rf "${directories[@]}"
-}
-
-# Delete stored Jetson flash images, the bootloader package itself stays
-remove_ota_payloads() {
-    # Nothing to remove
-    if [[ ! -d "${OTA_PACKAGE_DIR}" ]]; then
-        return 0
-    fi
-
-    # Delete the image files and leave the package folders
-    echo "Removing Jetson OTA flash images."
-    sudo find "${OTA_PACKAGE_DIR}" -type f -delete
-}
-
 # Delete Triton from the talk venv, speech does not compile kernels
 remove_triton() {
     local path
@@ -260,31 +185,6 @@ remove_qemu_image() {
     # Remove the image package
     echo "Removing the QEMU UEFI image."
     apt_get purge -y qemu-efi-aarch64
-}
-
-# Delete the CUDA debugger
-remove_cuda_gdb() {
-    local status
-    local package
-    local packages=()
-
-    # Collect installed debugger packages
-    while read -r status package; do
-        if [[ "${status}" != "ii" ]]; then
-            continue
-        fi
-        packages+=("${package}")
-    done < <(dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 'cuda-gdb*' 2>/dev/null || true)
-
-    # Nothing to remove
-    if [[ ${#packages[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    # Remove the debugger
-    echo "Removing the CUDA debugger."
-    apt_get purge -y "${packages[@]}"
-    clean_apt_cache
 }
 
 # Delete caches an install leaves behind and report the space that is free
@@ -362,9 +262,6 @@ PIP_CACHE_DIR="${HOME}/.cache/pip"
 
 # Config the file L4T ships on a Jetson, other boards do not have it
 JETSON_RELEASE_FILE="/etc/nv_tegra_release"
-
-# Config stored Jetson flash images, owned by the bootloader package
-OTA_PACKAGE_DIR="/opt/ota_package"
 
 # Run install only when executed, sourcing this file just loads the functions
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
