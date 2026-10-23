@@ -102,7 +102,7 @@ disable_jetson_clocks() {
     systemctl stop jetson_clocks 2>/dev/null || true
     systemctl disable jetson_clocks 2>/dev/null || true
     if command -v jetson_clocks >/dev/null 2>&1; then
-        jetson_clocks --restore 2>/dev/null || true
+        jetson_clocks --restore >/dev/null 2>&1 || true
     fi
 }
 
@@ -111,7 +111,7 @@ enable_jetson_clocks() {
     systemctl enable jetson_clocks 2>/dev/null || true
     systemctl start jetson_clocks 2>/dev/null || true
     if command -v jetson_clocks >/dev/null 2>&1; then
-        jetson_clocks 2>/dev/null || true
+        jetson_clocks >/dev/null 2>&1 || true
     fi
 }
 

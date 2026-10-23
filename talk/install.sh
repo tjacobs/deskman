@@ -89,6 +89,9 @@ LLAMA_CUDA_LIBRARY="${LLAMA_LIBRARY_DIR}/libggml-cuda.so"
 INSTALL_LISTEN=true
 INSTALL_TALK=true
 
+# Config the Jetson power mode id used for the CUDA compile, the fastest one
+BUILD_POWER_MODE=2
+
 # State the power mode to put back after the CUDA compile
 SAVED_POWER_MODE=""
 
@@ -443,37 +446,14 @@ set_build_power_mode() {
         return 0
     fi
 
-    # Skip when the power tool is missing
-    if [[ ! -x "${SCRIPT_DIR}/tools/power.sh" ]]; then
-        return 0
-    fi
-
     # Keep the mode that was active before the first compile
     if [[ -z "${SAVED_POWER_MODE}" ]]; then
-        SAVED_POWER_MODE="$(current_power_mode)"
+        SAVED_POWER_MODE="$(nvpmodel -q 2>/dev/null | awk '/^[0-9]+$/{print; exit}' || true)"
     fi
 
-    # Lock the high clocks for the build
-    echo "Setting Jetson power mode to max for the build."
-    "${SCRIPT_DIR}/tools/power.sh" max
-}
-
-# Return min, mid, or max for the active nvpmodel id
-current_power_mode() {
-    # Read the active power mode id
-    local mode_id
-    mode_id="$(nvpmodel -q 2>/dev/null | awk '/^[0-9]+$/{print; exit}')"
-    if [[ "${mode_id}" == "0" ]]; then
-        echo "min"
-        return 0
-    fi
-    if [[ "${mode_id}" == "2" ]]; then
-        echo "max"
-        return 0
-    fi
-
-    # Use the balanced mode when the id is mid or unreadable
-    echo "mid"
+    # Switch to the fastest mode for the build
+    echo "Setting Jetson power mode to ${BUILD_POWER_MODE} for the build."
+    sudo nvpmodel -m "${BUILD_POWER_MODE}" >/dev/null
 }
 
 # Put the Jetson power mode back after the compile
@@ -485,7 +465,7 @@ restore_build_power_mode() {
 
     # Apply the mode that was active before the build
     echo "Restoring Jetson power mode to ${SAVED_POWER_MODE}."
-    "${SCRIPT_DIR}/tools/power.sh" "${SAVED_POWER_MODE}"
+    sudo nvpmodel -m "${SAVED_POWER_MODE}" >/dev/null
     SAVED_POWER_MODE=""
 }
 
@@ -525,6 +505,9 @@ build_ctranslate2() {
     cd "${CTRANSLATE2_DIR}"
     PATH="${CUDA_BIN}:${PATH}" cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=ON -DWITH_MKL=OFF -DWITH_OPENBLAS=ON -DOPENMP_RUNTIME=COMP -DBUILD_CLI=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DCMAKE_CXX_FLAGS="${CTRANSLATE2_CXX_WARNINGS}" -DCUDA_NVCC_FLAGS="${CTRANSLATE2_CUDA_WARNINGS}" -DCMAKE_POLICY_DEFAULT_CMP0146=OLD
     silence_ctranslate2_cxx_warnings
+
+    # Delete empty objects an interrupted compile left, make would treat them as built
+    find build -name '*.o' -size 0 -delete
 
     # Compile with as many jobs as free memory allows
     local jobs
@@ -625,6 +608,9 @@ build_llama_cpp() {
     else
         cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CCACHE=OFF -DCMAKE_BUILD_TYPE=Release
     fi
+
+    # Delete empty objects an interrupted compile left, make would treat them as built
+    find "${LLAMA_CPP_DIR}/build" -name '*.o' -size 0 -delete
 
     # Build only the server, skips cli and bench to cut Jetson compile time
     local jobs

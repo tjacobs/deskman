@@ -642,7 +642,7 @@ persist_display_rotation() {
 
 # Run a mapping service from udev each time the touch panel appears, X takes a moment to add it so the service retries
 remap_touch_on_plug() {
-    echo "Remapping ${JETSON_TOUCH_NAME} touch whenever it is plugged in"
+    echo "Remapping ${JETSON_TOUCH_NAME} touch"
 
     # Write the service that maps touch as the desktop user on the running X display
     cat > "${TOUCH_MAP_SERVICE}" <<EOF
