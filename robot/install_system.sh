@@ -1222,7 +1222,6 @@ keep_wifi_awake() {
 [connection]
 wifi.powersave = 2
 EOF
-    echo "Wrote ${NETWORK_MANAGER_CONF_DIR}/${WIFI_POWER_SAVE_CONF_NAME}"
 
     # Turn it off on the radios that are already up, so this call works without a reboot
     for wifi_device in /sys/class/net/*/wireless; do
