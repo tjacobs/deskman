@@ -113,7 +113,7 @@ bool Camera::initialize() {
     bool have_usb = video_device_present();
     bool have_libcamera = isRaspberryPi && libcamera_camera_present();
     if (!have_usb && !have_libcamera) {
-        cout << "No camera plugged in, face tracking off." << endl;
+        cout << "*** No camera ***" << endl;
         fflush(stdout);
         return false;
     }
@@ -146,7 +146,7 @@ bool Camera::initialize() {
         return capturing;
     }
 
-    cout << "No camera plugged in, face tracking off." << endl;
+    cout << "*** No camera ***" << endl;
     fflush(stdout);
     return false;
 }

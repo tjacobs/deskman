@@ -1567,7 +1567,7 @@ def check_ready():
         print(f'Audio playback unavailable: {player} not found.')
         sys.exit(1)
     if player == utils.LINUX_PLAYER and utils.find_usb_card() is None:
-        print('No USB speaker found.')
+        print('*** No speaker ***')
         sys.exit(1)
 
     # Standard mic level and auto gain, the speaker slider does not change these

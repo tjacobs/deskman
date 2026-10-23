@@ -238,7 +238,7 @@ int open_servos() {
         fflush(stdout);
     }
     if (found == 0) {
-        printf("Error: Servos: no response on %s, plugged in?\n", port_name.c_str());
+        printf("Error: Servos: no response on %s\n", port_name.c_str());
         return 1;
     }
 
@@ -430,7 +430,7 @@ void move_servos() {
     if (!servos_enabled)
         return;
     if (!servo_bus.pSerial) {
-        printf("No servos detected, not moving\n");
+        printf("*** No servos ***\n");
         return;
     }
 
@@ -820,7 +820,7 @@ static void sweep_line(const char *label, Servo &servo, int position) {
             servo.position = command;
             servo_bus.WritePosEx(servo.id, servo.position, SWEEP_SPEED, SWEEP_ACCELERATION);
         } else if (servos_enabled) {
-            printf("No servos detected, not moving\n");
+            printf("*** No servos ***\n");
         }
     }
 
