@@ -42,7 +42,7 @@ RASPBERRY_PI_MATCH="Raspberry Pi"
 JETSON_RELEASE_FILE="/etc/nv_tegra_release"
 
 # Config system packages and players, cmake and a compiler build the local model
-LINUX_PACKAGES=(espeak-ng alsa-utils htop zenity wl-clipboard xsel build-essential cmake)
+LINUX_PACKAGES=(espeak-ng alsa-utils htop zenity wl-clipboard xsel build-essential cmake libssl-dev)
 MAC_PACKAGES=(espeak-ng)
 MAC_LISTEN_PACKAGES=(sox)
 LINUX_PLAYER="aplay"
@@ -519,9 +519,9 @@ build_llama_cpp() {
 
     # Configure CUDA on Jetson or CPU elsewhere
     if [[ -x "${CUDA_BIN}/nvcc" ]] && ! is_raspberry_pi; then
-        PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER="${CUDA_BIN}/nvcc" -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+        PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DGGML_CUDA_NCCL=OFF -DCMAKE_CUDA_COMPILER="${CUDA_BIN}/nvcc" -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DGGML_CCACHE=OFF -DCMAKE_BUILD_TYPE=Release
     else
-        cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release
+        cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CCACHE=OFF -DCMAKE_BUILD_TYPE=Release
     fi
 
     # Build only the server, skips cli and bench to cut Jetson compile time
@@ -575,10 +575,16 @@ clone_repository() {
     local directory="$2"
     shift 2
 
-    # Skip when already cloned
-    if [[ -d "${directory}" ]]; then
+    # Skip a checkout git can still read
+    if git -C "${directory}" rev-parse --verify HEAD >/dev/null 2>&1; then
         echo "$(basename "${directory}") already cloned."
         return 0
+    fi
+
+    # Replace a checkout left empty when the disk filled up
+    if [[ -d "${directory}" ]]; then
+        echo "Replacing broken $(basename "${directory}") checkout."
+        rm -rf "${directory}"
     fi
 
     # Create the parent directory for clones under libs
