@@ -124,13 +124,11 @@ EOF
     fi
 
     # Done
-    echo ""
     echo "Installed. Useful commands:"
     echo "  sudo service ${SERVICE_NAME} start"
     echo "  sudo service ${SERVICE_NAME} stop"
     echo "  sudo service ${SERVICE_NAME} status"
-    echo "  journalctl -u ${SERVICE_NAME} -f"
-    echo "  tail -f ${PROJECT_DIR}/log.txt"
+    echo "  tail -f robot/log.txt"
 }
 
 # Uninstall

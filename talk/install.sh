@@ -185,34 +185,34 @@ install_uv() {
 
 # Install the espeak and audio packages for this platform
 install_system_packages() {
-    # Pick the package manager for this platform
+    # Install the mac packages with homebrew
     if [[ "$(uname -s)" == "Darwin" ]]; then
         install_mac_packages "${MAC_PACKAGES[@]}"
-    else
-        install_linux_packages "${LINUX_PACKAGES[@]}"
+        return 0
     fi
 
-    # Install the cuda toolkit on a Jetson so the builds use the gpu
+    # Add the cuda toolkit on a Jetson so the builds use the gpu
+    local package
+    local packages=("${LINUX_PACKAGES[@]}")
     if is_jetson; then
-        install_jetson_cuda
+        for package in "${JETSON_CUDA_PACKAGES[@]}"; do
+            # Skip the toolkit metapackage once nvcc is present, installing it again brings Nsight back
+            if [[ "${package}" == "nvidia-cuda-dev" && -x "${CUDA_BIN}/nvcc" ]]; then
+                continue
+            fi
+            packages+=("${package}")
+        done
+    fi
+
+    # Install everything in one apt run
+    install_linux_packages "${packages[@]}"
+    if is_jetson; then
+        verify_jetson_cuda
     fi
 }
 
-# Install the JetPack cuda toolkit and quit when nvcc is still missing
-install_jetson_cuda() {
-    local package
-    local packages=()
-
-    # Skip the toolkit metapackage once nvcc is present, installing it again brings Nsight back
-    for package in "${JETSON_CUDA_PACKAGES[@]}"; do
-        if [[ "${package}" == "nvidia-cuda-dev" && -x "${CUDA_BIN}/nvcc" ]]; then
-            continue
-        fi
-        packages+=("${package}")
-    done
-    if [[ ${#packages[@]} -gt 0 ]]; then
-        install_linux_packages "${packages[@]}"
-    fi
+# Quit when the JetPack cuda compiler is still missing
+verify_jetson_cuda() {
     if [[ ! -x "${CUDA_BIN}/nvcc" ]]; then
         echo "CUDA toolkit install failed, ${CUDA_BIN}/nvcc not found."
         exit 1

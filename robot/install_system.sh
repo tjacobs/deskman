@@ -58,12 +58,12 @@ main() {
     disable_screen_idle
     enable_service_shortcuts
     enable_screen_keyboard
-    install_browser
     quiet_fan_when_cool
-    allow_network_control
-    hide_builtin_usb
     enable_zram_swap
     enable_earlyoom
+    allow_network_control
+    hide_builtin_usb
+    install_browser
     echo "Done."
 }
 
@@ -622,7 +622,7 @@ persist_display_rotation() {
         persist_pi_touch_rotation
         return
     fi
-    echo "Keeping DP-1 rotated left from X start"
+    echo "Keeping display rotated left"
 
     # Ask the NVIDIA driver for left rotation on the first X modeset
     write_xorg_portrait
@@ -1128,18 +1128,23 @@ install_browser() {
 
     # Pi OS packages Chromium as a plain deb
     if [[ "${MACHINE}" == "pi" ]]; then
-        apt_get install -y chromium
+        if ! dpkg -s chromium >/dev/null 2>&1; then
+            apt_get install -y chromium
+        fi
         run_as_user xdg-mime default "${PI_BROWSER_DESKTOP}" ${BROWSER_LINK_TYPES}
         return
     fi
 
-    # Jetson kernels lack what newer snapd needs to start apps, so pin the last snapd that works
-    hold_working_snapd
+    # Skip the snapd pin and the snap install when Chromium is already there
+    if ! snap list chromium >/dev/null 2>&1; then
+        # Jetson kernels lack what newer snapd needs to start apps, so pin the last snapd that works
+        hold_working_snapd
 
-    # Ubuntu only ships Chromium as a snap, and matchpathcon has to be ready before first run
-    export DEBIAN_FRONTEND=noninteractive
-    apt_get install -y selinux-utils
-    snap list chromium >/dev/null 2>&1 || snap install chromium
+        # Ubuntu only ships Chromium as a snap, and matchpathcon has to be ready before first run
+        export DEBIAN_FRONTEND=noninteractive
+        apt_get install -y selinux-utils
+        snap install chromium
+    fi
 
     # Keep per-user snap data in ~/.snap/data so a visible ~/snap folder is not created
     snap set system experimental.hidden-snap-folder=true
@@ -1169,7 +1174,6 @@ quiet_fan_when_cool() {
     if [[ "${MACHINE}" != "jetson" || ! -e "${FAN_CONFIG}" ]]; then
         return
     fi
-    echo "Keeping the fan off below ${FAN_OFF_BELOW_C}C"
 
     # Swap the package symlink for a copy we own, so edits do not touch the stock file
     if [[ -L "${FAN_CONFIG}" ]]; then

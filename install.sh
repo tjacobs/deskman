@@ -15,23 +15,23 @@ main() {
     # Install robot face
     "${ROOT_DIR}/robot/install.sh"
 
+    # Install robot service
+    "${ROOT_DIR}/robot/install_robot_service.sh"
+
     # Install talk voice interaction
     "${ROOT_DIR}/talk/install.sh"
 
     # Install teleport video calls
     "${ROOT_DIR}/teleport/install.sh"
 
-    # Install robot service
-    "${ROOT_DIR}/robot/install_robot_service.sh"
-
     # Install teleport service
     "${ROOT_DIR}/teleport/install_teleport_service.sh"
 
-    # Remove unused apps
-    remove_unused_apps
-
     # Delete caches we no longer need
     free_disk_space
+
+    # Say the whole install finished
+    echo "All done."
 }
 
 # Stop before any work when the disk is short, unless the user types y to continue
