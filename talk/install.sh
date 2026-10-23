@@ -645,7 +645,9 @@ verify_text() {
 
 # Print what to run next
 print_done() {
-    echo "Done. Run ./speak.py to speak."
+    echo "Done."
+    echo ""
+    echo "Run ./speak.py to speak."
     if [[ "${INSTALL_LISTEN}" == true ]]; then
         echo "Run ./listen.py to transcribe from the microphone."
     fi

@@ -1210,7 +1210,7 @@ hold_working_snapd() {
     fi
 
     # Hold it, a refresh would bring back the snapd that cannot start apps
-    snap refresh --hold snapd
+    snap refresh --hold snapd >/dev/null
 }
 
 # Stop Wi-Fi power save, it parks the radio between beacons and drops incoming call media
@@ -1249,7 +1249,6 @@ ResultAny=yes
 ResultInactive=yes
 ResultActive=yes
 EOF
-    echo "Wrote ${POLKIT_PKLA_PATH}"
 
     # Newer polkit, like Raspberry Pi OS Bookworm
     mkdir -p "$(dirname "${POLKIT_RULES_PATH}")"
@@ -1260,7 +1259,6 @@ polkit.addRule(function(action, subject) {
         return polkit.Result.YES;
 });
 EOF
-    echo "Wrote ${POLKIT_RULES_PATH}"
 }
 
 # Publish this machine as hostname.local, Avahi renames itself to hostname-2 when IPv6 addresses come and go
@@ -1311,16 +1309,15 @@ EOF
     systemctl restart avahi-daemon.service
 }
 
-# Wrap lsusb in the user's bashrc so only plugged in devices show, the built in ones keep working
+# Wrap lsusb in the user's bashrc so only plugged in devices show, the built-in ones keep working
 hide_builtin_usb() {
     bashrc="${RUN_HOME}/.bashrc"
 
     # Add it once, a rerun leaves the bashrc alone
     if [[ -f "${bashrc}" ]] && grep -q '^lsusb()' "${bashrc}"; then
-        echo "lsusb already hides built in devices"
         return
     fi
-    echo "Hiding built in USB devices from lsusb"
+    echo "Hiding built-in USB devices from lsusb"
     cat >> "${bashrc}" <<EOF
 
 # List USB devices, leaving out the hubs and radio built into the Jetson
