@@ -303,9 +303,9 @@ clean_apt_cache() {
     fi
 }
 
-# Run apt-get as root without prompts
+# Run apt-get as root without prompts or the no longer required list
 apt_get() {
-    sudo env "${APT_ENVIRONMENT[@]}" apt-get "$@"
+    sudo env "${APT_ENVIRONMENT[@]}" apt-get -o APT::Get::HideAutoRemove=1 "$@"
 }
 
 # Return how many parallel compile jobs fit in memory, at least one and at most the CPU count

@@ -14,7 +14,7 @@ MODE_MID=1
 MODE_MAX=2
 NAME_MIN="15W"
 NAME_MID="25W"
-NAME_MAX="25W"
+NAME_MAX="MAXN_SUPER"
 
 # Re-exec with sudo if not root, help does not need it
 if [[ "${EUID}" -ne 0 && "${1:-}" != "-h" && "${1:-}" != "--help" ]]; then
@@ -136,7 +136,8 @@ show_status() {
 
     # Read CPU temp and fan rpm when available
     cpu_temp="$(awk '{printf "%.1f", $1/1000}' /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo '?')"
-    fan_rpm="$(cat /sys/class/hwmon/hwmon2/rpm 2>/dev/null || echo '?')"
+    fan_rpm="$(cat /sys/class/hwmon/hwmon*/rpm 2>/dev/null | head -n 1 || true)"
+    fan_rpm="${fan_rpm:-?}"
 
     echo "Power: ${mode_label}"
     echo "CPU: ${cur_freq} MHz, range ${min_freq}-${max_freq} MHz, $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"

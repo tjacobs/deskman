@@ -8,6 +8,10 @@ TELEPORT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../install.sh
 source "${TELEPORT_SCRIPT_DIR}/../install.sh"
 
+# Say which install section is running
+echo ""
+echo "======== Teleport ========"
+
 # Detect OS
 OS="$(uname -s)"
 

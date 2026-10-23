@@ -37,6 +37,9 @@ CUDA_PACKAGE_PATTERN="^nvidia-"
 
 # Config a torch dependency left out of the venv, it only compiles kernels
 EXCLUDED_PACKAGE="triton"
+
+# Config memory each CUDA compile job needs, free memory decides how many run at once
+CUDA_BUILD_MEMORY_PER_JOB_MB=768
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
 JETSON_RELEASE_FILE="/etc/nv_tegra_release"
@@ -86,10 +89,21 @@ LLAMA_CUDA_LIBRARY="${LLAMA_LIBRARY_DIR}/libggml-cuda.so"
 INSTALL_LISTEN=true
 INSTALL_TALK=true
 
+# State the power mode to put back after the CUDA compile
+SAVED_POWER_MODE=""
+
 # Main
 main() {
+    # Say which install section is running
+    echo ""
+    echo "======== Talk ========"
+
     parse_args "$@"
     prime_sudo
+
+    # Put the power mode back when the script exits, including a failed compile
+    trap restore_build_power_mode EXIT
+
     install_uv
     install_system_packages
     create_venv
@@ -101,6 +115,9 @@ main() {
     if [[ "${INSTALL_TALK}" == true ]]; then
         install_text
     fi
+
+    # Put the power mode back before the rest of the install
+    restore_build_power_mode
     free_disk_space
     print_done
 }
@@ -322,7 +339,7 @@ remove_cuda_packages() {
     # Remove them so the venv stays small and torch cannot preload them
     echo "Removing CUDA packages not needed on this machine..."
     # shellcheck disable=SC2086
-    uv pip uninstall --python "${VENV_DIR}/bin/python" ${installed}
+    uv pip uninstall --quiet --python "${VENV_DIR}/bin/python" ${installed}
 }
 
 # Quit when the imports or the audio player are unavailable
@@ -419,6 +436,82 @@ check_build_tools() {
     done
 }
 
+# Raise Jetson clocks before a long CUDA compile
+set_build_power_mode() {
+    # Skip boards that have no Jetson power modes
+    if ! is_jetson; then
+        return 0
+    fi
+
+    # Skip when the power tool is missing
+    if [[ ! -x "${SCRIPT_DIR}/tools/power.sh" ]]; then
+        return 0
+    fi
+
+    # Keep the mode that was active before the first compile
+    if [[ -z "${SAVED_POWER_MODE}" ]]; then
+        SAVED_POWER_MODE="$(current_power_mode)"
+    fi
+
+    # Lock the high clocks for the build
+    echo "Setting Jetson power mode to max for the build."
+    "${SCRIPT_DIR}/tools/power.sh" max
+}
+
+# Return min, mid, or max for the active nvpmodel id
+current_power_mode() {
+    # Read the active power mode id
+    local mode_id
+    mode_id="$(nvpmodel -q 2>/dev/null | awk '/^[0-9]+$/{print; exit}')"
+    if [[ "${mode_id}" == "0" ]]; then
+        echo "min"
+        return 0
+    fi
+    if [[ "${mode_id}" == "2" ]]; then
+        echo "max"
+        return 0
+    fi
+
+    # Use the balanced mode when the id is mid or unreadable
+    echo "mid"
+}
+
+# Put the Jetson power mode back after the compile
+restore_build_power_mode() {
+    # Skip when this install did not change the mode
+    if [[ -z "${SAVED_POWER_MODE}" ]]; then
+        return 0
+    fi
+
+    # Apply the mode that was active before the build
+    echo "Restoring Jetson power mode to ${SAVED_POWER_MODE}."
+    "${SCRIPT_DIR}/tools/power.sh" "${SAVED_POWER_MODE}"
+    SAVED_POWER_MODE=""
+}
+
+# Return how many compile jobs fit in free memory, at most the CPU count
+cuda_build_jobs() {
+    local cpu_count available_megabytes jobs
+
+    # Use every cpu where memory is not readable
+    cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+    if [[ ! -r /proc/meminfo ]]; then
+        echo "${cpu_count}"
+        return 0
+    fi
+
+    # Size the job count from memory that is free now
+    available_megabytes="$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)"
+    jobs=$(( available_megabytes / CUDA_BUILD_MEMORY_PER_JOB_MB ))
+    if (( jobs > cpu_count )); then
+        jobs="${cpu_count}"
+    fi
+    if (( jobs < 1 )); then
+        jobs=1
+    fi
+    echo "${jobs}"
+}
+
 # Build ctranslate2 with cuda for the jetson gpu, takes around 30 minutes
 build_ctranslate2() {
     # Skip when already built
@@ -427,11 +520,17 @@ build_ctranslate2() {
         return 0
     fi
 
-    # Configure and build, silence unused-code warnings and the FindCUDA policy warning from upstream sources
+    # Raise clocks, then configure and build
+    set_build_power_mode
     cd "${CTRANSLATE2_DIR}"
     PATH="${CUDA_BIN}:${PATH}" cmake -B build -DCMAKE_BUILD_TYPE=Release -DWITH_CUDA=ON -DWITH_CUDNN=ON -DWITH_MKL=OFF -DWITH_OPENBLAS=ON -DOPENMP_RUNTIME=COMP -DBUILD_CLI=OFF -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DCMAKE_CXX_FLAGS="${CTRANSLATE2_CXX_WARNINGS}" -DCUDA_NVCC_FLAGS="${CTRANSLATE2_CUDA_WARNINGS}" -DCMAKE_POLICY_DEFAULT_CMP0146=OLD
     silence_ctranslate2_cxx_warnings
-    PATH="${CUDA_BIN}:${PATH}" cmake --build build "-j${BUILD_JOBS}"
+
+    # Compile with as many jobs as free memory allows
+    local jobs
+    jobs="$(cuda_build_jobs)"
+    echo "Building CTranslate2 with ${jobs} jobs."
+    PATH="${CUDA_BIN}:${PATH}" cmake --build build "-j${jobs}"
 }
 
 # Re-append warning silences after CTranslate2 adds -Wall -Wextra
@@ -517,6 +616,9 @@ build_llama_cpp() {
         return 0
     fi
 
+    # Raise clocks before the compile
+    set_build_power_mode
+
     # Configure CUDA on Jetson or CPU elsewhere
     if [[ -x "${CUDA_BIN}/nvcc" ]] && ! is_raspberry_pi; then
         PATH="${CUDA_BIN}:${PATH}" cmake -B "${LLAMA_CPP_DIR}/build" -S "${LLAMA_CPP_DIR}" -DGGML_CUDA=ON -DGGML_CUDA_NCCL=OFF -DCMAKE_CUDA_COMPILER="${CUDA_BIN}/nvcc" -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURE}" -DGGML_CCACHE=OFF -DCMAKE_BUILD_TYPE=Release
@@ -525,7 +627,10 @@ build_llama_cpp() {
     fi
 
     # Build only the server, skips cli and bench to cut Jetson compile time
-    PATH="${CUDA_BIN}:${PATH}" cmake --build "${LLAMA_CPP_DIR}/build" --target llama-server "-j${BUILD_JOBS}"
+    local jobs
+    jobs="$(cuda_build_jobs)"
+    echo "Building llama-server with ${jobs} jobs."
+    PATH="${CUDA_BIN}:${PATH}" cmake --build "${LLAMA_CPP_DIR}/build" --target llama-server "-j${jobs}"
 }
 
 # Delete the compiled object files, llama-server and its libraries stay in build/bin
@@ -566,7 +671,7 @@ print_done() {
 # Install packages into the venv
 install_packages() {
     # Leave Triton out, torch lists it but nothing here compiles kernels
-    uv pip install --python "${VENV_DIR}/bin/python" --excludes <(printf '%s\n' "${EXCLUDED_PACKAGE}") "$@"
+    uv pip install --quiet --python "${VENV_DIR}/bin/python" --excludes <(printf '%s\n' "${EXCLUDED_PACKAGE}") "$@"
 }
 
 # Clone a repository when missing, extra arguments pass to git clone

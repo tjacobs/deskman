@@ -16,6 +16,10 @@ FFMPEG_PIN_PRIORITY=1001
 
 # Main
 main() {
+    # Say which install section is running
+    echo ""
+    echo "======== Robot ========"
+
     prime_sudo
     os_name="$(uname -s)"
     case "$os_name" in

@@ -984,7 +984,7 @@ enable_screen_keyboard() {
 # Matchbox keyboard with our layout, docked along the bottom, shown from a taskbar button
 install_touch_keyboard() {
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y matchbox-keyboard
+    apt_get install -y matchbox-keyboard
 
     # Our layout, digits and web punctuation over the stock letters
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1063,7 +1063,7 @@ add_panel_keyboard_button() {
 # Hold on to what was copied, X11 loses the clipboard as soon as the browser closes
 install_clipboard_keeper() {
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y parcellite
+    apt_get install -y parcellite
 
     # Parcellite starts itself at login, so only its own settings are left to write
     clipboard_config="${RUN_HOME}/.config/parcellite/parcelliterc"
@@ -1128,7 +1128,7 @@ install_browser() {
 
     # Pi OS packages Chromium as a plain deb
     if [[ "${MACHINE}" == "pi" ]]; then
-        apt-get install -y chromium
+        apt_get install -y chromium
         run_as_user xdg-mime default "${PI_BROWSER_DESKTOP}" ${BROWSER_LINK_TYPES}
         return
     fi
@@ -1138,7 +1138,7 @@ install_browser() {
 
     # Ubuntu only ships Chromium as a snap, and matchpathcon has to be ready before first run
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y selinux-utils
+    apt_get install -y selinux-utils
     snap list chromium >/dev/null 2>&1 || snap install chromium
 
     # Keep per-user snap data in ~/.snap/data so a visible ~/snap folder is not created
@@ -1341,7 +1341,7 @@ enable_zram_swap() {
 
     # Install the systemd generator that makes the zram device at boot
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y systemd-zram-generator
+    apt_get install -y systemd-zram-generator
 
     # Size and compress the device
     cat > "${ZRAM_CONF}" <<EOF
@@ -1363,7 +1363,7 @@ enable_earlyoom() {
 
     # Install the daemon
     export DEBIAN_FRONTEND=noninteractive
-    apt-get install -y earlyoom
+    apt_get install -y earlyoom
 
     # Set when it acts and which processes it picks or spares
     cat > "${EARLYOOM_CONF}" <<EOF
@@ -1372,7 +1372,7 @@ EARLYOOM_ARGS="-m ${EARLYOOM_MEMORY_PERCENT} -s ${EARLYOOM_SWAP_PERCENT} -r ${EA
 EOF
 
     # Start it now and at every boot
-    systemctl enable earlyoom.service
+    systemctl enable earlyoom.service >/dev/null 2>&1
     systemctl restart earlyoom.service
 }
 
