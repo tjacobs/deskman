@@ -34,6 +34,9 @@ TORCH_JETSON_INDEX_URL="https://pypi.jetson-ai-lab.io/jp6/cu126"
 TORCH_JETPACK7_INDEX_URL="https://download.pytorch.org/whl/cu132"
 JETPACK7_L4T_RELEASE=39
 CUDA_PACKAGE_PATTERN="^nvidia-"
+
+# Config a torch dependency left out of the venv, it only compiles kernels
+EXCLUDED_PACKAGE="triton"
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
 JETSON_RELEASE_FILE="/etc/nv_tegra_release"
@@ -281,21 +284,21 @@ install_torch() {
     # JetPack 7 has no system libcudart.so.12, so use the upstream wheel that ships CUDA 13.2
     if is_jetpack7; then
         echo "Installing torch ${TORCH_JETPACK7_PACKAGES[*]} from ${TORCH_JETPACK7_INDEX_URL}."
-        uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_JETPACK7_INDEX_URL}" "${TORCH_JETPACK7_PACKAGES[@]}"
+        install_packages --index-url "${TORCH_JETPACK7_INDEX_URL}" "${TORCH_JETPACK7_PACKAGES[@]}"
         return 0
     fi
 
     # Use Jetson AI Lab wheels built for Orin sm_87, pytorch.org aarch64 skips that arch
     if is_jetson; then
         echo "Installing torch ${TORCH_JETSON_PACKAGES[*]} from ${TORCH_JETSON_INDEX_URL}."
-        uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_JETSON_INDEX_URL}" "${TORCH_JETSON_PACKAGES[@]}"
+        install_packages --index-url "${TORCH_JETSON_INDEX_URL}" "${TORCH_JETSON_PACKAGES[@]}"
         return 0
     fi
 
     # Use the CUDA 12.6 index on other CUDA machines
     if ! is_raspberry_pi; then
         echo "Installing torch ${TORCH_PACKAGES[*]} from ${TORCH_CUDA_INDEX_URL}."
-        uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_CUDA_INDEX_URL}" "${TORCH_PACKAGES[@]}"
+        install_packages --index-url "${TORCH_CUDA_INDEX_URL}" "${TORCH_PACKAGES[@]}"
         return 0
     fi
 
@@ -304,7 +307,7 @@ install_torch() {
     remove_cuda_packages
 
     # Install from the cpu index, the default wheel preloads cuda libraries and crashes on import
-    uv pip install --python "${VENV_DIR}/bin/python" --index-url "${TORCH_CPU_INDEX_URL}" "${TORCH_PACKAGES[@]}"
+    install_packages --index-url "${TORCH_CPU_INDEX_URL}" "${TORCH_PACKAGES[@]}"
 }
 
 # Uninstall the nvidia cuda packages when present
@@ -457,7 +460,7 @@ install_listen_packages() {
     install_packages "${BUILD_PACKAGES[@]}"
 
     # Build the wrapper against the local library, not the cpu wheel from pypi
-    uv pip install --python "${VENV_DIR}/bin/python" --no-build-isolation "${CTRANSLATE2_DIR}/python"
+    install_packages --no-build-isolation "${CTRANSLATE2_DIR}/python"
 
     # Install faster-whisper from the local clone
     install_packages "${FASTER_WHISPER_DIR}"
@@ -562,7 +565,8 @@ print_done() {
 
 # Install packages into the venv
 install_packages() {
-    uv pip install --python "${VENV_DIR}/bin/python" "$@"
+    # Leave Triton out, torch lists it but nothing here compiles kernels
+    uv pip install --python "${VENV_DIR}/bin/python" --excludes <(printf '%s\n' "${EXCLUDED_PACKAGE}") "$@"
 }
 
 # Clone a repository when missing, extra arguments pass to git clone
