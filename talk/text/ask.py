@@ -14,6 +14,7 @@ import accounts.google
 import accounts.sonos
 import client
 import dates
+import drinks
 import maths
 import memory
 import move
@@ -139,6 +140,11 @@ def print_usage():
 def ask_model(prompt):
     # Start a fresh tool log for this ask
     last_tool_log.clear()
+
+    # Switch drink ordering on or off, or take an order while it is on
+    reply = answer_drinks(prompt)
+    if reply:
+        return reply
 
     # Answer some questions in Python without calling the model
     reply = skip_inference(prompt)
@@ -574,8 +580,41 @@ def ask_one_liner(prompt):
         reply = reply.splitlines()[0].strip()
     return reply
 
+# Handle drink ordering mode, the app prompt replaces Deskman and no tools run
+def answer_drinks(prompt):
+    # Turn the mode on with a fresh conversation that already asked for the drink
+    if drinks.needs_start(prompt):
+        drinks.set_on(True)
+        conversation_history.clear()
+        remember_exchange(drinks.START_EXCHANGE, drinks.GREETING)
+        return drinks.GREETING
+
+    # Turn the mode off and go back to Deskman with a fresh conversation
+    if drinks.needs_stop(prompt) and drinks.is_on():
+        drinks.set_on(False)
+        conversation_history.clear()
+        return drinks.STOP_MESSAGE
+
+    # Leave other asks to Deskman when the mode is off
+    if not drinks.is_on():
+        return None
+
+    # Take the order with the model
+    messages = build_messages(prompt)
+    message = chat_completion(messages)
+    reply = (message.get("content") or "").strip() or "Okay."
+    remember_turn(messages, reply)
+    return reply
+
 # Build the chat messages for one ask
 def build_messages(prompt):
+    # Drink ordering has its own prompt, with no tools and no memories
+    if drinks.is_on():
+        messages = [{"role": "system", "content": drinks.PROMPT}]
+        messages.extend(conversation_history)
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
     # Start with text_prompt.json, that prefix stays identical across asks for KV cache reuse
     system_prompt = load_system_prompt()
 
@@ -745,8 +784,8 @@ def build_request_body(messages):
         "temperature": TEMPERATURE,
     }
 
-    # Native tools only for models whose chat template supports them
-    if not uses_content_tools():
+    # Native tools only for models whose chat template supports them, drink ordering sends none
+    if not uses_content_tools() and not drinks.is_on():
         body["tools"] = active_tools()
         body["tool_choice"] = "auto"
     return body
