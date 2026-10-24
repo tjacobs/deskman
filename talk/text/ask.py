@@ -604,7 +604,20 @@ def answer_drinks(prompt):
     message = chat_completion(messages)
     reply = (message.get("content") or "").strip() or "Okay."
     remember_turn(messages, reply)
+
+    # Hand over the drink when the reply names one, saying so instead of repeating the name
+    if drinks.is_order(reply):
+        drinks.set_dispense(True)
+        return drinks.DISPENSE_MESSAGE
     return reply
+
+# Return true once for each drink order waiting to be handed over
+def take_dispense():
+    return drinks.take_dispense()
+
+# Hand over the drink with the hat and head moves
+def dispense():
+    drinks.dispense()
 
 # Build the chat messages for one ask
 def build_messages(prompt):

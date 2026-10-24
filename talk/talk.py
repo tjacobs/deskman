@@ -636,6 +636,9 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             speak_muted(listener, kokoro_pipeline, reply)
             print_turn_timing()
 
+            # Hand over the drink after saying so, when an order was taken
+            run_dispense(listener)
+
             # Quit ends the program, the robot is already exiting
             if move.quit_pending():
                 break
@@ -651,6 +654,16 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     except Exception as error:
         print_error('talk loop failed', error)
         raise
+
+# Hand over a drink when an order was just taken, mic muted so the servos are not heard
+def run_dispense(listener):
+    if not text_ask.take_dispense():
+        return
+    print('Handing over the drink.', flush=True)
+    with speak_lock:
+        listener.mute()
+        text_ask.dispense()
+        listener.unmute()
 
 # Say hello, realtime speaks it over its own session so kokoro stays unloaded
 def greet(listener, kokoro_pipeline):

@@ -4,6 +4,10 @@
 
 # Imports
 import re
+import time
+
+# Import the head and hat mover
+import move
 
 # Config the drinks on offer
 DRINKS = ["Grapefruit", "Lemon", "Lime", "Blackberry", "Peach", "Water"]
@@ -15,6 +19,11 @@ OFFER = ", ".join(drink.lower() for drink in DRINKS[:-1]) + ", and " + DRINKS[-1
 GREETING = "What drink would you like?"
 STOP_MESSAGE = "Drink ordering is off."
 START_EXCHANGE = "Start drink ordering."
+
+# Config what Drinkman says when handing over a drink, and the moves after saying it, close hat, look right, open hat, look forward
+DISPENSE_MESSAGE = "Coming right up. Here's your drink."
+DISPENSE_MOVES = ["hat_down", "right", "hat_up", "center"]
+DISPENSE_MOVE_SECONDS = 1.0
 
 # Config the words that name the app and the words that start or stop it
 APP_PATTERN = re.compile(r"\b(drinks?\s+(ordering|order|app|mode)|drinkman)\b")
@@ -34,8 +43,9 @@ PROMPT = (
     "Answer in one or two short sentences suitable for speaking aloud."
 )
 
-# Mode state, true while drink ordering is on
+# Mode state, true while drink ordering is on, and true when an order was taken and the drink is not handed over yet
 ordering_on = False
+dispense_pending = False
 
 # Main
 def main():
@@ -50,6 +60,29 @@ def is_on():
 def set_on(value):
     global ordering_on
     ordering_on = value
+
+# Return true when the reply is only the name of a drink, which means the order was taken
+def is_order(reply):
+    return clean_words(reply) in [drink.lower() for drink in DRINKS]
+
+# Mark a drink as waiting to be handed over
+def set_dispense(value):
+    global dispense_pending
+    dispense_pending = value
+
+# Return true once for each order that is waiting to be handed over
+def take_dispense():
+    global dispense_pending
+    waiting = dispense_pending
+    dispense_pending = False
+    return waiting
+
+# Hand over the drink with the hat and head moves
+def dispense():
+    # Make each move, then give the servos time to get there
+    for direction in DISPENSE_MOVES:
+        move.run_look({"direction": direction})
+        time.sleep(DISPENSE_MOVE_SECONDS)
 
 # Lowercase the spoken words with punctuation removed
 def clean_words(prompt):
