@@ -12,6 +12,8 @@ import time
 PROGRAM_START = time.perf_counter()
 
 # Imports
+import glob
+import json
 import queue
 import shutil
 import traceback
@@ -120,6 +122,8 @@ LOW_BATTERY_UNSAID = 'Please plug me in.'
 TEXT_SERVER_START_SECONDS = 180
 TEXT_SERVER_POLL_SECONDS = 0.5
 TEXT_SERVER_WATCH_SECONDS = 2.0
+RENDER_WATCH_SECONDS = 0.3
+RENDER_SPEED = 1.0
 TEXT_SERVER_LOG = os.path.join(TEXT_DIR, 'server.log')
 TEXT_SERVER_PROGRESS_WIDTH = 120
 TEXT_SERVER_RESTART_TRIES = 3
@@ -554,6 +558,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     reminders.seed_reminders_from_memory()
     start_reminder_checker(listener, kokoro_pipeline)
     start_text_server_watch()
+    start_render_watch()
 
     # Say hi once loading is done, then listen for one follow-up window
     if SAY_HI:
@@ -1300,6 +1305,43 @@ def speak(kokoro_pipeline, text):
 def start_reminder_checker(listener, kokoro_pipeline):
     thread = threading.Thread(target=reminder_loop, args=(listener, kokoro_pipeline), daemon=True)
     thread.start()
+
+# Start a background thread that renders lines for test scripts, so they reuse the kokoro loaded here
+def start_render_watch():
+    os.makedirs(utils.RENDER_DIR, exist_ok=True)
+    thread = threading.Thread(target=watch_render_requests, daemon=True)
+    thread.start()
+
+# Render each request that lands in the spool folder
+def watch_render_requests():
+    while True:
+        for request_path in sorted(glob.glob(os.path.join(utils.RENDER_DIR, '*.json'))):
+            try:
+                render_request(request_path)
+            except Exception as error:
+                print_error('render failed', error)
+        time.sleep(RENDER_WATCH_SECONDS)
+
+# Render one request to its wav file, never while a reply is being spoken
+def render_request(request_path):
+    # Read the request, then remove it so it renders once
+    with open(request_path) as load:
+        request = json.load(load)
+    os.remove(request_path)
+
+    # Join every chunk kokoro yields, loading kokoro first when realtime left it unloaded
+    with speak_lock:
+        if kokoro_model is None:
+            load_kokoro_pipeline()
+        pipeline = get_kokoro_pipeline(request['voice'][0])
+        chunks = [audio for _, _, audio in pipeline(request['text'], voice=request['voice'], speed=RENDER_SPEED)]
+
+        # Write under a temporary name, then rename so the caller never sees half a file
+        temp_path = request['wav'] + '.tmp'
+        soundfile.write(temp_path, np.concatenate(chunks), SPEECH_SAMPLE_RATE, format='WAV')
+        os.replace(temp_path, request['wav'])
+        torch.cuda.empty_cache()
+    print(f'Rendered {os.path.basename(request["wav"])}', flush=True)
 
 # Watch the local model so a kill shows on the face before the next question
 def start_text_server_watch():

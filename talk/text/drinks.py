@@ -27,6 +27,8 @@ PROMPT = (
     f'You have already asked "{GREETING}" '
     "Take the order for the drink the person wants. "
     "Available drinks are:\n" + "\n".join(DRINKS) + "\n"
+    "Ignore the word soda, and treat lima as lime, so lima soda and lime soda both mean Lime. "
+    "The words may be misheard, so match to the closest available drink. "
     "Confirm the order by saying only the drink name, with no other words. "
     "If they ask for a drink that is not available, say sorry, then say we offer " + OFFER + ". "
     "Answer in one or two short sentences suitable for speaking aloud."

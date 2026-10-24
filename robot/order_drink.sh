@@ -9,12 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TALK_DIR="$(cd "${SCRIPT_DIR}/../talk" && pwd)"
 PYTHON="${TALK_DIR}/.venv/bin/python"
 LOG_FILE="${SCRIPT_DIR}/log.txt"
-WAV_PREFIX="/tmp/order_drink_"
+WAV_PREFIX="/tmp/words_said_"
 
 # Defaults
 QUESTION_VOICE="am_adam"
-WAKE_PHRASE="Deskman."
-DEFAULT_LINES=("Start drink ordering app." "I would like lime soda please." "Do you have any coke?" "I will have a blackberry please." "Stop drink ordering.")
+WAKE_PHRASE="Deskman,"
+DEFAULT_LINES=("start drink ordering app." "What drinks do you have?" "I'll take a lime please." "Actually do you have any coke?" "I'll have blackberry please." "Stop drink ordering.")
 VOLUME_PERCENT=80
 START_WAIT_SECONDS=60
 PLAY_TRIES=15
@@ -30,11 +30,11 @@ main() {
     # Read command line arguments
     parse_args "$@"
 
-    # Generate a spoken wav for each line
-    ensure_line_wavs
-
     # Ensure talk.py is running and has the drink ordering code
     ensure_talk_current
+
+    # Have talk.py render a spoken wav for each line
+    ensure_line_wavs
 
     # Set speaker volume so the microphone hears the lines
     set_volume
@@ -53,7 +53,7 @@ parse_args() {
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
         echo "Usage: ./order_drink.sh [line...]"
         echo "  Each argument is one spoken line, the wake word is added to the first one."
-        echo "  (no arg)  start drink ordering, order, ask for coke, order again, then stop"
+        echo "  (no arg)  start drink ordering, ask what is offered, order, ask for coke, order again, then stop"
         exit 0
     fi
 
@@ -70,13 +70,13 @@ parse_args() {
 
 # Name the wav file for one spoken line
 line_wav_path() {
-    # Hash the full spoken text so a changed line gets a new file
-    local hash
-    hash=$(printf '%s' "${QUESTION_VOICE} $1" | md5sum | cut -c1-12)
-    echo "${WAV_PREFIX}${hash}.wav"
+    # Spell the words in the file name, so a changed line gets a new file
+    local words
+    words=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '_' | sed 's/__*/_/g; s/^_//; s/_$//')
+    echo "${WAV_PREFIX}${words}.wav"
 }
 
-# Generate the wav for each line that is not already cached
+# Render the wav for each line that is not already cached
 ensure_line_wavs() {
     # Build the list of wav path and text pairs that are missing
     local pairs=()
@@ -89,37 +89,14 @@ ensure_line_wavs() {
         fi
     done
 
-    # Skip loading kokoro when every wav is cached
+    # Skip rendering when every wav is cached
     if [[ "${#pairs[@]}" -eq 0 ]]; then
         return
     fi
 
-    # Synthesize the missing lines with kokoro on CPU so GPU memory stays free
+    # Ask the running talk.py to render them, so no second kokoro loads
     echo "Generating $(( ${#pairs[@]} / 2 )) spoken lines..."
-    CUDA_VISIBLE_DEVICES="" "${PYTHON}" - "${TALK_DIR}" "${QUESTION_VOICE}" "${pairs[@]}" <<'PY'
-# Imports
-import sys
-import numpy
-import soundfile
-
-# Read arguments and import talk helpers
-talk_dir = sys.argv[1]
-voice = sys.argv[2]
-pairs = sys.argv[3:]
-sys.path.insert(0, talk_dir)
-import utils
-
-# Use cached voice and silence torch warnings before importing kokoro
-utils.enable_offline_if_cached(voice)
-utils.suppress_torch_warnings()
-import kokoro
-
-# Synthesize each line and write its wav file
-pipeline = kokoro.KPipeline(lang_code=voice[0], repo_id=utils.REPO_ID)
-for index in range(0, len(pairs), 2):
-    chunks = [chunk.audio.numpy() for chunk in pipeline(pairs[index + 1], voice=voice, speed=1.0)]
-    soundfile.write(pairs[index], numpy.concatenate(chunks), 24000)
-PY
+    "${PYTHON}" "${TALK_DIR}/tools/render_line.py" "${QUESTION_VOICE}" "${pairs[@]}"
 }
 
 # Ensure talk.py is running and started after the last edit to a talk Python file

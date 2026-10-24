@@ -29,11 +29,11 @@ main() {
     # Read command line arguments
     parse_args "$@"
 
-    # Generate the spoken question wav when missing or changed
-    ensure_question_wav
-
     # Ensure talk.py is running with timing enabled
     ensure_talk_timing
+
+    # Have talk.py render the spoken question wav when missing or changed
+    ensure_question_wav
 
     # Say which runtime is running Gemma
     print_gemma_runtime
@@ -59,36 +59,16 @@ parse_args() {
     fi
 }
 
-# Generate the question wav with kokoro on CPU when not already cached
+# Render the question wav through talk.py when not already cached
 ensure_question_wav() {
     # Reuse the cached wav when the voice and prompt match
     if [[ -f "${QUESTION_WAV}" && -f "${PROMPT_FILE}" ]] && [[ "$(cat "${PROMPT_FILE}")" == "${QUESTION_VOICE}|${PROMPT}" ]]; then
         return
     fi
 
-    # Synthesize the prompt with kokoro on CPU so GPU memory stays free
+    # Ask the running talk.py to render it, so no second kokoro loads
     echo "Generating question wav in ${QUESTION_VOICE}: ${PROMPT}"
-    CUDA_VISIBLE_DEVICES="" "${PYTHON}" - "${TALK_DIR}" "${PROMPT}" "${QUESTION_WAV}" "${QUESTION_VOICE}" <<'PY'
-# Imports
-import sys
-import numpy
-import soundfile
-
-# Read arguments and import talk helpers
-talk_dir, prompt, wav_path, voice = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-sys.path.insert(0, talk_dir)
-import utils
-
-# Use cached voice and silence torch warnings before importing kokoro
-utils.enable_offline_if_cached(voice)
-utils.suppress_torch_warnings()
-import kokoro
-
-# Synthesize the prompt and write the wav file
-pipeline = kokoro.KPipeline(lang_code=voice[0], repo_id=utils.REPO_ID)
-chunks = [chunk.audio.numpy() for chunk in pipeline(prompt, voice=voice, speed=1.0)]
-soundfile.write(wav_path, numpy.concatenate(chunks), 24000)
-PY
+    "${PYTHON}" "${TALK_DIR}/tools/render_line.py" "${QUESTION_VOICE}" "${QUESTION_WAV}" "${PROMPT}"
 
     # Save the prompt that produced this wav
     printf '%s' "${QUESTION_VOICE}|${PROMPT}" > "${PROMPT_FILE}"
