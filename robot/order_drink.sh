@@ -99,7 +99,7 @@ talk_is_current() {
     # Find the newest edit time across the talk Python files
     local pid="$1"
     local newest_edit
-    newest_edit=$(find "${TALK_DIR}" -name '*.py' -not -path '*/.venv/*' -not -path '*/llama.cpp/*' -not -path '*/litert/*' -printf '%T@\n' | sort -n | tail -n 1)
+    newest_edit=$(find "${TALK_DIR}" -name '*.py' -not -path '*/.venv/*' -not -path '*/llama.cpp/*' -not -path '*/litert/*' -not -name 'litert_server.py' -printf '%T@\n' | sort -n | tail -n 1)
 
     # Compare process age in seconds against file age in seconds
     local process_age

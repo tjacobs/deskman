@@ -8,7 +8,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TALK_DIR="$(cd "${SCRIPT_DIR}/../talk" && pwd)"
 PYTHON="${TALK_DIR}/.venv/bin/python"
-TALK_SCRIPT="${TALK_DIR}/talk.py"
 LOG_FILE="${SCRIPT_DIR}/log.txt"
 QUESTION_WAV="/tmp/profile_question.wav"
 PROMPT_FILE="/tmp/profile_question.txt"
@@ -59,31 +58,28 @@ parse_args() {
     fi
 }
 
-# Ensure talk.py is running with --timing or TALK_TIMING set and up to date
+# Ensure talk.py is running with timing on, restarting the services when it is missing or stale
 ensure_talk_timing() {
-    # Check whether an existing talk.py has timing enabled and started after the last edit to talk.py
+    # Keep the running talk.py when it started after the last edit to the talk code
     local pid
     pid=$(pgrep -f "talk/talk.py" | head -n 1 || true)
-    if [[ -n "${pid}" ]] && talk_has_timing "${pid}" && talk_is_current "${pid}"; then
+    if [[ -n "${pid}" ]] && talk_is_current "${pid}"; then
+        # Warn when timing is off, it comes from timing in talk/config.json
+        if ! talk_has_timing "${pid}"; then
+            echo "Warning: timing is off, set timing true in talk/config.json and restart the services."
+        fi
         return
     fi
 
-    # Warn and stop the old talk.py when it needs a restart
+    # Say why, then restart the services so the robot spawns a fresh talk.py
     if [[ -n "${pid}" ]]; then
-        echo "Restarting talk.py pid ${pid} with --timing..."
-        kill -TERM "${pid}" 2>/dev/null || true
-        while kill -0 "${pid}" 2>/dev/null; do
-            sleep 0.2
-        done
+        echo "Restarting services, talk.py pid ${pid} is older than the talk code..."
     else
-        echo "Warning: talk.py is not running, starting with --timing..."
+        echo "Restarting services, talk.py is not running..."
     fi
-
-    # Start talk.py with --timing appending to the robot log before robot.service respawns it
     local start_line
-    start_line=$(wc -l < "${LOG_FILE}")
-    start_line=$((start_line + 1))
-    PYTHONUNBUFFERED=1 TALK_TIMING=1 nohup "${PYTHON}" "${TALK_SCRIPT}" --timing >> "${LOG_FILE}" 2>&1 &
+    start_line=$(( $(wc -l < "${LOG_FILE}") + 1 ))
+    "${SCRIPT_DIR}/restart_services.sh"
 
     # Wait for talk.py to finish loading models
     echo "Waiting for talk.py to finish starting..."
@@ -144,7 +140,7 @@ talk_is_current() {
     local process_age
     local newest_edit
     local file_age
-    newest_edit=$(find "${TALK_DIR}" -name '*.py' -not -path '*/.venv/*' -not -path '*/llama.cpp/*' -printf '%T@\n' | sort -n | tail -n 1)
+    newest_edit=$(find "${TALK_DIR}" -name '*.py' -not -path '*/.venv/*' -not -path '*/llama.cpp/*' -not -name 'litert_server.py' -printf '%T@\n' | sort -n | tail -n 1)
 
     # Compare process age in seconds against file age in seconds
     process_age=$(ps -o etimes= -p "${pid}" 2>/dev/null | tr -d ' ' || echo 0)
