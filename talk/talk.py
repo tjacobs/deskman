@@ -110,6 +110,7 @@ ERROR_WAV = 'error.wav'
 CHIME_WAV = 'chime.wav'
 TEXT_DIR = os.path.join(utils.SCRIPT_DIR, 'text')
 TEXT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'server.sh')
+LITERT_SERVER_SCRIPT = os.path.join(TEXT_DIR, 'litert_server.sh')
 TEXT_CUDA_LIBRARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'libggml-cuda.so')
 TEXT_SERVER_BINARY = os.path.join(TEXT_DIR, 'llama.cpp', 'build', 'bin', 'llama-server')
 TEXT_UNAVAILABLE = 'The language model is not running.'
@@ -156,6 +157,9 @@ TIMING_ENV_NAME = 'TALK_TIMING'
 # Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
 TALK_MODE_NAMES = ('local', 'cloud', 'realtime')
 
+# Config the config.json key that serves the local model with LiteRT instead of llama.cpp, set litert true
+LITERT_CONFIG_NAME = 'litert'
+
 # State
 TEST_MODE = False
 REPEAT_MODE = False
@@ -167,6 +171,7 @@ TIMING_MODE = False
 CLOUD_MODE = False
 REALTIME_MODE = False
 ACCENT_MODE = False
+LITERT_MODE = False
 LOCAL_REASON_SHOWN = False
 KEY_SETUP_OFFERED = False
 LAST_ASK_AT = 0.0
@@ -201,11 +206,16 @@ except ImportError:
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, text_server_process
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, LITERT_MODE, text_server_process
     TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE = parse_args()
 
     # Load the saved mode, the robot service has no flags so it lives in config.json
     saved_mode = load_saved_mode()
+
+    # Serve the local model with LiteRT when config.json asks
+    LITERT_MODE = bool(utils.load_config({LITERT_CONFIG_NAME: False})[LITERT_CONFIG_NAME])
+    if LITERT_MODE:
+        print('LiteRT: True', flush=True)
 
     # Run the saved mode unless a flag picked one
     if not realtime_flag and not cloud_flag and not local_flag:
@@ -1681,7 +1691,7 @@ def start_text_server(require_success=True):
     load_start = time.perf_counter()
 
     # Quit when the install is incomplete
-    if not os.access(TEXT_SERVER_SCRIPT, os.X_OK):
+    if not os.access(text_server_script(), os.X_OK):
         print('Text server missing. Run ./install.sh --talk first.')
         if require_success:
             sys.exit(1)
@@ -1704,12 +1714,22 @@ def text_server_preset():
         return TEXT_SERVER_PRESET_PI
     return TEXT_SERVER_PRESET_DEFAULT
 
-# Spawn server.sh and replace the log file handle
+# Pick the script that serves the local model, LiteRT or llama.cpp
+def text_server_script():
+    if LITERT_MODE:
+        return LITERT_SERVER_SCRIPT
+    return TEXT_SERVER_SCRIPT
+
+# Spawn the text server script and replace the log file handle
 def spawn_text_server():
     global text_server_log_file
     if text_server_log_file is not None:
         text_server_log_file.close()
     text_server_log_file = open(TEXT_SERVER_LOG, 'w')
+
+    # LiteRT has one model and no preset
+    if LITERT_MODE:
+        return subprocess.Popen([LITERT_SERVER_SCRIPT], cwd=TEXT_DIR, stdout=text_server_log_file, stderr=subprocess.STDOUT)
 
     # Pass the preset so a Pi starts the 1b model
     preset = text_server_preset()
@@ -1902,6 +1922,8 @@ def print_text_server_already_running():
 
 # Return GPU when llama.cpp was built with the CUDA library, else CPU
 def text_server_device():
+    if LITERT_MODE:
+        return 'GPU with LiteRT'
     if os.path.exists(TEXT_CUDA_LIBRARY):
         return 'GPU'
     return 'CPU'

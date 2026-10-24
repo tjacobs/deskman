@@ -32,6 +32,9 @@ main() {
     # Ensure talk.py is running with timing enabled
     ensure_talk_timing
 
+    # Say which runtime is running Gemma
+    print_gemma_runtime
+
     # Set speaker volume to full so the microphone hears the question
     set_volume
 
@@ -92,6 +95,30 @@ ensure_talk_timing() {
         sleep 1
     done
     echo "Warning: timed out waiting for talk.py startup line in ${LOG_FILE}"
+}
+
+# Print whether llama.cpp or LiteRT is running Gemma
+print_gemma_runtime() {
+    # Look for each text server process
+    local litert_running=false
+    local llama_running=false
+    if pgrep -f "litert_server.py" > /dev/null; then
+        litert_running=true
+    fi
+    if pgrep -f "llama-server" > /dev/null; then
+        llama_running=true
+    fi
+
+    # Print the runtime, or a warning when it is unclear
+    if [[ "${litert_running}" == true && "${llama_running}" == false ]]; then
+        echo "Gemma runtime: LiteRT"
+    elif [[ "${llama_running}" == true && "${litert_running}" == false ]]; then
+        echo "Gemma runtime: llama.cpp"
+    elif [[ "${litert_running}" == true ]]; then
+        echo "Warning: both LiteRT and llama.cpp servers are running, port 8080 may be shared."
+    else
+        echo "Warning: no local Gemma server found, talk.py may be using the cloud."
+    fi
 }
 
 # Return zero when the given talk.py pid has --timing in cmdline or TALK_TIMING in environ

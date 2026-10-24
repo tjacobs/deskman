@@ -49,3 +49,20 @@ Timing:
   Kokoro    0.35 sec  — Text to speech time for the first chunk of audio
   Total     2.24 sec  — Full time from last spoken word to first reply audio
 
+Testing LiteRT:
+  	  LiteRT	llama.cpp
+Gemma 4.06s   0.59s
+
+The cause is that LiteRT's server has no prompt cache.
+Fixed prompt cache.
+
+Gemma runtime: LiteRT
+Asking: Deskman. What is the time?
+Reply: The current time is 3:18 PM.
+Timing:
+  Silero    0.77 sec  — Time from last word of question
+  Whisper   0.36 sec  — Speech to text transcription time
+  Gemma     0.56 sec  — LLM reply generation, including any tool calls
+  Kokoro    0.36 sec  — Text to speech time for the first chunk of audio
+  Total     2.06 sec  — Full time from last spoken word to first reply audio
+
