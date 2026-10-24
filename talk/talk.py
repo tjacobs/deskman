@@ -149,6 +149,10 @@ MEMORY_LOW_GB = 0.5
 # How far under an expected load still counts as enough, so a Pi near the estimate stays quiet
 MEMORY_WARN_MARGIN_GB = 1.0
 
+# Config the turn steps that must all be stamped before the timing line prints
+TURN_STEPS = ('speech_end', 'heard_start', 'heard', 'ask', 'replied', 'speak', 'first_sound')
+TIMING_ENV_NAME = 'TALK_TIMING'
+
 # Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
 TALK_MODE_NAMES = ('local', 'cloud', 'realtime')
 
@@ -159,6 +163,7 @@ REPLAY_MODE = False
 MEMORY_MODE = False
 COLD_MODE = False
 PROMPT_MODE = False
+TIMING_MODE = False
 CLOUD_MODE = False
 REALTIME_MODE = False
 ACCENT_MODE = False
@@ -168,6 +173,7 @@ LAST_ASK_AT = 0.0
 LAST_BATTERY_CHECK_AT = 0.0
 LOW_BATTERY_BASELINE_VOLTAGE = 0.0
 LOW_BATTERY_FALLBACK_INDEX = 0
+TURN_TIMES = {}
 kokoro_model = None
 kokoro_pipelines = {}
 speak_lock = threading.Lock()
@@ -195,8 +201,8 @@ except ImportError:
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, text_server_process
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE = parse_args()
 
     # Load the saved mode, the robot service has no flags so it lives in config.json
     saved_mode = load_saved_mode()
@@ -299,6 +305,7 @@ def parse_args():
     memory_mode = False
     cold_mode = False
     prompt_mode = False
+    timing_mode = bool(os.environ.get(TIMING_ENV_NAME, '').strip())
     cloud_mode = False
     local_mode = False
     realtime_mode = False
@@ -320,6 +327,8 @@ def parse_args():
             cold_mode = True
         elif argument == '--prompt':
             prompt_mode = True
+        elif argument == '--timing':
+            timing_mode = True
         elif argument == '--cloud':
             cloud_mode = True
         elif argument == '--realtime':
@@ -349,7 +358,7 @@ def parse_args():
         sys.exit(1)
 
     # Return the arguments
-    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode
+    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, timing_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode
 
 # Read the one mode config.json has true, empty when none is, and stop when more than one is
 def load_saved_mode():
@@ -497,7 +506,7 @@ def say_accent_phrase():
 
 # Print usage help
 def print_usage():
-    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--cloud] [--realtime] [--local] [--model name]')
+    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--timing] [--cloud] [--realtime] [--local] [--model name]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --accent           say the accent test phrase in the current voice, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
@@ -505,6 +514,7 @@ def print_usage():
     print('  --memory           print available memory while loading models')
     print('  --cold             skip local Gemma text model warm-up ask')
     print('  --prompt           print the full model context, messages, tools, and rendered prompt')
+    print('  --timing           print step timing after each spoken reply, or set TALK_TIMING=1')
     print('  --cloud            ask OpenAI instead of the local llama-server, see config.json')
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
@@ -596,11 +606,14 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
                 continue
 
             # Reply, mic muted so it does not hear itself
+            TURN_TIMES['ask'] = time.perf_counter()
             reply = make_reply(command)
+            TURN_TIMES['replied'] = time.perf_counter()
             if reply != TEXT_UNAVAILABLE:
                 print(f'Reply: {reply}', flush=True)
             log_talk(command, reply)
             speak_muted(listener, kokoro_pipeline, reply)
+            print_turn_timing()
 
             # Quit ends the program, the robot is already exiting
             if move.quit_pending():
@@ -759,6 +772,30 @@ def retry_ask_locally(command):
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print_memory('ask failed')
         return TEXT_UNAVAILABLE
+
+# Print how long each step took, from the end of speech to the reply finishing
+def print_turn_timing():
+    if not TIMING_MODE:
+        return
+    times = TURN_TIMES
+    if not all(step in times for step in TURN_STEPS):
+        return
+
+    # Work out each step and the total from the last word to the first sound
+    silero = times['heard_start'] - times['speech_end']
+    whisper = times['heard'] - times['heard_start']
+    beep = times['ask'] - times['heard']
+    gemma = times['replied'] - times['ask']
+    kokoro = times['first_sound'] - times['speak']
+    total = times['first_sound'] - times['speech_end']
+    print('Timing:', flush=True)
+    print(f'  silero   {silero:5.2f} sec', flush=True)
+    print(f'  whisper  {whisper:5.2f} sec', flush=True)
+    print(f'  beep     {beep:5.2f} sec', flush=True)
+    print(f'  gemma    {gemma:5.2f} sec', flush=True)
+    print(f'  kokoro   {kokoro:5.2f} sec', flush=True)
+    print(f'  total    {total:5.2f} sec', flush=True)
+    times.clear()
 
 # Load whisper, vad, and kokoro
 def load_speech_models():
@@ -1036,7 +1073,13 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
         return None
     if len(audio) == 0:
         return ''
+
+    # Transcribe, stamping when speech ended and how long whisper took
+    TURN_TIMES.clear()
+    TURN_TIMES['speech_end'] = listener.speech_end_at
+    TURN_TIMES['heard_start'] = time.perf_counter()
     text = transcribe(whisper_model, audio)
+    TURN_TIMES['heard'] = time.perf_counter()
     if text:
         print(f'Heard: {text}', flush=True)
 
@@ -1200,15 +1243,19 @@ def speak(kokoro_pipeline, text):
         return
 
     # Load kokoro the first time something local needs a voice, realtime skips it at startup
+    TURN_TIMES['speak'] = time.perf_counter()
     if kokoro_model is None:
         load_kokoro_pipeline()
 
+    # Generate and play each chunk, stamping the first sound
     os.makedirs(utils.AUDIO_DIR, exist_ok=True)
     pipeline = get_kokoro_pipeline(VOICE[0])
     generator = pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
     for index, (graphemes, phonemes, audio) in enumerate(generator):
         wav_path = os.path.join(utils.AUDIO_DIR, SPOKEN_WAV)
         soundfile.write(wav_path, audio, SPEECH_SAMPLE_RATE)
+        if index == 0:
+            TURN_TIMES['first_sound'] = time.perf_counter()
         play_wav(wav_path)
 
     # Hand torch's cached gpu blocks back, the Jetson gpu shares memory with llama and the desktop
@@ -1420,6 +1467,7 @@ class Listener:
         self.blocks = queue.Queue(maxsize=MAX_QUEUED_BLOCKS)
         self.muted = False
         self.discard_utterance = False
+        self.speech_end_at = 0.0
         self.record = record
         self.recorder = utils.start_recorder(record)
         self.reader = threading.Thread(target=self.read_blocks, daemon=True)
@@ -1509,6 +1557,8 @@ class Listener:
             if self.discard_utterance:
                 continue
             speaking = speech_probability(self.vad_model, block) > VAD_THRESHOLD
+            if speaking:
+                self.speech_end_at = time.perf_counter()
 
             # Wait for speech, keeping a little audio from before it started
             if not utterance:
