@@ -51,7 +51,7 @@ parse_args() {
     # Show help when requested
     if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
         echo "Usage: ./order_drink.sh [line...]"
-        echo "  Each argument is one spoken line, the wake word is added for you."
+        echo "  Each argument is one spoken line, the wake word is added to the first one."
         echo "  (no arg)  start drink ordering, order, ask for coke, order again, then stop"
         exit 0
     fi
@@ -62,6 +62,9 @@ parse_args() {
     else
         SPOKEN_LINES=("${DEFAULT_LINES[@]}")
     fi
+
+    # Say the wake word on the first line only, the conversation stays open for the rest
+    SPOKEN_LINES[0]="${WAKE_PHRASE} ${SPOKEN_LINES[0]}"
 }
 
 # Ensure talk.py is running and started after the last edit to a talk Python file
@@ -117,7 +120,7 @@ set_volume() {
 line_wav_path() {
     # Hash the full spoken text so a changed line gets a new file
     local hash
-    hash=$(printf '%s' "${WAKE_PHRASE} $1" | md5sum | cut -c1-12)
+    hash=$(printf '%s' "$1" | md5sum | cut -c1-12)
     echo "${WAV_PREFIX}${hash}.wav"
 }
 
@@ -130,7 +133,7 @@ ensure_line_wavs() {
     for line in "${SPOKEN_LINES[@]}"; do
         path=$(line_wav_path "${line}")
         if [[ ! -f "${path}" ]]; then
-            pairs+=("${path}" "${WAKE_PHRASE} ${line}")
+            pairs+=("${path}" "${line}")
         fi
     done
 

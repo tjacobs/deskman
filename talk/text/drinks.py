@@ -25,7 +25,7 @@ PROMPT = (
     "Take the order for the drink the person wants. "
     "Available drinks are:\n" + "\n".join(DRINKS) + "\n"
     "Confirm the drink in one short sentence. "
-    "If they ask for a drink that is not available, say so and list the available drinks. "
+    "If they ask for a drink that is not available, say sorry, then say we offer a " + " and a ".join(DRINKS) + ". "
     "Answer in one or two short sentences suitable for speaking aloud."
 )
 
