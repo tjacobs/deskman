@@ -6,7 +6,10 @@
 import re
 
 # Config the drinks on offer
-DRINKS = ["Waterloo lemon lime", "Kirkland lime"]
+DRINKS = ["Grapefruit", "Lemon", "Lime", "Blackberry", "Peach", "Water"]
+
+# Config the drinks as spoken when offering them, with no article
+OFFER = ", ".join(drink.lower() for drink in DRINKS[:-1]) + ", and " + DRINKS[-1].lower()
 
 # Config the spoken lines
 GREETING = "What drink would you like?"
@@ -24,8 +27,8 @@ PROMPT = (
     f'You have already asked "{GREETING}" '
     "Take the order for the drink the person wants. "
     "Available drinks are:\n" + "\n".join(DRINKS) + "\n"
-    "Confirm the drink in one short sentence. "
-    "If they ask for a drink that is not available, say sorry, then say we offer a " + " and a ".join(DRINKS) + ". "
+    "Confirm the order by saying only the drink name, with no other words. "
+    "If they ask for a drink that is not available, say sorry, then say we offer " + OFFER + ". "
     "Answer in one or two short sentences suitable for speaking aloud."
 )
 

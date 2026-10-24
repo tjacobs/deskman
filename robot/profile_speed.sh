@@ -13,6 +13,7 @@ QUESTION_WAV="/tmp/profile_question.wav"
 PROMPT_FILE="/tmp/profile_question.txt"
 
 # Defaults
+QUESTION_VOICE="am_adam"
 DEFAULT_PROMPT="Deskman. What is the time?"
 VOLUME_PERCENT=80
 START_WAIT_SECONDS=60
@@ -28,6 +29,9 @@ main() {
     # Read command line arguments
     parse_args "$@"
 
+    # Generate the spoken question wav when missing or changed, before talk.py loads so low memory cannot kill it
+    ensure_question_wav
+
     # Ensure talk.py is running with timing enabled
     ensure_talk_timing
 
@@ -36,9 +40,6 @@ main() {
 
     # Set speaker volume to full so the microphone hears the question
     set_volume
-
-    # Generate the spoken question wav when missing or changed
-    ensure_question_wav
 
     # Play the question and print the timing from the robot log
     play_and_measure
@@ -58,6 +59,41 @@ parse_args() {
     fi
 }
 
+# Generate the question wav with kokoro on CPU when not already cached
+ensure_question_wav() {
+    # Reuse the cached wav when the voice and prompt match
+    if [[ -f "${QUESTION_WAV}" && -f "${PROMPT_FILE}" ]] && [[ "$(cat "${PROMPT_FILE}")" == "${QUESTION_VOICE}|${PROMPT}" ]]; then
+        return
+    fi
+
+    # Synthesize the prompt with kokoro on CPU so GPU memory stays free
+    echo "Generating question wav in ${QUESTION_VOICE}: ${PROMPT}"
+    CUDA_VISIBLE_DEVICES="" "${PYTHON}" - "${TALK_DIR}" "${PROMPT}" "${QUESTION_WAV}" "${QUESTION_VOICE}" <<'PY'
+# Imports
+import sys
+import numpy
+import soundfile
+
+# Read arguments and import talk helpers
+talk_dir, prompt, wav_path, voice = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, talk_dir)
+import utils
+
+# Use cached voice and silence torch warnings before importing kokoro
+utils.enable_offline_if_cached(voice)
+utils.suppress_torch_warnings()
+import kokoro
+
+# Synthesize the prompt and write the wav file
+pipeline = kokoro.KPipeline(lang_code=voice[0], repo_id=utils.REPO_ID)
+chunks = [chunk.audio.numpy() for chunk in pipeline(prompt, voice=voice, speed=1.0)]
+soundfile.write(wav_path, numpy.concatenate(chunks), 24000)
+PY
+
+    # Save the prompt that produced this wav
+    printf '%s' "${QUESTION_VOICE}|${PROMPT}" > "${PROMPT_FILE}"
+}
+
 # Ensure talk.py is running with timing on, restarting the services when it is missing or stale
 ensure_talk_timing() {
     # Keep the running talk.py when it started after the last edit to the talk code
@@ -68,6 +104,7 @@ ensure_talk_timing() {
         if ! talk_has_timing "${pid}"; then
             echo "Warning: timing is off, set timing true in talk/config.json and restart the services."
         fi
+        wait_for_talk_ready
         return
     fi
 
@@ -101,6 +138,20 @@ ensure_talk_timing() {
         sleep 1
     done
     echo "Warning: timed out waiting for talk.py startup line in ${LOG_FILE}"
+}
+
+# Wait until the newest talk.py has printed its startup line, it prints Started in after loading
+wait_for_talk_ready() {
+    local second
+    local ready
+    for second in $(seq 1 "${START_WAIT_SECONDS}"); do
+        ready=$(awk '/^Loading whisper/ {loading=NR} /^Started in / {started=NR} END {print (started > loading) ? "yes" : "no"}' "${LOG_FILE}")
+        if [[ "${ready}" == "yes" ]]; then
+            return
+        fi
+        sleep 1
+    done
+    echo "Warning: timed out waiting for talk.py to finish starting."
 }
 
 # Print whether llama.cpp or LiteRT is running Gemma
@@ -163,41 +214,6 @@ set_volume() {
     # Run the talk volume helper
     "${PYTHON}" -c "import sys; sys.path.insert(0, '${TALK_DIR}/text'); import volume; volume.run_set_volume({'percent': ${VOLUME_PERCENT}})"
     echo "Set volume to ${VOLUME_PERCENT} percent."
-}
-
-# Generate the question wav with kokoro on CPU when not already cached
-ensure_question_wav() {
-    # Reuse the cached wav when the prompt matches
-    if [[ -f "${QUESTION_WAV}" && -f "${PROMPT_FILE}" ]] && [[ "$(cat "${PROMPT_FILE}")" == "${PROMPT}" ]]; then
-        return
-    fi
-
-    # Synthesize the prompt with kokoro on CPU so GPU memory stays free
-    echo "Generating question wav: ${PROMPT}"
-    CUDA_VISIBLE_DEVICES="" "${PYTHON}" - "${TALK_DIR}" "${PROMPT}" "${QUESTION_WAV}" <<'PY'
-# Imports
-import sys
-import numpy
-import soundfile
-
-# Read arguments and import talk helpers
-talk_dir, prompt, wav_path = sys.argv[1], sys.argv[2], sys.argv[3]
-sys.path.insert(0, talk_dir)
-import utils
-
-# Use cached voice and silence torch warnings before importing kokoro
-utils.enable_offline_if_cached(utils.DEFAULT_VOICE)
-utils.suppress_torch_warnings()
-import kokoro
-
-# Synthesize the prompt and write the wav file
-pipeline = kokoro.KPipeline(lang_code=utils.DEFAULT_VOICE[0], repo_id=utils.REPO_ID)
-chunks = [chunk.audio.numpy() for chunk in pipeline(prompt, voice=utils.DEFAULT_VOICE, speed=1.0)]
-soundfile.write(wav_path, numpy.concatenate(chunks), 24000)
-PY
-
-    # Save the prompt that produced this wav
-    printf '%s' "${PROMPT}" > "${PROMPT_FILE}"
 }
 
 # Play the question wav and wait for the Timing line in the robot log
