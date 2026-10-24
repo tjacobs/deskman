@@ -3,6 +3,7 @@
 # Serve Gemma through LiteRT-LM with an OpenAI style chat API, keeping the prompt in the model cache between requests
 
 # Imports
+import contextlib
 import http.server
 import json
 import os
@@ -67,10 +68,15 @@ def parse_args():
 # Load the model onto the GPU
 def load_engine():
     global ENGINE
+
+    # Hide the native info and warning lines, only errors reach the log
+    litert_lm.set_min_log_severity(litert_lm.LogSeverity.ERROR)
+
     print(f'Loading {MODEL_NAME}...', flush=True)
     start = time.perf_counter()
-    ENGINE = litert_lm.Engine(MODEL_PATH, backend=litert_lm.Backend.GPU(), max_num_tokens=CONTEXT_TOKENS, use_ringbuffers_local_attention=True)
-    ENGINE.__enter__()
+    with quiet_output():
+        ENGINE = litert_lm.Engine(MODEL_PATH, backend=litert_lm.Backend.GPU(), max_num_tokens=CONTEXT_TOKENS, use_ringbuffers_local_attention=True)
+        ENGINE.__enter__()
     print(f'Loaded in {time.perf_counter() - start:.1f} sec.', flush=True)
 
 # Answer requests until stopped
@@ -237,6 +243,23 @@ def reset_cache():
     CACHE['conversation'] = None
     CACHE['keys'] = []
     CACHE['tools_key'] = ''
+
+# Send native library output to nowhere while loading, the ones the log level cannot hide print straight to the terminal
+@contextlib.contextmanager
+def quiet_output():
+    # Point output and error at the null device, keeping the real ones to put back
+    null = os.open(os.devnull, os.O_WRONLY)
+    saved = [os.dup(1), os.dup(2)]
+    os.dup2(null, 1)
+    os.dup2(null, 2)
+    try:
+        yield
+    finally:
+        # Put output and error back, Python errors raised while loading still print
+        os.dup2(saved[0], 1)
+        os.dup2(saved[1], 2)
+        for descriptor in saved + [null]:
+            os.close(descriptor)
 
 # Run
 if __name__ == '__main__':
