@@ -12,6 +12,9 @@ LOG_FILE="${SCRIPT_DIR}/log.txt"
 QUESTION_WAV="/tmp/profile_question.wav"
 PROMPT_FILE="/tmp/profile_question.txt"
 
+# Idle helpers shared with order_drink.sh
+source "${TALK_DIR}/tools/talk_idle.sh"
+
 # Defaults
 QUESTION_VOICE="am_adam"
 DEFAULT_PROMPT="Deskman. What is the time?"
@@ -41,8 +44,14 @@ main() {
     # Set speaker volume to full so the microphone hears the question
     set_volume
 
+    # Start from idle so the question needs the wake word
+    go_idle
+
     # Play the question and print the timing from the robot log
     play_and_measure
+
+    # Leave the robot idle
+    go_idle
 }
 
 # Parse command line arguments

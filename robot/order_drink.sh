@@ -11,6 +11,9 @@ PYTHON="${TALK_DIR}/.venv/bin/python"
 LOG_FILE="${SCRIPT_DIR}/log.txt"
 WAV_PREFIX="/tmp/words_said_"
 
+# Idle helpers shared with profile_speed.sh
+source "${TALK_DIR}/tools/talk_idle.sh"
+
 # Defaults
 QUESTION_VOICE="am_adam"
 WAKE_PHRASE="Deskman,"
@@ -39,12 +42,18 @@ main() {
     # Set speaker volume so the microphone hears the lines
     set_volume
 
+    # Start from idle so the first line needs the wake word
+    go_idle
+
     # Say each line and print what the robot heard and replied
     local line
     for line in "${SPOKEN_LINES[@]}"; do
         play_and_report "${line}"
         sleep "${TURN_GAP_SECONDS}"
     done
+
+    # Leave the robot idle
+    go_idle
 }
 
 # Parse command line arguments
