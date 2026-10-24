@@ -784,17 +784,15 @@ def print_turn_timing():
     # Work out each step and the total from the last word to the first sound
     silero = times['heard_start'] - times['speech_end']
     whisper = times['heard'] - times['heard_start']
-    beep = times['ask'] - times['heard']
     gemma = times['replied'] - times['ask']
     kokoro = times['first_sound'] - times['speak']
     total = times['first_sound'] - times['speech_end']
     print('Timing:', flush=True)
-    print(f'  silero   {silero:5.2f} sec', flush=True)
-    print(f'  whisper  {whisper:5.2f} sec', flush=True)
-    print(f'  beep     {beep:5.2f} sec', flush=True)
-    print(f'  gemma    {gemma:5.2f} sec', flush=True)
-    print(f'  kokoro   {kokoro:5.2f} sec', flush=True)
-    print(f'  total    {total:5.2f} sec', flush=True)
+    print(f'  Silero   {silero:5.2f} sec', flush=True)
+    print(f'  Whisper  {whisper:5.2f} sec', flush=True)
+    print(f'  Gemma    {gemma:5.2f} sec', flush=True)
+    print(f'  Kokoro   {kokoro:5.2f} sec', flush=True)
+    print(f'  Total    {total:5.2f} sec', flush=True)
     times.clear()
 
 # Load whisper, vad, and kokoro

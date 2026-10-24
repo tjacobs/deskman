@@ -6,7 +6,7 @@ set -euo pipefail
 
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TALK_DIR="${SCRIPT_DIR}/../talk"
+TALK_DIR="$(cd "${SCRIPT_DIR}/../talk" && pwd)"
 PYTHON="${TALK_DIR}/.venv/bin/python"
 TALK_SCRIPT="${TALK_DIR}/talk.py"
 LOG_FILE="${SCRIPT_DIR}/log.txt"
@@ -14,10 +14,11 @@ QUESTION_WAV="/tmp/profile_question.wav"
 PROMPT_FILE="/tmp/profile_question.txt"
 
 # Defaults
-DEFAULT_PROMPT="Deskman, what is the time?"
-VOLUME_PERCENT=100
+DEFAULT_PROMPT="Deskman. What is the time?"
+VOLUME_PERCENT=80
 START_WAIT_SECONDS=60
 PLAY_TRIES=15
+HEAR_WAIT_SECONDS=10
 REPLY_WAIT_SECONDS=25
 
 # Prompt to ask
@@ -27,9 +28,6 @@ PROMPT="${DEFAULT_PROMPT}"
 main() {
     # Read command line arguments
     parse_args "$@"
-
-    # Explain the timing fields
-    print_legend
 
     # Ensure talk.py is running with timing enabled
     ensure_talk_timing
@@ -58,31 +56,18 @@ parse_args() {
     fi
 }
 
-# Print a short explanation of the timing fields
-print_legend() {
-    # Describe each step in the Timing line
-    echo "Timing fields:"
-    echo "  silero  — pause after your last word until Silero stops recording"
-    echo "  whisper — GPU speech-to-text transcription"
-    echo "  beep    — wake tone played after hearing the wake word"
-    echo "  gemma   — LLM reply generation, including any tool calls"
-    echo "  kokoro  — GPU text-to-speech for the first audio chunk"
-    echo "  total   — full time from last spoken word to first reply audio"
-    echo
-}
-
-# Ensure talk.py is running with --timing or TALK_TIMING set
+# Ensure talk.py is running with --timing or TALK_TIMING set and up to date
 ensure_talk_timing() {
-    # Check whether an existing talk.py already has timing enabled
+    # Check whether an existing talk.py has timing enabled and started after the last edit to talk.py
     local pid
     pid=$(pgrep -f "talk/talk.py" | head -n 1 || true)
-    if [[ -n "${pid}" ]] && talk_has_timing "${pid}"; then
+    if [[ -n "${pid}" ]] && talk_has_timing "${pid}" && talk_is_current "${pid}"; then
         return
     fi
 
-    # Warn and stop the old talk.py when it was started without timing
+    # Warn and stop the old talk.py when it needs a restart
     if [[ -n "${pid}" ]]; then
-        echo "Warning: talk.py pid ${pid} is running without --timing, restarting with --timing..."
+        echo "Restarting talk.py pid ${pid} with --timing..."
         kill -TERM "${pid}" 2>/dev/null || true
         while kill -0 "${pid}" 2>/dev/null; do
             sleep 0.2
@@ -120,6 +105,17 @@ talk_has_timing() {
         return 0
     fi
     return 1
+}
+
+# Return zero when the given talk.py pid started after talk.py was last modified
+talk_is_current() {
+    # Compare process age in seconds against file age in seconds
+    local pid="$1"
+    local process_age
+    local file_age
+    process_age=$(ps -o etimes= -p "${pid}" 2>/dev/null | tr -d ' ' || echo 0)
+    file_age=$(( $(date +%s) - $(stat -c %Y "${TALK_SCRIPT}") ))
+    [[ "${process_age}" -le "${file_age}" ]]
 }
 
 # Set the speaker volume to full
@@ -185,10 +181,25 @@ play_and_measure() {
         sleep 1
     done
 
-    # Wait for the total timing line or the end of the turn after Reply in the robot log
+    # Wait up to 10 seconds for the robot to hear the question
     local second
+    for second in $(seq 1 "${HEAR_WAIT_SECONDS}"); do
+        if tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^Command:"; then
+            break
+        fi
+        sleep 1
+    done
+
+    # Stop when the robot did not hear the question within the timeout
+    if ! tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^Command:"; then
+        tail -n +"${start_line}" "${LOG_FILE}" | grep -a "^Heard:" || true
+        echo "Warning: robot did not hear the question after ${HEAR_WAIT_SECONDS} seconds."
+        return
+    fi
+
+    # Wait for the total timing line or the end of the turn after Reply in the robot log
     for second in $(seq 1 "${REPLY_WAIT_SECONDS}"); do
-        if tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^  total "; then
+        if tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^  Total "; then
             break
         fi
         if tail -n +"${start_line}" "${LOG_FILE}" | sed -n '/^Reply:/,$p' | grep -a -qE "^(Listening\.\.\.|Idle\.)$"; then
@@ -197,11 +208,16 @@ play_and_measure() {
         sleep 1
     done
 
-    # Print the turn lines from the log
-    tail -n +"${start_line}" "${LOG_FILE}" | grep -a -E "Heard:|Command:|\[Tool\]|Reply:|Timing:|^  (silero|whisper|beep|gemma|kokoro|total) " || true
+    # Print the turn lines from the log with descriptions on the timing lines
+    tail -n +"${start_line}" "${LOG_FILE}" | grep -a -E "Heard:|Command:|\[Tool\]|Reply:|Timing:|^  (Silero|Whisper|Gemma|Kokoro|Total) " | sed \
+        -e 's/^\(  Silero .*sec\)$/\1  — Time from last word of question/' \
+        -e 's/^\(  Whisper .*sec\)$/\1  — Speech to text transcription time/' \
+        -e 's/^\(  Gemma .*sec\)$/\1  — LLM reply generation, including any tool calls/' \
+        -e 's/^\(  Kokoro .*sec\)$/\1  — Text to speech time for the first chunk of audio/' \
+        -e 's/^\(  Total .*sec\)$/\1  — Full time from last spoken word to first reply audio/' || true
 
     # Warn when no timing block was logged for the reply
-    if ! tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^  total "; then
+    if ! tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^  Total "; then
         echo "Warning: no Timing block found in ${LOG_FILE}, make sure talk.py was started with --timing or TALK_TIMING=1."
     fi
 }
