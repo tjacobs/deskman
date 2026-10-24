@@ -4,7 +4,6 @@
   "realtime": false,
   "litert": true,
   "timing": true,
-  "realtime_accent": "Speak with an American accent.",
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo"
 }
