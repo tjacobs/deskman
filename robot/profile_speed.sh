@@ -121,7 +121,7 @@ print_gemma_runtime() {
     fi
 }
 
-# Return zero when the given talk.py pid has --timing in cmdline or TALK_TIMING in environ
+# Return zero when the given talk.py pid has --timing in cmdline, TALK_TIMING in environ, or timing true in config.json
 talk_has_timing() {
     # Check command line arguments and environment for the process
     local pid="$1"
@@ -129,6 +129,9 @@ talk_has_timing() {
         return 0
     fi
     if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | grep -q "^TALK_TIMING=.\+"; then
+        return 0
+    fi
+    if grep -q '"timing": *true' "${TALK_DIR}/config.json" 2>/dev/null; then
         return 0
     fi
     return 1

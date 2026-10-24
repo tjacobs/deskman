@@ -160,6 +160,9 @@ TALK_MODE_NAMES = ('local', 'cloud', 'realtime')
 # Config the config.json key that serves the local model with LiteRT instead of llama.cpp, set litert true
 LITERT_CONFIG_NAME = 'litert'
 
+# Config the config.json key that prints step timing after each reply, the same as --timing
+TIMING_CONFIG_NAME = 'timing'
+
 # State
 TEST_MODE = False
 REPEAT_MODE = False
@@ -216,6 +219,9 @@ def main():
     LITERT_MODE = bool(utils.load_config({LITERT_CONFIG_NAME: False})[LITERT_CONFIG_NAME])
     if LITERT_MODE:
         print('LiteRT: True', flush=True)
+
+    # Print step timing when config.json asks, or when a flag or the environment did
+    TIMING_MODE = TIMING_MODE or bool(utils.load_config({TIMING_CONFIG_NAME: False})[TIMING_CONFIG_NAME])
 
     # Run the saved mode unless a flag picked one
     if not realtime_flag and not cloud_flag and not local_flag:
@@ -524,7 +530,7 @@ def print_usage():
     print('  --memory           print available memory while loading models')
     print('  --cold             skip local Gemma text model warm-up ask')
     print('  --prompt           print the full model context, messages, tools, and rendered prompt')
-    print('  --timing           print step timing after each spoken reply, or set TALK_TIMING=1')
+    print('  --timing           print step timing after each spoken reply, or set TALK_TIMING=1 or timing in config.json')
     print('  --cloud            ask OpenAI instead of the local llama-server, see config.json')
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
