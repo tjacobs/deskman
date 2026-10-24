@@ -22,7 +22,7 @@ REPLY_WAIT_SECONDS=30
 TURN_GAP_SECONDS=1
 
 # Lines to say
-LINES=()
+SPOKEN_LINES=()
 
 # Main
 main() {
@@ -40,7 +40,7 @@ main() {
 
     # Say each line and print what the robot heard and replied
     local line
-    for line in "${LINES[@]}"; do
+    for line in "${SPOKEN_LINES[@]}"; do
         play_and_report "${line}"
         sleep "${TURN_GAP_SECONDS}"
     done
@@ -58,9 +58,9 @@ parse_args() {
 
     # Use the custom lines when passed, otherwise the default order
     if [[ "$#" -gt 0 ]]; then
-        LINES=("$@")
+        SPOKEN_LINES=("$@")
     else
-        LINES=("${DEFAULT_LINES[@]}")
+        SPOKEN_LINES=("${DEFAULT_LINES[@]}")
     fi
 }
 
@@ -127,7 +127,7 @@ ensure_line_wavs() {
     local pairs=()
     local line
     local path
-    for line in "${LINES[@]}"; do
+    for line in "${SPOKEN_LINES[@]}"; do
         path=$(line_wav_path "${line}")
         if [[ ! -f "${path}" ]]; then
             pairs+=("${path}" "${WAKE_PHRASE} ${line}")
