@@ -78,6 +78,15 @@ ensure_talk_current() {
 
     # Restart the services, the robot spawns a fresh talk.py
     echo "Restarting services to load the latest talk code..."
+    # Stop the old talk.py first, the robot leaves one it did not start running
+    if [[ -n "${pid}" ]]; then
+        kill -TERM "${pid}" 2>/dev/null || true
+        while kill -0 "${pid}" 2>/dev/null; do
+            sleep 0.2
+        done
+    fi
+
+    # Restart the services, then read the log from this point
     local start_line
     start_line=$(( $(wc -l < "${LOG_FILE}") + 1 ))
     "${SCRIPT_DIR}/restart_services.sh"
