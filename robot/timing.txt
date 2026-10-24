@@ -1,9 +1,6 @@
 Cold cache:
 
 Heard: Deskman, what is the time?
-Listening...
-Command: what is the time
-[Tool] get_time {} -> 1:01 PM
 Reply: The current time is 1:01 PM.
 Timing:
   silero    1.54 sec
@@ -16,9 +13,6 @@ Timing:
 Warm cache:
 
 Heard: Deskman, what is the time?
-Listening...
-Command: what is the time
-[Tool] get_time {} -> 1:01 PM
 Reply: The current time is 1:01 PM.
 Timing:
   silero    1.54 sec
@@ -27,3 +21,16 @@ Timing:
   gemma     1.39 sec
   kokoro    0.52 sec
   total     3.78 sec
+
+After speedups:
+
+Asking: Deskman. What is the time?
+Reply: The current time is 2:22 PM.
+Timing:
+  Silero    0.77 sec  — Time from last word of question
+  Whisper   0.37 sec  — Speech to text transcription time
+  Gemma     1.32 sec  — LLM reply generation, including any tool calls
+  Kokoro    0.31 sec  — Text to speech time for the first chunk of audio
+  Total     2.77 sec  — Full time from last spoken word to first reply audio
+
+  
