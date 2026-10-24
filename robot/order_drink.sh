@@ -30,7 +30,7 @@ main() {
     # Read command line arguments
     parse_args "$@"
 
-    # Generate a spoken wav for each line that is missing one, before talk.py loads so low memory cannot kill it
+    # Generate a spoken wav for each line
     ensure_line_wavs
 
     # Ensure talk.py is running and has the drink ordering code

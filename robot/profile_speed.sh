@@ -29,7 +29,7 @@ main() {
     # Read command line arguments
     parse_args "$@"
 
-    # Generate the spoken question wav when missing or changed, before talk.py loads so low memory cannot kill it
+    # Generate the spoken question wav when missing or changed
     ensure_question_wav
 
     # Ensure talk.py is running with timing enabled
