@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TALK_DIR="${SCRIPT_DIR}/../talk"
 PYTHON="${TALK_DIR}/.venv/bin/python"
+TALK_SCRIPT="${TALK_DIR}/talk.py"
 LOG_FILE="${SCRIPT_DIR}/log.txt"
 QUESTION_WAV="/tmp/profile_question.wav"
 PROMPT_FILE="/tmp/profile_question.txt"
@@ -15,6 +16,7 @@ PROMPT_FILE="/tmp/profile_question.txt"
 # Defaults
 DEFAULT_PROMPT="Deskman, what is the time?"
 VOLUME_PERCENT=100
+START_WAIT_SECONDS=60
 PLAY_TRIES=15
 REPLY_WAIT_SECONDS=25
 
@@ -29,8 +31,8 @@ main() {
     # Explain the timing fields
     print_legend
 
-    # Wait for talk to finish starting
-    wait_for_talk
+    # Ensure talk.py is running with timing enabled
+    ensure_talk_timing
 
     # Set speaker volume to full so the microphone hears the question
     set_volume
@@ -69,13 +71,55 @@ print_legend() {
     echo
 }
 
-# Wait until talk.py is running and ready
-wait_for_talk() {
-    # Check that talk.py is running
-    if ! pgrep -f "talk/talk.py" >/dev/null; then
-        echo "Error: talk.py is not running"
-        exit 1
+# Ensure talk.py is running with --timing or TALK_TIMING set
+ensure_talk_timing() {
+    # Check whether an existing talk.py already has timing enabled
+    local pid
+    pid=$(pgrep -f "talk/talk.py" | head -n 1 || true)
+    if [[ -n "${pid}" ]] && talk_has_timing "${pid}"; then
+        return
     fi
+
+    # Warn and stop the old talk.py when it was started without timing
+    if [[ -n "${pid}" ]]; then
+        echo "Warning: talk.py pid ${pid} is running without --timing, restarting with --timing..."
+        kill -TERM "${pid}" 2>/dev/null || true
+        while kill -0 "${pid}" 2>/dev/null; do
+            sleep 0.2
+        done
+    else
+        echo "Warning: talk.py is not running, starting with --timing..."
+    fi
+
+    # Start talk.py with --timing appending to the robot log before robot.service respawns it
+    local start_line
+    start_line=$(wc -l < "${LOG_FILE}")
+    start_line=$((start_line + 1))
+    PYTHONUNBUFFERED=1 TALK_TIMING=1 nohup "${PYTHON}" "${TALK_SCRIPT}" --timing >> "${LOG_FILE}" 2>&1 &
+
+    # Wait for talk.py to finish loading models
+    echo "Waiting for talk.py to finish starting..."
+    local second
+    for second in $(seq 1 "${START_WAIT_SECONDS}"); do
+        if tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "Started in "; then
+            return
+        fi
+        sleep 1
+    done
+    echo "Warning: timed out waiting for talk.py startup line in ${LOG_FILE}"
+}
+
+# Return zero when the given talk.py pid has --timing in cmdline or TALK_TIMING in environ
+talk_has_timing() {
+    # Check command line arguments and environment for the process
+    local pid="$1"
+    if tr '\0' '\n' < "/proc/${pid}/cmdline" 2>/dev/null | grep -qx -- "--timing"; then
+        return 0
+    fi
+    if tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null | grep -q "^TALK_TIMING=.\+"; then
+        return 0
+    fi
+    return 1
 }
 
 # Set the speaker volume to full
@@ -141,10 +185,13 @@ play_and_measure() {
         sleep 1
     done
 
-    # Wait for the total timing line to land in the robot log
+    # Wait for the total timing line or the end of the turn after Reply in the robot log
     local second
     for second in $(seq 1 "${REPLY_WAIT_SECONDS}"); do
         if tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^  total "; then
+            break
+        fi
+        if tail -n +"${start_line}" "${LOG_FILE}" | sed -n '/^Reply:/,$p' | grep -a -qE "^(Listening\.\.\.|Idle\.)$"; then
             break
         fi
         sleep 1
@@ -152,6 +199,11 @@ play_and_measure() {
 
     # Print the turn lines from the log
     tail -n +"${start_line}" "${LOG_FILE}" | grep -a -E "Heard:|Command:|\[Tool\]|Reply:|Timing:|^  (silero|whisper|beep|gemma|kokoro|total) " || true
+
+    # Warn when no timing block was logged for the reply
+    if ! tail -n +"${start_line}" "${LOG_FILE}" | grep -a -q "^  total "; then
+        echo "Warning: no Timing block found in ${LOG_FILE}, make sure talk.py was started with --timing or TALK_TIMING=1."
+    fi
 }
 
 # Main
