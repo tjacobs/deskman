@@ -33,4 +33,19 @@ Timing:
   Kokoro    0.31 sec  — Text to speech time for the first chunk of audio
   Total     2.77 sec  — Full time from last spoken word to first reply audio
 
-  
+Gemma:
+Almost all the time is token generation, at 25 tokens/sec on the Orin.
+It runs two inference calls to get the time.
+Together that is about 21 tokens, which is about 1s of the ~1.3s Gemma step.
+
+After two gemma inference calls for time changed to one call:
+
+Asking: Deskman. What is the time?
+Reply: The current time is 2:32 PM.
+Timing:
+  Silero    0.77 sec  — Time from last word of question
+  Whisper   0.43 sec  — Speech to text transcription time
+  Gemma     0.69 sec  — LLM reply generation, including any tool calls
+  Kokoro    0.35 sec  — Text to speech time for the first chunk of audio
+  Total     2.24 sec  — Full time from last spoken word to first reply audio
+
