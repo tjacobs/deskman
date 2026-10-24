@@ -1,0 +1,29 @@
+Cold cache:
+
+Heard: Deskman, what is the time?
+Listening...
+Command: what is the time
+[Tool] get_time {} -> 1:01 PM
+Reply: The current time is 1:01 PM.
+Timing:
+  silero    1.54 sec
+  whisper   0.41 sec
+  beep      0.42 sec
+  gemma     1.41 sec
+  kokoro    1.17 sec
+  total     4.95 sec
+
+Warm cache:
+
+Heard: Deskman, what is the time?
+Listening...
+Command: what is the time
+[Tool] get_time {} -> 1:01 PM
+Reply: The current time is 1:01 PM.
+Timing:
+  silero    1.54 sec
+  whisper   0.33 sec
+  beep      0.00 sec
+  gemma     1.39 sec
+  kokoro    0.52 sec
+  total     3.78 sec

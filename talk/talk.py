@@ -78,7 +78,7 @@ VAD_FRAME_SAMPLES = 512
 VAD_BLOCK_FRAMES = 8
 VAD_THRESHOLD = 0.5
 PRE_ROLL_SECONDS = 0.5
-SILENCE_END_SECONDS = 1.5
+SILENCE_END_SECONDS = 0.8
 MIN_SPEECH_SECONDS = 0.3
 MAX_UTTERANCE_SECONDS = 15
 
@@ -817,19 +817,30 @@ def load_speech_models():
 
 # Load whisper model on gpu when available
 def load_whisper_model():
+    # Load whisper
     print('Loading whisper...', flush=True)
     warn_if_low_memory_for('whisper', WHISPER_EXPECTED_GB)
     print_memory('before whisper')
     load_start = time.perf_counter()
     try:
+        # Load the model on GPU when available
         import ctranslate2
         from faster_whisper import WhisperModel
         device = 'cuda' if ctranslate2.get_cuda_device_count() > 0 else 'cpu'
         compute_type = 'float16' if device == 'cuda' else 'float32'
         model = load_cached_whisper_model(WhisperModel, device, compute_type)
+
+        # Warm up whisper: transcribe one second of silence so the first utterance does not wait on GPU setup
+        if not COLD_MODE:
+            segments, _ = model.transcribe(np.zeros(utils.SAMPLE_RATE, dtype=np.float32), language='en')
+            for _ in segments:
+                pass
+    # Error
     except Exception as error:
         print_error('whisper load failed', error)
         raise
+
+    # Print success
     print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec', flush=True)
     print_memory('after whisper')
     return model
@@ -875,9 +886,18 @@ def load_kokoro_pipeline():
         kokoro_model = kokoro.KModel(repo_id=utils.REPO_ID, disable_complex=True).to(device).eval()
         pipeline = get_kokoro_pipeline(VOICE[0])
         pipeline.load_voice(VOICE)
+
+        # Warm up Kokoro: synthesize a short greeting silently so the first reply does not wait on GPU setup
+        if not COLD_MODE:
+            for _ in pipeline(GREETING, voice=VOICE, speed=SPEECH_SPEED):
+                pass
+            torch.cuda.empty_cache()
+    # Error
     except Exception as error:
         print_error('kokoro load failed', error)
         raise
+    
+    # Print success
     print(f'Loaded on {device_label(device)} in {time.perf_counter() - load_start:.1f} sec, voice {VOICE}', flush=True)
     print_memory('after kokoro')
     return pipeline
@@ -1012,9 +1032,10 @@ def hear_wake_command(whisper_model, kokoro_pipeline, listener):
             return command
         return hear_command(whisper_model, kokoro_pipeline, listener, '')
 
-# Beep and show listening after the wake word
+# Beep in the background and show listening after the wake word
 def acknowledge_wake(listener):
-    play_tone(listener, ensure_tone(WAKE_WAV, WAKE_TONE_NOTES))
+    wav_path = ensure_tone(WAKE_WAV, WAKE_TONE_NOTES)
+    threading.Thread(target=play_tone, args=(listener, wav_path), daemon=True).start()
     set_robot_listening(True)
     print(TALK_LISTENING, flush=True)
 
@@ -1425,9 +1446,10 @@ def replay(listener, audio):
 
 # Play a tone, mic muted so it does not hear it
 def play_tone(listener, wav_path):
-    listener.mute()
-    play_wav(wav_path)
-    listener.unmute()
+    with speak_lock:
+        listener.mute()
+        play_wav(wav_path)
+        listener.unmute()
 
 # Build a soft tone from its notes once, wake, error, and chime each keep their own file in audio
 def ensure_tone(file_name, notes):
