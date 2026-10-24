@@ -107,14 +107,18 @@ talk_has_timing() {
     return 1
 }
 
-# Return zero when the given talk.py pid started after talk.py was last modified
+# Return zero when the given talk.py pid started after any talk Python file was last modified
 talk_is_current() {
-    # Compare process age in seconds against file age in seconds
+    # Find the newest edit time across the talk Python files
     local pid="$1"
     local process_age
+    local newest_edit
     local file_age
+    newest_edit=$(find "${TALK_DIR}" -name '*.py' -not -path '*/.venv/*' -not -path '*/llama.cpp/*' -printf '%T@\n' | sort -n | tail -n 1)
+
+    # Compare process age in seconds against file age in seconds
     process_age=$(ps -o etimes= -p "${pid}" 2>/dev/null | tr -d ' ' || echo 0)
-    file_age=$(( $(date +%s) - $(stat -c %Y "${TALK_SCRIPT}") ))
+    file_age=$(( $(date +%s) - ${newest_edit%.*} ))
     [[ "${process_age}" -le "${file_age}" ]]
 }
 

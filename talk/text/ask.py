@@ -411,6 +411,11 @@ def ask_model(prompt):
                 reply = volume.confirm_volume_set() or result
                 remember_turn(messages, reply)
                 return reply
+            # Say the time, date, or day with fixed wording, skipping a second model call
+            if tool_name in dates.TOOL_REPLIES and len(tool_calls) == 1:
+                reply = dates.TOOL_REPLIES[tool_name].format(result)
+                remember_turn(messages, reply)
+                return reply
             if tool_name == "restart":
                 remember_turn(messages, result)
                 return result

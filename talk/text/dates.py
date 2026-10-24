@@ -13,6 +13,7 @@ import maths
 
 # Config
 DATE_MATH_RETRY_PROMPT = "Do not guess. Call calculate with a date expression using date and today, for example (date(2026, 8, 15) - today()).days, then answer using only the tool result. Never pass a bare number."
+TOOL_REPLIES = {"get_time": "The current time is {}.", "get_date": "Today is {}.", "get_day": "Today is {}."}
 MONTH_NAMES = {
     "january": 1, "jan": 1,
     "february": 2, "feb": 2,
