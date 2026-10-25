@@ -42,6 +42,7 @@ QUESTION_PATTERN = re.compile(r"^(do you|have you|is there|are there|what|which|
 APP_PATTERN = re.compile(r"\b(drinks?\s+(ordering|order|app\w*|mode)|drinkman)\b")
 START_APP_PATTERN = re.compile(r"\b(drinks?|drinkman)\b")
 MISHEARD_START_PATTERN = re.compile(r"\bthe drinks\s+(out|at|up|ap|apps)\b")
+ASK_FOR_DRINK_PATTERN = re.compile(r"\b(want|like|need|get|have|give)\b.*\b(a|some|one|any)\s+drinks?\b|\bdrinks?\s+please\b")
 START_PATTERN = re.compile(r"\b(start|begin|open|launch|run|enable|activate|turn on|switch to)\b")
 STOP_WORDS = r"stop|end|close|leave|disable|cancel|turn\b.*\boff|switch\b.*\boff"
 STOP_PATTERN = re.compile(r"\b(" + STOP_WORDS + r")\b")
@@ -142,6 +143,10 @@ def needs_start(prompt):
         return True
     if ordering_on:
         return False
+
+    # Asking for a drink starts it too, unless it was a no or a question
+    if ASK_FOR_DRINK_PATTERN.search(text) and not is_declined(prompt):
+        return True
     return bool((START_APP_PATTERN.search(text) and START_PATTERN.search(text)) or MISHEARD_START_PATTERN.search(text))
 
 # Return true when the person asked to stop drink ordering, a stop word or the app name alone is enough while ordering is on
