@@ -24,6 +24,11 @@ static const int EMPTY_DETECT_GAP_MS = 1000 / EMPTY_DETECT_FPS;
 // How long to wait when the recording has not sent its next frame yet
 static const int FRAME_WAIT_MS = 10;
 
+// Before a photo read this many frames flat out to empty the old ones the camera queued, and wait this long for that
+static const int PHOTO_FLUSH_FRAMES = 8;
+static const int PHOTO_WAIT_MS = 3000;
+static const int PHOTO_POLL_MS = 10;
+
 // Pace the preview, reading the camera flat out cooks the Pi for frames nobody sees
 static const int PREVIEW_FPS = 30;
 static const int PREVIEW_GAP_MS = 1000 / PREVIEW_FPS;
@@ -133,6 +138,13 @@ void FaceTracker::trackingThreadFunction() {
                 break;
             }
 
+            // Keep a clean copy of the frame only while a photo is waiting for one
+            if (photoFlushFrames.load() > 0) {
+                unique_lock<mutex> photoLock(photoMutex);
+                frame.copyTo(photoFrame);
+                photoLock.unlock();
+            }
+
             // Look often while a face is in view, and rarely in an empty room
             unique_lock<mutex> gapLock(faceMutex);
             int detectGap = lastFaces.empty() ? EMPTY_DETECT_GAP_MS : FACE_DETECT_GAP_MS;
@@ -173,6 +185,12 @@ void FaceTracker::trackingThreadFunction() {
                 frame.copyTo(currentFrame);
                 hasNewFrame = true;
                 frameLock.unlock();
+            }
+
+            // Read straight on while a photo waits for fresh frames
+            if (photoFlushFrames.load() > 0) {
+                photoFlushFrames--;
+                continue;
             }
 
             // Hold the loop to the preview rate, with nothing on screen only the detector needs frames
@@ -403,6 +421,37 @@ void FaceTracker::stopTracking() {
     if (detectThread.joinable())
         detectThread.join();
     tracking = false;
+}
+
+// Write the newest camera photo to a file, through a temporary name so a reader never sees half a file
+bool FaceTracker::saveFrame(const string& path) {
+    // Nothing to save when the camera is not running
+    if (!tracking.load())
+        return false;
+
+    // Drop any old photo, then let the camera thread read past the old frames keeping the newest
+    unique_lock<mutex> photoLock(photoMutex);
+    photoFrame.release();
+    photoLock.unlock();
+    photoFlushFrames = PHOTO_FLUSH_FRAMES;
+    for (int waited = 0; photoFlushFrames.load() > 0 && waited < PHOTO_WAIT_MS; waited += PHOTO_POLL_MS)
+        this_thread::sleep_for(chrono::milliseconds(PHOTO_POLL_MS));
+    photoFlushFrames = 0;
+
+    // Take the photo out so the camera thread is not held up by the disk, and keep nothing behind
+    cv::Mat photo;
+    photoLock.lock();
+    photo = photoFrame;
+    photoFrame = cv::Mat();
+    photoLock.unlock();
+    if (photo.empty())
+        return false;
+
+    // Write it, then move it into place
+    string temporaryPath = path + ".tmp.jpg";
+    if (!cv::imwrite(temporaryPath, photo))
+        return false;
+    return rename(temporaryPath.c_str(), path.c_str()) == 0;
 }
 
 // Stop tracking and free the preview texture

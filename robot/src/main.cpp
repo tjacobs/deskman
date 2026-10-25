@@ -119,6 +119,8 @@ static const char* TALK_SCRIPT_FROM_REPO = "talk/talk.py";
 static const char* TALK_CONFIG_FROM_REPO = "talk/config.json";
 static const char* AUDIO_TEST_FROM_REPO = "talk/tools/test_audio.py";
 static const char* RECORDINGS_FROM_REPO = "robot/recordings";
+static const char* PHOTOS_FROM_REPO = "robot/photos";
+static const char* CAMERA_PHOTO_FILE = "camera_photo.jpg";
 static const char* JETSON_OUTPUT = "DP-1";
 static const char* JETSON_TOUCH = "WaveShare WS170120";
 static const char* PI_OUTPUT = "DSI-2";
@@ -215,6 +217,7 @@ static void switch_talk_mode(int mode);
 static bool start_talk_process();
 static pid_t find_talk_pid();
 static string repo_path(const char* relative);
+static string save_camera_photo(FaceTracker& faceTracker);
 static void apply_call_handoff(FaceTracker& faceTracker);
 static void reap_talk_process();
 static void restart_talk_when_due();
@@ -296,6 +299,9 @@ int main(int argc, char **argv) {
 
     // Open the camera before talk, so a missing one fails in the startup log
     FaceTracker faceTracker(show_camera, use_camera);
+
+    // Let programs on the socket ask for a camera photo
+    set_photo_handler([&faceTracker]() { return save_camera_photo(faceTracker); });
     if (use_camera && faceTracker.isCameraAvailable()) {
         faceTracker.startTracking();
 
@@ -1383,6 +1389,18 @@ static void restart_talk_when_due() {
     }
 }
 
+// Save the newest camera photo in the photos folder and return its path, empty when there is none
+static string save_camera_photo(FaceTracker& faceTracker) {
+    // Make the folder on first use
+    string folder = repo_path(PHOTOS_FROM_REPO);
+    error_code error;
+    filesystem::create_directories(folder, error);
+
+    // Save the photo over the last one
+    string path = folder + "/" + CAMERA_PHOTO_FILE;
+    return faceTracker.saveFrame(path) ? path : "";
+}
+
 // Stop child talk, sockets, tracking, then drop torque
 static void stop_robot(FaceTracker& faceTracker) {
     g_quit = true;
@@ -1390,6 +1408,7 @@ static void stop_robot(FaceTracker& faceTracker) {
     stop_recording();
     stop_playback();
     stop_talk_process();
+    set_photo_handler(nullptr);
     stop_interface();
     stop_servo_position_log();
     stop_servo_push_follow();

@@ -15,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -51,6 +52,9 @@ public:
     // Top edge of the preview on screen, negative before the first frame
     int previewTop() const;
 
+    // Save the newest camera photo as a JPEG, false when there is no photo yet
+    bool saveFrame(const string& path);
+
 private:
     // Worker thread bodies, one grabs frames and one looks for faces in them
     void trackingThreadFunction();
@@ -85,6 +89,13 @@ private:
     atomic<bool> tracking{false};
     atomic<bool> shouldQuit{false};
     bool cameraAvailable{false};
+
+    // Clean camera photo with no face boxes drawn on it, only kept while a photo is asked for
+    mutex photoMutex;
+    cv::Mat photoFrame;
+
+    // Frames still to read flat out before a photo, the camera holds old ones when it is read slowly
+    atomic<int> photoFlushFrames{0};
 
     // Latest frame, and the texture the preview is drawn from
     mutex frameMutex;

@@ -229,6 +229,10 @@ static atomic<bool> g_talk_restart_request{false};
 // Whether demo mode is on, talk stays listening and the head looks around
 static atomic<bool> g_demo_on{false};
 
+// Who saves a camera photo when a program asks for one
+static function<string()> g_photo_handler;
+static mutex g_photo_mutex;
+
 // Whether the drinks look is on, the bow tie and colourful background while drinks are ordered
 static atomic<bool> g_drinks_on{false};
 
@@ -583,6 +587,16 @@ static string handle_request(const string& line, int from_fd) {
             int warning_seconds = request.value("seconds", 0);
             g_warning_expires = warning_seconds > 0 ? steady_clock::now() + seconds(warning_seconds) : steady_clock::time_point{};
             reply = {{"ok", true}};
+
+        // Save the newest camera photo and say where it is
+        } else if (command == "camera_photo") {
+            string path;
+            {
+                lock_guard<mutex> lock(g_photo_mutex);
+                if (g_photo_handler)
+                    path = g_photo_handler();
+            }
+            reply = path.empty() ? json{{"ok", false}, {"error", "no camera photo"}} : json{{"ok", true}, {"path", path}};
 
         // Turn the drinks look on or off, with no value it only reports
         } else if (command == "drinks") {
@@ -1551,6 +1565,12 @@ static void set_demo(bool on) {
 // True while demo mode is on
 bool demo_on() {
     return g_demo_on.load();
+}
+
+// Set who saves the camera photo, called with an empty handler when the camera goes away
+void set_photo_handler(function<string()> handler) {
+    lock_guard<mutex> lock(g_photo_mutex);
+    g_photo_handler = handler;
 }
 
 // True while the drinks look is on

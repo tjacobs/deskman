@@ -13,6 +13,8 @@ import time
 LOOK_DEFAULT_DEGREES = 90
 HAT_UP_DEGREES = -40
 HAT_DOWN_DEGREES = 90
+HAT_OPEN_TOLERANCE_DEGREES = 5
+PHOTO_SETTLE_SECONDS = 1.5
 CONNECT_TIMEOUT_SEC = 2.0
 READ_TIMEOUT_SEC = 5.0
 PUSH_RETRY_SECONDS = 1.0
@@ -139,6 +141,27 @@ def battery_reading():
 # Tell the robot whether talk is listening, so it can track a face
 def set_listen(open):
     send_command({"command": "listen", "open": bool(open)})
+
+# Open the hat so it is out of the camera's view, take a camera photo, then put the hat back, and return the file saved
+def camera_photo():
+    # Open the hat when it is known to be closed, and give the camera time to see without it
+    hat = send_command({"command": "get"}).get("hat")
+    hat_was_closed = hat is not None and abs(hat - HAT_UP_DEGREES) > HAT_OPEN_TOLERANCE_DEGREES
+    if hat_was_closed:
+        send_command({"command": "move", "hat": HAT_UP_DEGREES})
+        time.sleep(PHOTO_SETTLE_SECONDS)
+
+    # Take the photo, and put the hat back even when that fails
+    try:
+        reply = send_command({"command": "camera_photo"})
+    finally:
+        if hat_was_closed:
+            send_command({"command": "move", "hat": hat})
+
+    # Fail if the robot could not save a photo
+    if not reply.get("ok"):
+        raise RuntimeError(reply.get("error", "unknown error"))
+    return reply["path"]
 
 # Start or stop recording a video on the robot
 def set_recording(start):

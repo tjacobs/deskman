@@ -5,6 +5,7 @@
 #include <SDL2/SDL_ttf.h>
 
 // System
+#include <functional>
 #include <string>
 
 // Namespace
@@ -76,6 +77,9 @@ bool call_open();
 
 // True while demo mode is on, talk stays listening and the head looks around
 bool demo_on();
+
+// Give the interface a way to save the newest camera photo, it returns the file saved or empty when there is none, and pass an empty handler when there is no camera to ask
+void set_photo_handler(function<string()> handler);
 
 // True while the drinks look is on, and a way to turn it off when talk goes away
 bool drinks_on();
