@@ -3,7 +3,7 @@
   "cloud": false,
   "realtime": false,
   "litert": true,
-  "timing": true,
+  "timing": false,
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo"
 }

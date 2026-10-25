@@ -528,6 +528,12 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         hide_cursor();
         SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR.r, BACKGROUND_COLOR.g, BACKGROUND_COLOR.b, BACKGROUND_COLOR.a);
         SDL_RenderClear(renderer);
+
+        // Draw the drinks background behind the face while drinks are ordered, with the bow tie on
+        bool drinks = drinks_on();
+        show_party(drinks);
+        if (drinks)
+            draw_party_background();
         vectorRenderer.render(renderer);
 
         // Warn about a slow fan, a hot CPU, or anything else sent to the face
@@ -1190,7 +1196,8 @@ static bool start_talk_process() {
         _exit(TALK_EXEC_FAILED);
     }
 
-    // Parent, remember the child so it can be reaped and stopped
+    // Parent, a new talk starts with the drinks look off, then remember the child so it can be reaped and stopped
+    set_drinks_on(false);
     g_talk_pid = pid;
     g_talk_started_at = steady_clock::now();
     cout << "Starting talk.py..." << endl;
@@ -1343,6 +1350,9 @@ static void reap_talk_process() {
         cout << "talk.py exited" << endl;
     }
     g_talk_pid = -1;
+
+    // The drinks look ends with talk
+    set_drinks_on(false);
 
     // Count quick exits in a row, and stop retrying once talk keeps failing
     if (g_quit || g_no_talk)

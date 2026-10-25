@@ -22,6 +22,9 @@ MODEL_NAME = 'gemma-4-E2B-it.litertlm'
 MODEL_PATH = os.path.expanduser('~/.litert-lm/models/gemma-4-E2B-it.litertlm/model.litertlm')
 CONTEXT_TOKENS = 4096
 
+# Config how the runtime is named when the robot is asked what it runs on
+RUNTIME_NAME = 'LiteRT runtime from Google'
+
 # Config when the cached conversation is rebuilt, a long one leaves no room for the reply
 REBUILD_TOKENS = 3000
 
@@ -85,15 +88,17 @@ def serve(host, port):
     print(f'API: http://{host}:{port}/v1', flush=True)
     server.serve_forever()
 
-# Handle the three requests talk makes, the model list, health, and chat
+# Handle the requests talk makes, the model list, model properties, health, and chat
 class RequestHandler(http.server.BaseHTTPRequestHandler):
-    # Answer model list and health checks
+    # Answer model list, model properties, and health checks
     def do_GET(self):
         # Say the model is ready, the model list and health both answer once it loads
         if self.path == '/health':
             self.send_json(200, {'status': 'ok'})
         elif self.path == '/v1/models':
-            self.send_json(200, {'object': 'list', 'data': [{'id': MODEL_NAME, 'object': 'model'}]})
+            self.send_json(200, {'object': 'list', 'data': [{'id': MODEL_NAME, 'object': 'model', 'meta': {'size': os.path.getsize(MODEL_PATH)}}]})
+        elif self.path == '/props':
+            self.send_json(200, {'model_alias': MODEL_NAME, 'model_path': MODEL_PATH, 'runtime': RUNTIME_NAME, 'default_generation_settings': {'n_ctx': CONTEXT_TOKENS}})
         else:
             self.send_json(404, {'error': {'message': 'not found'}})
 

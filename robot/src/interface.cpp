@@ -229,6 +229,9 @@ static atomic<bool> g_talk_restart_request{false};
 // Whether demo mode is on, talk stays listening and the head looks around
 static atomic<bool> g_demo_on{false};
 
+// Whether the drinks look is on, the bow tie and colourful background while drinks are ordered
+static atomic<bool> g_drinks_on{false};
+
 // The recordings list, where the files are and which row asked to be deleted
 static string g_recordings_path;
 static atomic<bool> g_video_list_open{false};
@@ -580,6 +583,12 @@ static string handle_request(const string& line, int from_fd) {
             int warning_seconds = request.value("seconds", 0);
             g_warning_expires = warning_seconds > 0 ? steady_clock::now() + seconds(warning_seconds) : steady_clock::time_point{};
             reply = {{"ok", true}};
+
+        // Turn the drinks look on or off, with no value it only reports
+        } else if (command == "drinks") {
+            if (request.contains("on"))
+                g_drinks_on = request.value("on", false);
+            reply = {{"ok", true}, {"on", g_drinks_on.load()}};
 
         // Say whether demo mode is on, for a talk that started after the tap
         } else if (command == "demo") {
@@ -1542,6 +1551,16 @@ static void set_demo(bool on) {
 // True while demo mode is on
 bool demo_on() {
     return g_demo_on.load();
+}
+
+// True while the drinks look is on
+bool drinks_on() {
+    return g_drinks_on.load();
+}
+
+// Turn the drinks look on or off from inside the robot
+void set_drinks_on(bool on) {
+    g_drinks_on = on;
 }
 
 // Tell talk to stop what it is doing and go back to ready

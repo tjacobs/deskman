@@ -113,6 +113,23 @@ private:
     void buildTexture(SDL_Renderer* renderer);
 };
 
+// Bow tie shape, two wings and a knot drawn as flat coloured triangles
+class BowTie : public VectorShape {
+public:
+    // Half the width and height of each wing, and of the knot, and the knot colour, the wings use the fill colour
+    float wingHalfWidth, wingHalfHeight, knotHalfWidth, knotHalfHeight;
+    SDL_Color knotColor;
+
+    // Build a bow tie of the given sizes and colours
+    BowTie(float wingHalfWidth, float wingHalfHeight, float knotHalfWidth, float knotHalfHeight, SDL_Color wingColor, SDL_Color knotColor)
+        : wingHalfWidth(wingHalfWidth), wingHalfHeight(wingHalfHeight), knotHalfWidth(knotHalfWidth), knotHalfHeight(knotHalfHeight), knotColor(knotColor) {
+        this->fillColor = wingColor;
+    }
+
+    // Draw the wings and knot through the face rotation
+    void render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) override;
+};
+
 // Vector face class to manage all face elements
 class VectorFace {
 private:

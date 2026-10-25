@@ -19,6 +19,9 @@ typedef struct {
     Ellipse* rightEye;
     Ellipse* mouth;
 
+    // Bow tie shown while the party look is on
+    BowTie* bowTie;
+
     // Blink animation state
     float time;
     float blinkTimer;
@@ -51,6 +54,12 @@ void update_face(Face* face, int eye_squint, int smile_curve);
 
 // Show or hide the mouth
 void show_mouth(bool show);
+
+// Show or hide the bow tie, it comes with the party look
+void show_party(bool show);
+
+// Paint the colourful party background with confetti, before the face is drawn
+void draw_party_background();
 
 // Free the font on the way out
 void cleanup_face(Face* face);

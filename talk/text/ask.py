@@ -585,6 +585,7 @@ def answer_drinks(prompt):
     # Turn the mode on with a fresh conversation that already asked for the drink
     if drinks.needs_start(prompt):
         drinks.set_on(True)
+        drinks.set_face(True)
         conversation_history.clear()
         remember_exchange(drinks.START_EXCHANGE, drinks.GREETING)
         return drinks.GREETING
@@ -592,6 +593,7 @@ def answer_drinks(prompt):
     # Turn the mode off and go back to Deskman with a fresh conversation
     if drinks.needs_stop(prompt) and drinks.is_on():
         drinks.set_on(False)
+        drinks.set_face(False)
         conversation_history.clear()
         return drinks.STOP_MESSAGE
 
@@ -600,24 +602,30 @@ def answer_drinks(prompt):
         return None
 
     # Take the order with the model, after rewriting misheard drink names
-    messages = build_messages(drinks.fix_heard(prompt))
+    heard = drinks.fix_heard(prompt)
+    messages = build_messages(heard)
     message = chat_completion(messages)
     reply = (message.get("content") or "").strip() or "Okay."
+    spoken = reply
+
+    # A bare drink name is an order unless the person said no or asked a question, then hand it over, otherwise ask again
+    if drinks.is_drink_name(reply):
+        if drinks.is_declined(heard):
+            reply = drinks.GREETING
+            spoken = reply
+        else:
+            drinks.set_dispense(reply)
+            spoken = drinks.DISPENSE_MESSAGE.format(drink=drinks.clean_words(reply))
     remember_turn(messages, reply)
+    return spoken
 
-    # Hand over the drink when the reply names one, saying so instead of repeating the name
-    if drinks.is_order(reply):
-        drinks.set_dispense(True)
-        return drinks.DISPENSE_MESSAGE
-    return reply
-
-# Return true once for each drink order waiting to be handed over
+# Return the drink name once for each order waiting to be handed over, empty when none
 def take_dispense():
     return drinks.take_dispense()
 
 # Hand over the drink, saying the handover line with the given say function
-def dispense(say):
-    drinks.dispense(say)
+def dispense(say, drink):
+    drinks.dispense(say, drink)
 
 # Build the chat messages for one ask
 def build_messages(prompt):

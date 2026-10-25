@@ -18,7 +18,7 @@ source "${TALK_DIR}/tools/talk_idle.sh"
 QUESTION_VOICE="am_adam"
 WAKE_PHRASE="Deskman,"
 DEFAULT_LINES=("start drink ordering app." "What drinks do you have?" "I'll take a lime please." "Actually do you have any coke?" "I'll have blackberry please." "Stop drink ordering.")
-VOLUME_PERCENT=80
+VOLUME_PERCENT=50
 START_WAIT_SECONDS=60
 PLAY_TRIES=15
 HEAR_WAIT_SECONDS=10

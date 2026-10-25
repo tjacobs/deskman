@@ -38,6 +38,27 @@ void Ellipse::render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec
     SDL_RenderGeometry(renderer, texture, vertices, (MESH_COLUMNS + 1) * (MESH_ROWS + 1), indices, count);
 }
 
+// Draw the two wings and the knot as triangles, each point bent through the face rotation
+void BowTie::render(SDL_Renderer* renderer, const Vec3& facePosition, const Vec3& faceRotation) {
+    // Corners on the face plane, three for each wing then six for the knot
+    const Vec3 corners[12] = {
+        Vec3(-wingHalfWidth, -wingHalfHeight), Vec3(-wingHalfWidth, wingHalfHeight), Vec3(0, 0),
+        Vec3(wingHalfWidth, -wingHalfHeight), Vec3(wingHalfWidth, wingHalfHeight), Vec3(0, 0),
+        Vec3(-knotHalfWidth, -knotHalfHeight), Vec3(-knotHalfWidth, knotHalfHeight), Vec3(knotHalfWidth, -knotHalfHeight),
+        Vec3(knotHalfWidth, -knotHalfHeight), Vec3(-knotHalfWidth, knotHalfHeight), Vec3(knotHalfWidth, knotHalfHeight),
+    };
+
+    // Project every corner, the wings take the fill colour and the knot its own
+    SDL_Vertex vertices[12];
+    for (int index = 0; index < 12; index++) {
+        SDL_Color color = index < 6 ? fillColor : knotColor;
+        vertices[index] = {Projection::project(corners[index] + localPosition + facePosition, faceRotation), color, {0, 0}};
+    }
+
+    // Hand the triangles to the graphics card in one draw
+    SDL_RenderGeometry(renderer, nullptr, vertices, 12, nullptr, 0);
+}
+
 // Paint a white ellipse with a soft edge, and the cutout taken out of it
 void Ellipse::buildTexture(SDL_Renderer* renderer) {
     // Size the texture from the ellipse and the pixels per face unit

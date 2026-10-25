@@ -17,6 +17,7 @@ import client
 # Config
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODELS_DIR = os.path.join(SCRIPT_DIR, "models")
+LLAMA_RUNTIME_NAME = "llama.cpp runtime"
 SYSTEM_RETRY_PROMPT = "Do not guess. Call get_system_info now, then answer using only the tool result."
 
 # Tools the local model can call for system info
@@ -25,7 +26,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_system_info",
-            "description": "Get computer and model info, uname, hardware like Jetson or Raspberry Pi, LLM model name, parameter count, quantization, context size, and model file date. Required for questions about the computer, hardware, or which model is running.",
+            "description": "Get computer and model info, uname, hardware like Jetson or Raspberry Pi, LLM model name, runtime like llama.cpp or LiteRT from Google, parameter count, quantization, context size, and model file date. Required for questions about the computer, hardware, or which model is running.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -53,6 +54,8 @@ def needs_system_info(prompt):
     if re.search(r"\b(what'?s|what is)\s+your\s+model\b", text):
         return True
     if re.search(r"\b(1b|2b|e2b|parameter|quantiz|gguf)\b", text):
+        return True
+    if re.search(r"\b(your|which)\s+runtime\b|\b(litert|llama\W*cpp)\b", text):
         return True
     if re.search(r"\bmodel\s+(name|size|info|file|stats?)\b", text):
         return True
@@ -91,6 +94,11 @@ def run_get_system_info(arguments=None):
         lines.extend(model_info)
     else:
         lines.append("LLM model: unavailable, server not responding.")
+
+    # Put the sentence to say first, so a small model says the hardware, model, and runtime together
+    fields = dict(line.split(": ", 1) for line in lines if ": " in line)
+    model_name = os.path.splitext(fields.get("LLM model", "unknown"))[0]
+    lines.insert(0, f"Say: I am running on {fields.get('Hardware', 'unknown hardware')}, using the {model_name} model on the {fields.get('Runtime', 'unknown runtime')}.")
 
     return "\n".join(lines)
 
@@ -174,6 +182,9 @@ def read_model_info():
     model_ftype = props_payload.get("model_ftype") or ""
     if alias:
         lines.append(f"LLM model: {alias}")
+
+    # Runtime from props, llama-server does not name itself so it is llama.cpp
+    lines.append(f"Runtime: {props_payload.get('runtime') or LLAMA_RUNTIME_NAME}")
     if model_path:
         lines.append(f"Model file: {os.path.basename(model_path)}")
     if model_ftype:

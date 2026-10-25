@@ -39,6 +39,32 @@ static const float MOUTH_CUTOUT_HEIGHT = 180.0f;
 static const SDL_Color EYE_FILL = {25, 25, 25, 255};
 static const SDL_Color MOUTH_COLOR = {0, 0, 0, 255};
 
+// Bow tie sits below the mouth, a dark tie with a lighter knot
+static const float BOW_TIE_OFFSET_Y = 350.0f;
+static const float BOW_TIE_WING_HALF_WIDTH = 90.0f;
+static const float BOW_TIE_WING_HALF_HEIGHT = 40.0f;
+static const float BOW_TIE_KNOT_HALF_WIDTH = 16.0f;
+static const float BOW_TIE_KNOT_HALF_HEIGHT = 26.0f;
+static const SDL_Color BOW_TIE_COLOR = {25, 25, 25, 255};
+static const SDL_Color BOW_TIE_KNOT_COLOR = {90, 90, 90, 255};
+
+// Party background is a rainbow mesh whose hue drifts over time, softened so the dark face stands out
+static const int PARTY_COLUMNS = 16;
+static const int PARTY_ROWS = 10;
+static const float PARTY_SATURATION = 0.45f;
+static const float PARTY_VALUE = 1.0f;
+static const float PARTY_HUE_SPEED = 0.12f;
+static const float PARTY_HUE_SPREAD_X = 0.6f;
+static const float PARTY_HUE_SPREAD_Y = 0.4f;
+
+// Confetti pieces fall over the rainbow, each with its own column, speed, and sway
+static const int CONFETTI_COUNT = 40;
+static const int CONFETTI_SIZE = 14;
+static const float CONFETTI_SATURATION = 0.9f;
+static const float CONFETTI_FALL_SPEED = 0.15f;
+static const float CONFETTI_SWAY_PIXELS = 20.0f;
+static const float CONFETTI_COLOR_SPEED = 0.2f;
+
 // Fonts to try for the status text, Mac first then Linux
 static const char* MAC_FONT_PATH = "/System/Library/Fonts/Helvetica.ttc";
 static const char* LINUX_FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
@@ -64,10 +90,16 @@ Face create_face() {
     new_face.mouth->localPosition = Vec3(0, MOUTH_OFFSET_Y, 0);
     new_face.mouth->visible = false;
 
+    // Bow tie below the mouth, hidden until the party starts
+    new_face.bowTie = new BowTie(BOW_TIE_WING_HALF_WIDTH, BOW_TIE_WING_HALF_HEIGHT, BOW_TIE_KNOT_HALF_WIDTH, BOW_TIE_KNOT_HALF_HEIGHT, BOW_TIE_COLOR, BOW_TIE_KNOT_COLOR);
+    new_face.bowTie->localPosition = Vec3(0, BOW_TIE_OFFSET_Y, 0);
+    new_face.bowTie->visible = false;
+
     // Hand the shapes to the renderer
     vectorRenderer.addShape(new_face.leftEye);
     vectorRenderer.addShape(new_face.rightEye);
     vectorRenderer.addShape(new_face.mouth);
+    vectorRenderer.addShape(new_face.bowTie);
 
     // Load the status font, Mac path first then Linux
     new_face.font = TTF_OpenFont(MAC_FONT_PATH, scale_to_screen(FONT_SIZE));
@@ -138,6 +170,76 @@ void update_face(Face* face, int eye_squint, int smile_curve) {
 // Show or hide the mouth
 void show_mouth(bool show) {
     face.mouth->visible = show;
+}
+
+// Show or hide the bow tie
+void show_party(bool show) {
+    face.bowTie->visible = show;
+}
+
+// Turn a hue, saturation, and value into a colour, the hue wraps around
+static SDL_Color hue_color(float hue, float saturation, float value) {
+    // Pick the sixth of the colour wheel and how far through it
+    float position = (hue - floorf(hue)) * 6.0f;
+    int sector = (int)position;
+    float fraction = position - sector;
+
+    // Work out the three levels the sector mixes
+    float low = value * (1.0f - saturation);
+    float falling = value * (1.0f - saturation * fraction);
+    float rising = value * (1.0f - saturation * (1.0f - fraction));
+    float red = value, green = rising, blue = low;
+    if (sector == 1) { red = falling; green = value; blue = low; }
+    if (sector == 2) { red = low; green = value; blue = rising; }
+    if (sector == 3) { red = low; green = falling; blue = value; }
+    if (sector == 4) { red = rising; green = low; blue = value; }
+    if (sector == 5) { red = value; green = low; blue = falling; }
+    return {(Uint8)(red * 255), (Uint8)(green * 255), (Uint8)(blue * 255), 255};
+}
+
+// Paint a drifting rainbow over the whole screen, then confetti falling over it
+void draw_party_background() {
+    // Time in seconds drives the hue drift and the confetti
+    float seconds = SDL_GetTicks() / 1000.0f;
+
+    // Colour a grid of points by hue, so the graphics card blends between them
+    SDL_Vertex vertices[(PARTY_COLUMNS + 1) * (PARTY_ROWS + 1)];
+    for (int row = 0; row <= PARTY_ROWS; row++) {
+        for (int column = 0; column <= PARTY_COLUMNS; column++) {
+            float across = (float)column / PARTY_COLUMNS;
+            float down = (float)row / PARTY_ROWS;
+            float hue = across * PARTY_HUE_SPREAD_X + down * PARTY_HUE_SPREAD_Y + seconds * PARTY_HUE_SPEED;
+            vertices[row * (PARTY_COLUMNS + 1) + column] = {{across * screen_width, down * screen_height}, hue_color(hue, PARTY_SATURATION, PARTY_VALUE), {0, 0}};
+        }
+    }
+
+    // Join the grid into two triangles per cell
+    int indices[PARTY_COLUMNS * PARTY_ROWS * 6];
+    int count = 0;
+    for (int row = 0; row < PARTY_ROWS; row++) {
+        for (int column = 0; column < PARTY_COLUMNS; column++) {
+            int topLeft = row * (PARTY_COLUMNS + 1) + column;
+            int bottomLeft = topLeft + PARTY_COLUMNS + 1;
+            int cell[6] = {topLeft, topLeft + 1, bottomLeft, topLeft + 1, bottomLeft + 1, bottomLeft};
+            for (int index : cell)
+                indices[count++] = index;
+        }
+    }
+    SDL_RenderGeometry(renderer, nullptr, vertices, (PARTY_COLUMNS + 1) * (PARTY_ROWS + 1), indices, count);
+
+    // Drop each confetti piece from the top, its column and speed come from its number
+    int size = scale_to_screen(CONFETTI_SIZE);
+    for (int piece = 0; piece < CONFETTI_COUNT; piece++) {
+        float column = fabsf(sinf(piece * 12.9898f) * 43758.5453f);
+        column -= floorf(column);
+        float speed = 0.5f + fabsf(sinf(piece * 78.233f));
+        float fall = piece / (float)CONFETTI_COUNT + seconds * CONFETTI_FALL_SPEED * speed;
+        fall -= floorf(fall);
+        SDL_Rect rect = {(int)(column * screen_width + sinf(seconds * 2.0f + piece) * scale_to_screen(CONFETTI_SWAY_PIXELS)), (int)(fall * screen_height), size, size};
+        SDL_Color color = hue_color(piece / (float)CONFETTI_COUNT + seconds * CONFETTI_COLOR_SPEED, CONFETTI_SATURATION, PARTY_VALUE);
+        SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, 255);
+        SDL_RenderFillRect(renderer, &rect);
+    }
 }
 
 // Free the font, the renderer owns the eye and mouth shapes

@@ -18,7 +18,7 @@ source "${TALK_DIR}/tools/talk_idle.sh"
 # Defaults
 QUESTION_VOICE="am_adam"
 DEFAULT_PROMPT="Deskman. What is the time?"
-VOLUME_PERCENT=80
+VOLUME_PERCENT=50
 START_WAIT_SECONDS=60
 PLAY_TRIES=15
 HEAR_WAIT_SECONDS=10

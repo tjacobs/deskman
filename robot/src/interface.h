@@ -77,6 +77,10 @@ bool call_open();
 // True while demo mode is on, talk stays listening and the head looks around
 bool demo_on();
 
+// True while the drinks look is on, and a way to turn it off when talk goes away
+bool drinks_on();
+void set_drinks_on(bool on);
+
 // Show a warning from inside the robot, the same red line the socket sets
 void show_warning(const string& text);
 

@@ -657,12 +657,13 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
 
 # Hand over a drink when an order was just taken, mic muted so the servos are not heard
 def run_dispense(listener, kokoro_pipeline):
-    if not text_ask.take_dispense():
+    drink = text_ask.take_dispense()
+    if not drink:
         return
     print('Handing over the drink.', flush=True)
     with speak_lock:
         listener.mute()
-        text_ask.dispense(lambda text: speak(kokoro_pipeline, text))
+        text_ask.dispense(lambda text: speak(kokoro_pipeline, text), drink)
         listener.unmute()
 
 # Say hello, realtime speaks it over its own session so kokoro stays unloaded
