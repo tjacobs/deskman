@@ -41,7 +41,7 @@ main() {
     # Say which runtime is running Gemma
     print_gemma_runtime
 
-    # Set speaker volume to full so the microphone hears the question
+    # Set speaker volume so the microphone hears the question
     set_volume
 
     # Start from idle so the question needs the wake word
@@ -198,7 +198,7 @@ talk_is_current() {
     [[ "${process_age}" -le "${file_age}" ]]
 }
 
-# Set the speaker volume to full
+# Set the speaker volume
 set_volume() {
     # Run the talk volume helper
     "${PYTHON}" -c "import sys; sys.path.insert(0, '${TALK_DIR}/text'); import volume; volume.run_set_volume({'percent': ${VOLUME_PERCENT}})"
