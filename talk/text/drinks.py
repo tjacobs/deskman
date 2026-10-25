@@ -10,7 +10,7 @@ import time
 import move
 
 # Config the drinks on offer
-DRINKS = ["Grapefruit", "Lemon", "Lime", "Blackberry", "Peach", "Water"]
+DRINKS = ["Grapefruit", "Lemon", "Lime", "Blackberry", "Plum", "Water"]
 
 # Config the drinks as spoken when offering them, with no article
 OFFER = ", ".join(drink.lower() for drink in DRINKS[:-1]) + ", and " + DRINKS[-1].lower()
