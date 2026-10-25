@@ -3,8 +3,8 @@
 # The sourcing script sets PYTHON, TALK_DIR, LOG_FILE, QUESTION_VOICE, and PLAY_TRIES.
 
 # Config the line that closes the conversation, and the wav it is rendered to
-QUIET_LINE="Deskman, quiet."
-QUIET_WAV="/tmp/words_said_deskman_quiet.wav"
+QUIET_LINE="Quiet."
+QUIET_WAV="/tmp/words_said_quiet.wav"
 
 # Config how often to say it, and how long to wait for idle each time
 IDLE_TRIES=3

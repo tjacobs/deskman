@@ -637,7 +637,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
             print_turn_timing()
 
             # Hand over the drink after saying so, when an order was taken
-            run_dispense(listener)
+            run_dispense(listener, kokoro_pipeline)
 
             # Quit ends the program, the robot is already exiting
             if move.quit_pending():
@@ -656,13 +656,13 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
         raise
 
 # Hand over a drink when an order was just taken, mic muted so the servos are not heard
-def run_dispense(listener):
+def run_dispense(listener, kokoro_pipeline):
     if not text_ask.take_dispense():
         return
     print('Handing over the drink.', flush=True)
     with speak_lock:
         listener.mute()
-        text_ask.dispense()
+        text_ask.dispense(lambda text: speak(kokoro_pipeline, text))
         listener.unmute()
 
 # Say hello, realtime speaks it over its own session so kokoro stays unloaded

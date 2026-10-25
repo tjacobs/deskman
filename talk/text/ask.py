@@ -599,8 +599,8 @@ def answer_drinks(prompt):
     if not drinks.is_on():
         return None
 
-    # Take the order with the model
-    messages = build_messages(prompt)
+    # Take the order with the model, after rewriting misheard drink names
+    messages = build_messages(drinks.fix_heard(prompt))
     message = chat_completion(messages)
     reply = (message.get("content") or "").strip() or "Okay."
     remember_turn(messages, reply)
@@ -615,9 +615,9 @@ def answer_drinks(prompt):
 def take_dispense():
     return drinks.take_dispense()
 
-# Hand over the drink with the hat and head moves
-def dispense():
-    drinks.dispense()
+# Hand over the drink, saying the handover line with the given say function
+def dispense(say):
+    drinks.dispense(say)
 
 # Build the chat messages for one ask
 def build_messages(prompt):
