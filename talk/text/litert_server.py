@@ -28,6 +28,9 @@ RUNTIME_NAME = 'LiteRT runtime from Google'
 # Config when the cached conversation is rebuilt, a long one leaves no room for the reply
 REBUILD_TOKENS = 3000
 
+# Config how many times a message is sent, the model sometimes writes a tool call the runtime cannot read and a second try usually works
+SEND_TRIES = 2
+
 # Config the wildcard for assistant replies, the cached conversation holds the model's own words not the ones the client stored
 REPLY_KEY = 'assistant reply'
 
@@ -144,8 +147,7 @@ def answer_chat(body):
     # Send the new messages and keep the model's words in the cache
     with LOCK:
         start = time.perf_counter()
-        pending, mode = choose_pending(translated, keys, tools, tools_key, body)
-        response = send_pending(pending)
+        pending, mode, response = send_with_retry(translated, keys, tools, tools_key, body)
         reply = build_reply(response)
         CACHE['keys'].append(message_key(translate_message(reply, {})))
         tokens = CACHE['conversation'].token_count
@@ -154,15 +156,35 @@ def answer_chat(body):
     # Return the reply in the shape the OpenAI API uses
     return {'object': 'chat.completion', 'model': MODEL_NAME, 'choices': [{'index': 0, 'message': reply, 'finish_reason': 'tool_calls' if reply.get('tool_calls') else 'stop'}], 'usage': {'prompt_tokens': tokens, 'completion_tokens': 0, 'total_tokens': tokens}}
 
+# Send the new messages, and when the model fails start the conversation again and send once more
+def send_with_retry(translated, keys, tools, tools_key, body):
+    for attempt in range(SEND_TRIES):
+        try:
+            pending, mode = choose_pending(translated, keys, tools, tools_key, body)
+            return pending, mode, send_pending(pending)
+        except Exception as error:
+            reset_cache()
+            if attempt == SEND_TRIES - 1:
+                raise
+            print(f'Retrying after: {error}', flush=True)
+
 # Turn one OpenAI message into the LiteRT form, a tool reply must name the call it answers
 def translate_message(message, tool_names):
     role = message.get('role')
     if role == 'tool':
         return {'role': 'tool', 'content': [{'type': 'tool_response', 'name': tool_names.get(message.get('tool_call_id'), ''), 'response': message.get('content')}]}
     if role == 'assistant' and message.get('tool_calls'):
-        calls = [{'type': 'function', 'function': {'name': call['function']['name'], 'arguments': json.loads(call['function'].get('arguments') or '{}')}} for call in message['tool_calls']]
+        calls = [{'type': 'function', 'function': {'name': call['function']['name'], 'arguments': parse_arguments(call['function'].get('arguments'))}} for call in message['tool_calls']]
         return {'role': 'assistant', 'tool_calls': calls}
     return {'role': role, 'content': message.get('content') or ''}
+
+# Read tool call arguments as an object, anything that is not valid JSON becomes empty so one bad entry in the history cannot fail every request
+def parse_arguments(raw):
+    try:
+        arguments = json.loads(raw or '{}')
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return arguments if isinstance(arguments, dict) else {}
 
 # Name a message so two requests can be compared, assistant words are not compared
 def message_key(message):
