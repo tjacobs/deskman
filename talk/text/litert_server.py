@@ -28,7 +28,7 @@ RUNTIME_NAME = 'LiteRT runtime from Google'
 # Config when the cached conversation is rebuilt, a long one leaves no room for the reply
 REBUILD_TOKENS = 3000
 
-# Config how many times a message is sent, the model sometimes writes a tool call the runtime cannot read and a second try usually works
+# Config how many times a message is sent, the model sometimes writes a tool call the runtime cannot read, and it does so again with the same tools, so the last try offers none
 SEND_TRIES = 2
 
 # Config the wildcard for assistant replies, the cached conversation holds the model's own words not the ones the client stored
@@ -156,17 +156,20 @@ def answer_chat(body):
     # Return the reply in the shape the OpenAI API uses
     return {'object': 'chat.completion', 'model': MODEL_NAME, 'choices': [{'index': 0, 'message': reply, 'finish_reason': 'tool_calls' if reply.get('tool_calls') else 'stop'}], 'usage': {'prompt_tokens': tokens, 'completion_tokens': 0, 'total_tokens': tokens}}
 
-# Send the new messages, and when the model fails start the conversation again and send once more
+# Send the new messages, and when the model writes a tool call the runtime cannot read, start again with no tools so it can only answer in words
 def send_with_retry(translated, keys, tools, tools_key, body):
     for attempt in range(SEND_TRIES):
+        # The first try offers the tools, the last one offers none
+        offered = tools if attempt < SEND_TRIES - 1 else []
+        offered_key = tools_key if attempt < SEND_TRIES - 1 else json.dumps(offered)
         try:
-            pending, mode = choose_pending(translated, keys, tools, tools_key, body)
+            pending, mode = choose_pending(translated, keys, offered, offered_key, body)
             return pending, mode, send_pending(pending)
         except Exception as error:
             reset_cache()
             if attempt == SEND_TRIES - 1:
                 raise
-            print(f'Retrying after: {error}', flush=True)
+            print(f'Retrying with no tools after: {error}', flush=True)
 
 # Turn one OpenAI message into the LiteRT form, a tool reply must name the call it answers
 def translate_message(message, tool_names):
