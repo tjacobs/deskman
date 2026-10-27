@@ -28,6 +28,9 @@ main() {
     RUN_UID="$(id -u "${RUN_USER}")"
     RUN_HOME="$(getent passwd "${RUN_USER}" | cut -d: -f6)"
 
+    # Let any other package manager finish first, installs share one lock
+    wait_for_package_lock
+
     # Create the folders hide_autostart and the desktop write into
     prepare_user_dirs
 
@@ -98,6 +101,11 @@ GETTY_AUTOLOGIN_CONF="${GETTY_AUTOLOGIN_DIR}/autologin.conf"
 
 # Set in detect_machine to jetson or pi
 MACHINE=""
+
+# Package manager locks to wait for, and how long and how often to check
+PACKAGE_LOCK_FILES=(/var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock)
+PACKAGE_LOCK_WAIT_SECONDS=600
+PACKAGE_LOCK_POLL_SECONDS=5
 
 # NetworkManager drop-in that keeps the Wi-Fi radio awake for calls
 NETWORK_MANAGER_CONF_DIR="/etc/NetworkManager/conf.d"
@@ -195,6 +203,27 @@ FAN_CONTROL_MODE="open_loop"
 # Cursor theme holding one transparent pixel, so the compositor never draws a pointer
 CURSOR_THEME_NAME="blank"
 CURSOR_POINTER_NAMES="left_ptr pointer arrow top_left_arrow xterm text hand hand1 hand2 grab grabbing watch wait progress crosshair help question_arrow move fleur all-scroll not-allowed no-drop dnd-move dnd-copy col-resize row-resize e-resize n-resize s-resize w-resize ne-resize nw-resize se-resize sw-resize ew-resize ns-resize nesw-resize nwse-resize left_side right_side top_side bottom_side sb_h_double_arrow sb_v_double_arrow"
+
+# Wait while another package manager holds a lock, such as a second installer or the desktop updater
+wait_for_package_lock() {
+    waited_seconds=0
+
+    # Skip where fuser cannot tell who holds the locks
+    if ! command -v fuser >/dev/null 2>&1; then
+        return 0
+    fi
+
+    # Poll until the locks are free, and give up after the limit
+    while fuser "${PACKAGE_LOCK_FILES[@]}" >/dev/null 2>&1; do
+        if (( waited_seconds >= PACKAGE_LOCK_WAIT_SECONDS )); then
+            echo "Another package manager still holds the lock after ${PACKAGE_LOCK_WAIT_SECONDS} seconds, stopping." >&2
+            exit 1
+        fi
+        echo "Waiting for another package manager to finish..."
+        sleep "${PACKAGE_LOCK_POLL_SECONDS}"
+        waited_seconds=$(( waited_seconds + PACKAGE_LOCK_POLL_SECONDS ))
+    done
+}
 
 # Create the user config folders a first graphical login would
 prepare_user_dirs() {
