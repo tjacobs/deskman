@@ -37,9 +37,6 @@ CUDA_PACKAGE_PATTERN="^nvidia-"
 
 # Config a torch dependency left out of the venv, it only compiles kernels
 EXCLUDED_PACKAGE="triton"
-
-# Config memory each CUDA compile job needs, free memory decides how many run at once
-CUDA_BUILD_MEMORY_PER_JOB_MB=768
 DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
 # Config system packages and players, cmake and a compiler build the local model
@@ -66,7 +63,6 @@ CTRANSLATE2_DIR="${LIBS_DIR}/CTranslate2"
 CTRANSLATE2_LIBRARY="/usr/local/lib/libctranslate2.so"
 CUDA_BIN="/usr/local/cuda/bin"
 CUDA_ARCHITECTURE=87
-BUILD_JOBS="$(build_jobs)"
 CTRANSLATE2_CXX_WARNINGS="-Wno-unused-parameter -Wno-unused-variable -Wno-implicit-fallthrough -Wno-reorder"
 CTRANSLATE2_CUDA_WARNINGS="-diag-suppress=177 -Xcompiler=-Wno-unused-parameter,-Wno-unused-variable,-Wno-reorder"
 
@@ -467,29 +463,6 @@ restore_build_power_mode() {
     SAVED_POWER_MODE=""
 }
 
-# Return how many compile jobs fit in free memory, at most the CPU count
-cuda_build_jobs() {
-    local cpu_count available_megabytes jobs
-
-    # Use every cpu where memory is not readable
-    cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
-    if [[ ! -r /proc/meminfo ]]; then
-        echo "${cpu_count}"
-        return 0
-    fi
-
-    # Size the job count from memory that is free now
-    available_megabytes="$(awk '/^MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo)"
-    jobs=$(( available_megabytes / CUDA_BUILD_MEMORY_PER_JOB_MB ))
-    if (( jobs > cpu_count )); then
-        jobs="${cpu_count}"
-    fi
-    if (( jobs < 1 )); then
-        jobs=1
-    fi
-    echo "${jobs}"
-}
-
 # Build ctranslate2 with cuda for the jetson gpu, takes around 30 minutes
 build_ctranslate2() {
     # Skip when already built
@@ -509,7 +482,7 @@ build_ctranslate2() {
 
     # Compile with as many jobs as free memory allows
     local jobs
-    jobs="$(cuda_build_jobs)"
+    jobs="$(build_jobs)"
     echo "Building CTranslate2 with ${jobs} jobs."
     PATH="${CUDA_BIN}:${PATH}" cmake --build build "-j${jobs}"
 }
@@ -612,7 +585,7 @@ build_llama_cpp() {
 
     # Build only the server, skips cli and bench to cut Jetson compile time
     local jobs
-    jobs="$(cuda_build_jobs)"
+    jobs="$(build_jobs)"
     echo "Building llama-server with ${jobs} jobs."
     PATH="${CUDA_BIN}:${PATH}" cmake --build "${LLAMA_CPP_DIR}/build" --target llama-server "-j${jobs}"
 }

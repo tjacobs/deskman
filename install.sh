@@ -208,14 +208,18 @@ clean_apt_cache() {
     fi
 }
 
-# Run apt-get as root without prompts or the no longer required list
+# Run apt-get as root without prompts or the no longer required list, one line per package
 apt_get() {
-    sudo env "${APT_ENVIRONMENT[@]}" apt-get -qq -o APT::Get::HideAutoRemove=1 "$@"
+    # Keep the Unpacking line and drop the other dpkg steps, errors still show
+    sudo env "${APT_ENVIRONMENT[@]}" apt-get -qq -o APT::Get::HideAutoRemove=1 "$@" 2>&1 | awk '!/^(Selecting previously unselected package|Preparing to unpack|Setting up|Processing triggers|\(Reading database)/ { print; fflush() }'
+
+    # Hand back apt-get's own exit code, not the filter's
+    return "${PIPESTATUS[0]}"
 }
 
 # Return how many parallel compile jobs fit in memory, at least one and at most the CPU count
 build_jobs() {
-    local cpu_count memory_gigabytes jobs
+    local cpu_count memory_megabytes jobs
     cpu_count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
 
     # Use every cpu where memory is not readable, as on mac
@@ -224,9 +228,9 @@ build_jobs() {
         return 0
     fi
 
-    # Limit jobs so compilers do not push a small robot into swap
-    memory_gigabytes="$(awk '/^MemTotal:/ {print int($2 / 1048576)}' /proc/meminfo)"
-    jobs=$(( memory_gigabytes / MEMORY_PER_BUILD_JOB_GB ))
+    # Limit jobs from total memory, swap can be compressed ram so free memory misleads
+    memory_megabytes="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+    jobs=$(( memory_megabytes / MEMORY_PER_BUILD_JOB_MB ))
     if (( jobs > cpu_count )); then
         jobs="${cpu_count}"
     fi
@@ -249,8 +253,8 @@ KILOBYTES_PER_GIGABYTE=1048576
 # Config the free disk space in gigabytes the install needs
 REQUIRED_DISK_GB=10
 
-# Config build parallelism, each compile job can use this much memory
-MEMORY_PER_BUILD_JOB_GB=2
+# Config build parallelism, total memory per compile job, one near 570 MB at peak plus the system's share, so 2 GB runs 2 and 4 GB runs 4
+MEMORY_PER_BUILD_JOB_MB=950
 
 # Config apt so nothing stops to ask a question
 APT_ENVIRONMENT=(DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a)
