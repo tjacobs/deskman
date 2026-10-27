@@ -78,6 +78,9 @@ static const int TALK_STOP_WAIT_MS = 5000;
 static const int TALK_STOP_POLL_MS = 50;
 static const int TALK_EXEC_FAILED = 127;
 
+// Talk exits with this when it finds no speaker, it already printed why, so the face log keeps that line, it matches NO_SPEAKER_EXIT_CODE in talk.py
+static const int TALK_NO_SPEAKER = 3;
+
 // Wait this long before starting talk again after it stops on its own, so a missing sound card is retried rather than spun on
 static const int TALK_RESTART_SECONDS = 5;
 
@@ -1345,9 +1348,10 @@ static void reap_talk_process() {
     if (waited <= 0)
         return;
 
-    // A failed exec already printed its own error
+    // A failed exec and a missing speaker already printed their own reasons
+    bool no_speaker = WIFEXITED(status) && WEXITSTATUS(status) == TALK_NO_SPEAKER;
     if (WIFEXITED(status)) {
-        if (WEXITSTATUS(status) != TALK_EXEC_FAILED) {
+        if (WEXITSTATUS(status) != TALK_EXEC_FAILED && !no_speaker) {
             cout << "talk.py exited with code " << WEXITSTATUS(status) << endl;
         }
     } else if (WIFSIGNALED(status)) {
@@ -1366,7 +1370,6 @@ static void reap_talk_process() {
     if (steady_clock::now() - g_talk_started_at > seconds(TALK_HEALTHY_SECONDS))
         g_talk_restarts = 0;
     if (g_talk_restarts >= TALK_MAX_RESTARTS) {
-        cout << "Error: talk.py keeps stopping, gave up after " << TALK_MAX_RESTARTS << " restarts" << endl;
         show_voice_warning();
         return;
     }

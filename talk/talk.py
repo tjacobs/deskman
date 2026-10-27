@@ -44,6 +44,9 @@ RESTART_WORD = 'restart'
 RESTART_MESSAGE = 'Restarting!'
 RESTART_COMMAND = '/usr/local/bin/deskman-restart-services'
 
+# Exit code that tells the robot there is no speaker, it matches TALK_NO_SPEAKER in robot main.cpp
+NO_SPEAKER_EXIT_CODE = 3
+
 # Config phrases whisper invents from silence, longest first so the short ones do not eat them
 WHISPER_ARTIFACTS = ('thanks for watching', 'thank you very much', 'thank you', 'thanks', 'you', 'bye')
 
@@ -1710,7 +1713,7 @@ def check_ready():
         sys.exit(1)
     if player == utils.LINUX_PLAYER and utils.find_usb_card() is None:
         print('*** No speaker ***')
-        sys.exit(1)
+        sys.exit(NO_SPEAKER_EXIT_CODE)
 
     # Standard mic level and auto gain, the speaker slider does not change these
     if player == utils.LINUX_PLAYER:
