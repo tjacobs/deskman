@@ -1370,7 +1370,7 @@ static void reap_talk_process() {
     if (steady_clock::now() - g_talk_started_at > seconds(TALK_HEALTHY_SECONDS))
         g_talk_restarts = 0;
     if (g_talk_restarts >= TALK_MAX_RESTARTS) {
-        show_voice_warning();
+        show_voice_disabled_warning();
         return;
     }
 

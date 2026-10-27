@@ -180,6 +180,9 @@ static const char* WARNING_LINK_HINT = ", tap to fix";
 
 // Shown while the robot brings voice back, an unplugged sound card is the usual cause
 static const char* VOICE_WARNING = "Voice restarting";
+
+// Shown once the robot stops retrying, until voice is listening again
+static const char* VOICE_DISABLED_WARNING = "Voice disabled";
 static const int WARNING_TAP_MARGIN = 20;
 static const char* OPEN_LINK_COMMANDS[] = {"/snap/bin/chromium", "chromium", "chromium-browser", "firefox", "xdg-open"};
 static const int OPEN_LINK_MAX_DESCRIPTORS = 1024;
@@ -1648,10 +1651,15 @@ void show_voice_warning() {
     show_warning(VOICE_WARNING);
 }
 
+// Say voice is disabled
+void show_voice_disabled_warning() {
+    show_warning(VOICE_DISABLED_WARNING);
+}
+
 // Take the voice warning off once voice is listening again, leaving any other warning up
 static void clear_voice_warning() {
     lock_guard<mutex> lock(g_warning_mutex);
-    if (g_warning != VOICE_WARNING)
+    if (g_warning != VOICE_WARNING && g_warning != VOICE_DISABLED_WARNING)
         return;
     g_warning = "";
     g_warning_url = "";
