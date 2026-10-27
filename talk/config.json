@@ -2,7 +2,7 @@
   "local": true,
   "cloud": false,
   "realtime": false,
-  "litert": true,
+  "litert": false,
   "timing": false,
   "realtime_model": "gpt-realtime-2.1-mini",
   "realtime_voice": "echo"
