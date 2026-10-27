@@ -173,6 +173,7 @@ PANEL_TRANSFORM="270"
 MATCHBOX_LAYOUT_DIR="/usr/share/matchbox-keyboard"
 OPENBOX_CONFIG_NAME="lxde-pi-rc.xml"
 OPENBOX_KEYBOARD_RULE='<application title="Keyboard"><decor>no</decor><layer>above</layer><position force="yes"><x>0</x><y>-0</y></position><focus>no</focus><skip_taskbar>yes</skip_taskbar><skip_pager>yes</skip_pager></application>'
+LABWC_KEYBOARD_RULE='<windowRule title="Keyboard" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes"><action name="ToggleAlwaysOnTop" /></windowRule>'
 KEYBOARD_LAUNCHER_NAME="deskman-keyboard.desktop"
 
 # Browser that opens web links, and the snapd revision that still starts snap apps on Jetson kernels
@@ -1002,6 +1003,12 @@ install_touch_keyboard() {
 add_openbox_keyboard_rule() {
     openbox_config="${RUN_HOME}/.config/openbox/${OPENBOX_CONFIG_NAME}"
 
+    # Newer Pi desktops run labwc and ship no openbox defaults, so use its rule instead
+    if [[ ! -f "${openbox_config}" && ! -f "/etc/xdg/openbox/${OPENBOX_CONFIG_NAME}" ]]; then
+        add_labwc_keyboard_rule
+        return
+    fi
+
     # Start from the session defaults when the user has no file of their own
     if [[ ! -f "${openbox_config}" ]]; then
         mkdir -p "$(dirname "${openbox_config}")"
@@ -1020,6 +1027,36 @@ add_openbox_keyboard_rule() {
         sed -i "s|</openbox_config>|<applications>${OPENBOX_KEYBOARD_RULE}</applications></openbox_config>|" "${openbox_config}"
     fi
     chown "${RUN_USER}:${RUN_USER}" "${openbox_config}"
+}
+
+# Labwc rule that keeps the keyboard window undecorated, above the browser, and out of the taskbar
+add_labwc_keyboard_rule() {
+    labwc_config="${RUN_HOME}/.config/labwc/rc.xml"
+
+    # Nothing to edit without the system defaults to start from
+    if [[ ! -f "${labwc_config}" && ! -f /etc/xdg/labwc/rc.xml ]]; then
+        echo "No labwc config found, skipping the keyboard window rule"
+        return
+    fi
+
+    # Start from the session defaults when the user has no file of their own
+    if [[ ! -f "${labwc_config}" ]]; then
+        mkdir -p "$(dirname "${labwc_config}")"
+        cp /etc/xdg/labwc/rc.xml "${labwc_config}"
+    fi
+
+    # Leave it alone once the rule is in
+    if grep -q 'title="Keyboard"' "${labwc_config}"; then
+        return
+    fi
+
+    # Labwc keeps one window rules section, so join it or add one
+    if grep -q '<windowRules>' "${labwc_config}"; then
+        sed -i "s|<windowRules>|<windowRules>${LABWC_KEYBOARD_RULE}|" "${labwc_config}"
+    else
+        sed -i "s|</openbox_config>|<windowRules>${LABWC_KEYBOARD_RULE}</windowRules></openbox_config>|" "${labwc_config}"
+    fi
+    chown -R "${RUN_USER}:${RUN_USER}" "$(dirname "${labwc_config}")"
 }
 
 # Launcher the taskbar button runs, it shows the keyboard or takes it away
@@ -1063,6 +1100,12 @@ add_panel_keyboard_button() {
 # Hold on to what was copied, X11 loses the clipboard as soon as the browser closes
 install_clipboard_keeper() {
     export DEBIAN_FRONTEND=noninteractive
+
+    # Newer Pi desktops are Wayland and have no parcellite, so use clipman there
+    if ! apt-cache show parcellite > /dev/null 2>&1; then
+        install_wayland_clipboard_keeper
+        return
+    fi
     apt_get install -y parcellite
 
     # Parcellite starts itself at login, so only its own settings are left to write
@@ -1075,6 +1118,23 @@ install_clipboard_keeper() {
     mkdir -p "$(dirname "${clipboard_config}")"
     printf '%s\n' '[rc]' 'save_history=false' > "${clipboard_config}"
     chown -R "${RUN_USER}:${RUN_USER}" "$(dirname "${clipboard_config}")"
+}
+
+# Clipman re-serves what was copied after the browser closes, started at login
+install_wayland_clipboard_keeper() {
+    apt_get install -y clipman wl-clipboard
+
+    # Keep the single newest copy in memory only, copied API keys have no business on disk
+    autostart_dir="${RUN_HOME}/.config/autostart"
+    mkdir -p "${autostart_dir}"
+    cat > "${autostart_dir}/clipman.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Clipboard keeper
+Exec=wl-paste --type text --watch clipman store --histpath=/dev/shm/clipman-${RUN_USER}.json --max-items=1
+X-GNOME-Autostart-enabled=true
+EOF
+    chown "${RUN_USER}:${RUN_USER}" "${autostart_dir}/clipman.desktop"
 }
 
 # Keep the display on and skip the lock screen
