@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <exception>
 #include <filesystem>
@@ -39,6 +40,9 @@ using namespace std::chrono;
 
 // Fall back to the local HDMI seat when DISPLAY is unset
 static const char* DEFAULT_DISPLAY = ":0";
+
+// Show the face on the display with this in its name when one is attached, else on the first display
+static const char* PREFERRED_DISPLAY_NAME = "HDMI";
 
 // Check the window stacking this long after start, once the window manager has framed the window
 static const int STACKING_CHECK_SECONDS = 5;
@@ -397,6 +401,17 @@ void sync_window_size() {
     screen_height = height;
 }
 
+// Index of the first display named like the preferred one, else the first display
+static int choose_display_index() {
+    int display_count = SDL_GetNumVideoDisplays();
+    for (int display_index = 0; display_index < display_count; display_index++) {
+        const char* display_name = SDL_GetDisplayName(display_index);
+        if (display_name != nullptr && strstr(display_name, PREFERRED_DISPLAY_NAME) != nullptr)
+            return display_index;
+    }
+    return 0;
+}
+
 // Create window
 bool create_window() {
     // Cover the whole screen on the robot, use a plain window elsewhere
@@ -443,9 +458,14 @@ bool create_window() {
         return false;
     }
 
+    // Pick the display to cover
+    int display_index = choose_display_index();
+    const char* display_name = SDL_GetDisplayName(display_index);
+    cout << "Showing on display " << display_index << " " << (display_name != nullptr ? display_name : "unknown") << endl;
+
     // Get screen size
     SDL_DisplayMode display_mode;
-    if (SDL_GetCurrentDisplayMode(0, &display_mode) != 0) {
+    if (SDL_GetCurrentDisplayMode(display_index, &display_mode) != 0) {
         fprintf(stderr, "No display mode available: %s\n", SDL_GetError());
         IMG_Quit();
         SDL_Quit();
@@ -455,7 +475,7 @@ bool create_window() {
     screen_height = display_mode.h;
 
     // Cover the current desktop, exclusive fullscreen can lock the pre-rotate size
-    window = SDL_CreateWindow("Deskman Robot", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, screen_width, screen_height, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    window = SDL_CreateWindow("Deskman Robot", SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_index), SDL_WINDOWPOS_UNDEFINED_DISPLAY(display_index), screen_width, screen_height, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
     if (!window) {
         fprintf(stderr, "Window could not be created: %s\n", SDL_GetError());
         IMG_Quit();
