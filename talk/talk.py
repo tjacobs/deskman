@@ -72,11 +72,13 @@ REMINDER_CHECK_SECONDS = 20.0
 LOW_BATTERY_PERCENT = 10
 LOW_BATTERY_SECONDS = 60
 LOW_BATTERY_DROP_VOLTS = 0.01
+LOW_BATTERY_MIN_VOLTS = 3.0
 LOW_BATTERY_ASK = "Invent one new short spoken line, eight words or fewer, that I have low battery. Soft and polite, a gentle request, not a command. In the spirit of I'm tired, could you plug me in, low battery, I'm sleepy, so hungry."
 LOW_BATTERY_FALLBACKS = ("Low battery", "Could you plug me in?", "I'm sleepy.", "So hungry.")
 
-# Config whisper model size
+# Config whisper model size, a small board gets the smaller one
 WHISPER_MODEL_SIZE = 'base'
+WHISPER_MODEL_SIZE_LOW_MEMORY = 'tiny'
 
 # Config speech detection
 VAD_FRAME_SAMPLES = 512
@@ -140,18 +142,20 @@ NO_KEY_REASON = 'No OpenAI key.'
 PI_KOKORO_LOAD_SECONDS = 30
 PI_INFERENCE_LOAD_SECONDS = 25
 
-# Local model preset, the Pi uses the smaller one
+# Local model preset, the Pi uses the smaller one, and a board with little memory serves fixed replies instead of a model
 TEXT_SERVER_PRESET_DEFAULT = "e2b"
 TEXT_SERVER_PRESET_PI = "1b"
+TEXT_SERVER_PRESET_LOW_MEMORY = "prog"
+LOW_MEMORY_TOTAL_GB = 3.0
 PI_BOARD_FILE = "/proc/device-tree/model"
 PI_BOARD_MATCH = "Raspberry Pi"
 
 # Expected RAM use in gigabytes
 TEXT_SERVER_EXPECTED_GB = 2.0
+TEXT_SERVER_LOW_MEMORY_EXPECTED_GB = 0.1
 WHISPER_EXPECTED_GB = 0.4
 KOKORO_EXPECTED_GB = 0.7
 SPEECH_MODELS_EXPECTED_GB = WHISPER_EXPECTED_GB + KOKORO_EXPECTED_GB
-SPEECH_STACK_EXPECTED_GB = TEXT_SERVER_EXPECTED_GB + SPEECH_MODELS_EXPECTED_GB
 MEMORY_LOW_GB = 0.5
 
 # How far under an expected load still counts as enough, so a Pi near the estimate stays quiet
@@ -884,9 +888,9 @@ def load_whisper_model():
 # Load whisper from the cache first, an online check fails at boot before the clock syncs
 def load_cached_whisper_model(WhisperModel, device, compute_type):
     try:
-        return WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type, local_files_only=True)
+        return WhisperModel(whisper_model_size(), device=device, compute_type=compute_type, local_files_only=True)
     except Exception:
-        return WhisperModel(WHISPER_MODEL_SIZE, device=device, compute_type=compute_type)
+        return WhisperModel(whisper_model_size(), device=device, compute_type=compute_type)
 
 # Load the silero speech detector bundled with faster-whisper
 def load_vad_model():
@@ -1256,6 +1260,34 @@ def memory_is_short(available_gb, expected_gb):
 def format_gigabytes(gigabytes):
     return f'{gigabytes:.1f} GB'
 
+# Return MemTotal from /proc/meminfo in GB, or -1 when unknown
+def total_memory_gb():
+    try:
+        with open('/proc/meminfo') as meminfo_file:
+            for line in meminfo_file:
+                if line.startswith('MemTotal:'):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except OSError:
+        pass
+    return -1.0
+
+# True on a board with too little memory for the whisper base and text models
+def low_memory_board():
+    total_gb = total_memory_gb()
+    return 0 < total_gb < LOW_MEMORY_TOTAL_GB
+
+# Pick the whisper size that fits this board
+def whisper_model_size():
+    if low_memory_board():
+        return WHISPER_MODEL_SIZE_LOW_MEMORY
+    return WHISPER_MODEL_SIZE
+
+# Expected RAM use of the text server in gigabytes, fixed replies need almost none
+def text_server_expected_gb():
+    if low_memory_board():
+        return TEXT_SERVER_LOW_MEMORY_EXPECTED_GB
+    return TEXT_SERVER_EXPECTED_GB
+
 # Return MemAvailable from /proc/meminfo in GB, or -1 when unknown
 def available_memory_gb():
     try:
@@ -1426,7 +1458,9 @@ def speak_low_battery(listener, kokoro_pipeline):
 
     # Read the pack
     percent, voltage = robot_move.battery_reading()
-    if percent is None or voltage is None or voltage <= 0:
+
+    # Skip a missing meter, and a reading too low for any pack, which means no battery is plugged in
+    if percent is None or voltage is None or voltage < LOW_BATTERY_MIN_VOLTS:
         return
 
     # Still plenty of charge, so forget any baseline from an earlier low spell
@@ -1752,7 +1786,7 @@ def start_text_server(require_success=True):
         print_memory('after text server')
         return None
 
-    warn_if_low_memory_for('text server', TEXT_SERVER_EXPECTED_GB)
+    warn_if_low_memory_for('text server', text_server_expected_gb())
     load_start = time.perf_counter()
 
     # Quit when the install is incomplete
@@ -1772,8 +1806,12 @@ def start_text_server(require_success=True):
         sys.exit(1)
     return process
 
-# Pick the smaller model on a Pi, the default stays on other boards
+# Pick fixed replies on a board with little memory, the smaller model on a Pi, and the default elsewhere
 def text_server_preset():
+    # A board with little memory has no room for any model
+    if low_memory_board():
+        return TEXT_SERVER_PRESET_LOW_MEMORY
+
     # The smaller model is the one that fits a Pi
     if raspberry_pi():
         return TEXT_SERVER_PRESET_PI
@@ -1933,7 +1971,7 @@ def ensure_text_server_alive():
 
     # Retry a few cold starts
     for attempt in range(1, TEXT_SERVER_RESTART_TRIES + 1):
-        warn_if_low_memory_for('text server restart', TEXT_SERVER_EXPECTED_GB)
+        warn_if_low_memory_for('text server restart', text_server_expected_gb())
         print(f'Restarting text server, try {attempt}/{TEXT_SERVER_RESTART_TRIES}...', flush=True)
         stop_text_server(text_server_process)
         text_server_process = None
@@ -2051,7 +2089,7 @@ def warn_if_low_memory():
     if text_server_running:
         expected_gb = SPEECH_MODELS_EXPECTED_GB
     else:
-        expected_gb = SPEECH_STACK_EXPECTED_GB
+        expected_gb = text_server_expected_gb() + SPEECH_MODELS_EXPECTED_GB
     low = memory_is_short(available_gb, expected_gb)
 
     # Print the remaining load cost when RAM is short or --memory
@@ -2059,7 +2097,7 @@ def warn_if_low_memory():
         if text_server_running:
             print(f'Memory: expect about {format_gigabytes(expected_gb)} for whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}) and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
         else:
-            print(f'Memory: expect about {format_gigabytes(expected_gb)} for text server ({format_gigabytes(TEXT_SERVER_EXPECTED_GB)}), whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}), and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
+            print(f'Memory: expect about {format_gigabytes(expected_gb)} for text server ({format_gigabytes(text_server_expected_gb())}), whisper ({format_gigabytes(WHISPER_EXPECTED_GB)}), and kokoro ({format_gigabytes(KOKORO_EXPECTED_GB)}), {format_gigabytes(available_gb)} available', flush=True)
 
     # Warn only about memory that still has to be allocated
     if low and not text_server_running:

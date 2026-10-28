@@ -10,6 +10,8 @@ LIBRARY_DIR="${TEXT_DIR}/llama.cpp/build/bin"
 CUDA_LIBRARY="${LIBRARY_DIR}/libggml-cuda.so"
 CACHE_PATH="${TEXT_DIR}/cache"
 MODELS_DIR="${TEXT_DIR}/models"
+PROG_SERVER="${TEXT_DIR}/prog_server.py"
+PROG_PYTHON="${TEXT_DIR}/../.venv/bin/python"
 GROW_REQUEST_PATH="${CACHE_PATH}/grow_to"
 
 # Default model preset, override with ./server.sh 1b or ./server.sh e2b
@@ -49,6 +51,12 @@ main() {
     if [[ "${preset}" == "-h" || "${preset}" == "--help" ]]; then
         print_usage
         exit 0
+    fi
+
+    # Serve fixed replies in place of a model when asked
+    if [[ "${preset}" == "prog" ]]; then
+        echo "Model: prog"
+        exec "${PROG_PYTHON}" "${PROG_SERVER}"
     fi
     select_model "${preset}"
 
@@ -197,9 +205,12 @@ read_grow_request() {
 
 # Print usage help
 print_usage() {
-    echo "Usage: ./server.sh [e2b|1b]"
+    echo "Usage: ./server.sh [e2b|1b|600m|270m|prog]"
     echo "  e2b  Gemma 4 E2B Q4_K_S, default, tool calling works"
     echo "  1b   Gemma 3 1B Q4_K_M, faster, but no native tool calling"
+    echo "  600m Qwen3 0.6B Q4_K_M, for 2 GB boards, tool calling works"
+    echo "  270m Gemma 3 270M Q4_K_M, smallest, for 2 GB boards, weak answers"
+    echo "  prog Fixed replies and no model, for 2 GB boards, uses almost no memory"
     echo "Context starts at CONTEXT_SIZE, default 4096, and grows when client.py requests it."
 }
 
@@ -216,6 +227,16 @@ select_model() {
             MODEL_ALIAS="gemma-3-1b"
             MODEL_NAME="gemma-3-1b-it-Q4_K_M.gguf"
             MODEL_URL="https://huggingface.co/unsloth/gemma-3-1b-it-GGUF/resolve/main/${MODEL_NAME}"
+            ;;
+        600m)
+            MODEL_ALIAS="qwen3-0.6b"
+            MODEL_NAME="Qwen3-0.6B-Q4_K_M.gguf"
+            MODEL_URL="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/${MODEL_NAME}"
+            ;;
+        270m)
+            MODEL_ALIAS="gemma-3-270m"
+            MODEL_NAME="gemma-3-270m-it-Q4_K_M.gguf"
+            MODEL_URL="https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main/${MODEL_NAME}"
             ;;
         *)
             echo "Unknown model preset: ${preset}"

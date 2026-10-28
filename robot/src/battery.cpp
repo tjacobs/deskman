@@ -44,6 +44,9 @@ static const int BATTERY_CHECK_MS = 1000;
 static const float BATTERY_FILTER = 0.99f;
 static const float BATTERY_CURRENT_FILTER = 0.7f;
 
+// Below this the meter is reading a floating input, so no pack is connected
+static const float BATTERY_VOLTAGE_PRESENT_MIN = 3.0f;
+
 // Room for the face label text
 static const int BATTERY_LABEL_SIZE = 64;
 
@@ -109,10 +112,12 @@ static void update_battery_reading() {
         return;
     }
 
-    // Drop a bad sample
+    // Treat a reading too low for any pack as no battery, and forget the old smoothed value
     float voltage = read_bus_volts();
-    if (voltage <= 0) {
+    if (voltage < BATTERY_VOLTAGE_PRESENT_MIN) {
         battery_label.clear();
+        battery_voltage_value = 0;
+        battery_percent_value = 0;
         return;
     }
 
