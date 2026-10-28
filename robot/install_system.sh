@@ -177,6 +177,11 @@ PANEL_OUTPUT="DSI-2"
 PANEL_MODE="1280x800"
 PANEL_TRANSFORM="270"
 
+# Any other display, such as HDMI, sits right of the panel and is turned the opposite way, it is mounted facing the other direction, the panel is this wide once rotated
+EXTERNAL_OUTPUT="*"
+EXTERNAL_TRANSFORM="90"
+PANEL_ROTATED_WIDTH="800"
+
 # Touch keyboard paths, matchbox sets no window class so openbox matches it on the title
 MATCHBOX_LAYOUT_DIR="/usr/share/matchbox-keyboard"
 OPENBOX_CONFIG_NAME="lxde-pi-rc.xml"
@@ -749,12 +754,17 @@ persist_pi_touch_rotation() {
     map_pi_touch || true
 }
 
-# labwc starts kanshi, this profile is what keeps DSI-2 rotated after login
+# labwc starts kanshi, these profiles keep DSI-2 rotated after login, alone or with another display, and turn that display portrait too
 write_kanshi_portrait() {
     mkdir -p "${RUN_HOME}/.config/kanshi"
     cat > "${RUN_HOME}/.config/kanshi/config" <<EOF
 profile {
     output ${PANEL_OUTPUT} enable mode ${PANEL_MODE} transform ${PANEL_TRANSFORM}
+}
+
+profile {
+    output ${PANEL_OUTPUT} enable mode ${PANEL_MODE} transform ${PANEL_TRANSFORM} position 0,0
+    output ${EXTERNAL_OUTPUT} enable transform ${EXTERNAL_TRANSFORM} position ${PANEL_ROTATED_WIDTH},0
 }
 EOF
     chown -R "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/kanshi"
