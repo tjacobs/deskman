@@ -177,10 +177,9 @@ PANEL_OUTPUT="DSI-2"
 PANEL_MODE="1280x800"
 PANEL_TRANSFORM="270"
 
-# Any other display, such as HDMI, sits right of the panel and is turned the opposite way, it is mounted facing the other direction, the panel is this wide once rotated
+# Any other display, such as HDMI, replaces the panel while it is plugged in and is turned the opposite way, it is mounted facing the other direction
 EXTERNAL_OUTPUT="*"
 EXTERNAL_TRANSFORM="90"
-PANEL_ROTATED_WIDTH="800"
 
 # The output labwc pins touch devices without their own rule to, or the HDMI screen's touches spread across both screens
 EXTERNAL_TOUCH_OUTPUT="HDMI-A-1"
@@ -758,7 +757,7 @@ persist_pi_touch_rotation() {
     map_pi_hdmi_touch
 }
 
-# labwc starts kanshi, these profiles keep DSI-2 rotated after login, alone or with another display, and turn that display portrait too
+# labwc starts kanshi, these profiles keep DSI-2 rotated after login when alone, and switch it off for another display, which they turn portrait
 write_kanshi_portrait() {
     mkdir -p "${RUN_HOME}/.config/kanshi"
     cat > "${RUN_HOME}/.config/kanshi/config" <<EOF
@@ -767,8 +766,8 @@ profile {
 }
 
 profile {
-    output ${PANEL_OUTPUT} enable mode ${PANEL_MODE} transform ${PANEL_TRANSFORM} position 0,0
-    output ${EXTERNAL_OUTPUT} enable transform ${EXTERNAL_TRANSFORM} position ${PANEL_ROTATED_WIDTH},0
+    output ${PANEL_OUTPUT} disable
+    output ${EXTERNAL_OUTPUT} enable transform ${EXTERNAL_TRANSFORM} position 0,0
 }
 EOF
     chown -R "${RUN_USER}:${RUN_USER}" "${RUN_HOME}/.config/kanshi"
