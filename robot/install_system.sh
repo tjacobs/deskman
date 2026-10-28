@@ -182,6 +182,9 @@ EXTERNAL_OUTPUT="*"
 EXTERNAL_TRANSFORM="90"
 PANEL_ROTATED_WIDTH="800"
 
+# The output labwc pins touch devices without their own rule to, or the HDMI screen's touches spread across both screens
+EXTERNAL_TOUCH_OUTPUT="HDMI-A-1"
+
 # Touch keyboard paths, matchbox sets no window class so openbox matches it on the title
 MATCHBOX_LAYOUT_DIR="/usr/share/matchbox-keyboard"
 OPENBOX_CONFIG_NAME="lxde-pi-rc.xml"
@@ -752,6 +755,7 @@ persist_pi_touch_rotation() {
     apply_pi_panel_rotation
     write_pi_touch_map
     map_pi_touch || true
+    map_pi_hdmi_touch
 }
 
 # labwc starts kanshi, these profiles keep DSI-2 rotated after login, alone or with another display, and turn that display portrait too
@@ -804,6 +808,21 @@ map_pi_touch() {
     xinput list --name-only 2>/dev/null | { grep -E 'ft5x06|Goodix' || true; } | while IFS= read -r touch_name; do
         xinput map-to-output "${touch_name}" "${PANEL_OUTPUT}"
     done
+}
+
+# Pin touch devices without their own rule to the HDMI output in labwc, so it works on any USB port and turns with the screen
+map_pi_hdmi_touch() {
+    labwc_config="${RUN_HOME}/.config/labwc/rc.xml"
+
+    # Nothing to edit without a labwc config, and nothing to do once the rule is there
+    if [[ ! -f "${labwc_config}" ]] || grep -q "<touch mapToOutput=\"${EXTERNAL_TOUCH_OUTPUT}\"" "${labwc_config}"; then
+        return
+    fi
+
+    # Add the rule before the end of the config and ask labwc to read it
+    sed -i "s|</openbox_config>|  <touch mapToOutput=\"${EXTERNAL_TOUCH_OUTPUT}\" mouseEmulation=\"yes\" />\n</openbox_config>|" "${labwc_config}"
+    chown "${RUN_USER}:${RUN_USER}" "${labwc_config}"
+    reload_compositor_config
 }
 
 # Add the rotated MetaModes to the Tegra device section
