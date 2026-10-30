@@ -729,7 +729,7 @@ class Speaker:
         if utils.is_bedtime():
             return
         if self.player is None:
-            self.player = subprocess.Popen(utils.play_raw_command(OUTPUT_RATE, OUTPUT_CHANNELS), stdin=subprocess.PIPE)
+            self.player = subprocess.Popen(utils.play_raw_command(OUTPUT_RATE, OUTPUT_CHANNELS), stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
             self.player.stdin.write(chunk)
             self.player.stdin.flush()

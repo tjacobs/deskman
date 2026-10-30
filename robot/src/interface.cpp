@@ -92,8 +92,11 @@ static const char* MENU_QUIET_LABEL = "Quiet";
 static const char* MENU_UNMUTE_LABEL = "Unmute";
 
 // Which model talk runs, a row of one button each along the bottom while the menu is open
-static const char* TALK_MODE_LABELS[] = {"Local", "Cloud", "Realtime"};
-static const int TALK_MODE_COUNT = 3;
+static const char* TALK_MODE_LABELS[] = {"Local", "Cloud", "Realtime", "Gemini"};
+static const int TALK_MODE_COUNT = 4;
+static const int TALK_MODE_COLUMNS = 3;
+static const int TALK_MODE_ROWS = 2;
+static const char* TALK_MODE_TITLE = "Model";
 
 // Hamburger button size and its three lines
 static const int HAMBURGER_BUTTON_WIDTH = 72;
@@ -282,7 +285,7 @@ static steady_clock::time_point g_last_menu_tap{};
 static atomic<int> g_talk_mode{0};
 static atomic<int> g_talk_saved_mode{0};
 static atomic<bool> g_talk_mode_pending{false};
-static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true};
+static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true, true};
 
 // Whether talk.py is running, Listen and the mode buttons grey out when not, and a tap on one that asks for talk to start
 static atomic<bool> g_talk_running{false};
@@ -324,6 +327,7 @@ static SDL_Rect menu_button_rect();
 static SDL_Rect menu_item_rect(int row);
 static SDL_Rect settings_item_rect(int row);
 static SDL_Rect talk_mode_rect(int mode);
+static SDL_Rect talk_mode_title_rect();
 static int menu_item_width();
 static void draw_talk_modes(TTF_Font* font);
 static void open_video_list();
@@ -844,23 +848,34 @@ static SDL_Rect menu_item_rect(int row) {
 // Place a Settings row in the column left of the popup, stacked above the mode row so the mode buttons stay reachable
 static SDL_Rect settings_item_rect(int row) {
     SDL_Rect bottom_rect = menu_item_rect(MENU_MAIN_COUNT - 1);
-    SDL_Rect mode_rect = talk_mode_rect(TALK_MODE_COUNT - 1);
+    SDL_Rect mode_rect = talk_mode_rect(TALK_MODE_COLUMNS - 1);
     int pad = status_bar_pad();
-    int from_bottom = MENU_SETTINGS_COUNT - row;
-    return {mode_rect.x, bottom_rect.y - from_bottom * (bottom_rect.h + pad), bottom_rect.w, bottom_rect.h};
+    int from_bottom = MENU_SETTINGS_COUNT - row + TALK_MODE_ROWS - 1;
+    int title_room = talk_mode_title_rect().h + pad;
+    return {mode_rect.x, bottom_rect.y - from_bottom * (bottom_rect.h + pad) - title_room, bottom_rect.w, bottom_rect.h};
 }
 
-// Place one mode button in the row left of the popup, level with its bottom row, Local on the left
+// Place one mode button in the grid left of the popup, the last row level with its bottom row, Local top left
 static SDL_Rect talk_mode_rect(int mode) {
     SDL_Rect bottom_rect = menu_item_rect(MENU_MAIN_COUNT - 1);
     int pad = status_bar_pad();
-    return {pad + mode * (bottom_rect.w + pad), bottom_rect.y, bottom_rect.w, bottom_rect.h};
+    int rows_above = TALK_MODE_ROWS - 1 - mode / TALK_MODE_COLUMNS;
+    return {pad + (mode % TALK_MODE_COLUMNS) * (bottom_rect.w + pad), bottom_rect.y - rows_above * (bottom_rect.h + pad), bottom_rect.w, bottom_rect.h};
 }
 
-// Share the screen width between the mode row and the popup column, so every button is the same width
+// Place the short title box across the top of the mode grid
+static SDL_Rect talk_mode_title_rect() {
+    SDL_Rect first_rect = talk_mode_rect(0);
+    SDL_Rect last_rect = talk_mode_rect(TALK_MODE_COLUMNS - 1);
+    int pad = status_bar_pad();
+    int height = first_rect.h / 2;
+    return {first_rect.x, first_rect.y - height - pad, last_rect.x + last_rect.w - first_rect.x, height};
+}
+
+// Share the screen width between the mode grid and the popup column, so every button is the same width
 static int menu_item_width() {
     int pad = status_bar_pad();
-    int columns = TALK_MODE_COUNT + 1;
+    int columns = TALK_MODE_COLUMNS + 1;
     return (screen_width - pad * (columns + 1)) / columns;
 }
 
@@ -992,6 +1007,10 @@ void draw_menu(TTF_Font* font) {
 
 // Draw the three mode buttons, the running one lit and the ones talk cannot run dimmed, all dimmed while talk is not running
 static void draw_talk_modes(TTF_Font* font) {
+    // Label the grid with a title box
+    draw_button(talk_mode_title_rect(), TALK_MODE_TITLE, TALK_MODE_UNAVAILABLE_COLOR, TALK_MODE_UNAVAILABLE_LABEL_COLOR, font);
+
+    // Draw each mode button
     bool running = g_talk_running.load();
     for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
         SDL_Color fill = TALK_MODE_OFF_COLOR;

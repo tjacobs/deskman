@@ -1126,6 +1126,8 @@ static int load_talk_mode() {
     nlohmann::json config = nlohmann::json::parse(file, nullptr, false);
     if (config.is_discarded() || !config.is_object())
         return TALK_MODE_LOCAL;
+    if (config.value("gemini_live", false))
+        return TALK_MODE_GEMINI;
     if (config.value("realtime", false))
         return TALK_MODE_REALTIME;
     if (config.value("cloud", false))
@@ -1135,7 +1137,7 @@ static int load_talk_mode() {
 
 // Save the mode for the next run, then bring talk back up on it
 static void switch_talk_mode(int mode) {
-    // Keep the rest of the file in its order, only the three model values change
+    // Keep the rest of the file in its order, only the model values change
     string path = repo_path(TALK_CONFIG_FROM_REPO);
     nlohmann::ordered_json config = nlohmann::ordered_json::object();
     ifstream file(path);
@@ -1146,10 +1148,11 @@ static void switch_talk_mode(int mode) {
     }
     file.close();
 
-    // Save only the chosen mode as true, the three are one choice
+    // Save only the chosen mode as true
     config["local"] = mode == TALK_MODE_LOCAL;
     config["cloud"] = mode == TALK_MODE_CLOUD;
     config["realtime"] = mode == TALK_MODE_REALTIME;
+    config["gemini_live"] = mode == TALK_MODE_GEMINI;
 
     // Write the file, and say so when it cannot be saved
     ofstream out(path);

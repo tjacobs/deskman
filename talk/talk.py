@@ -171,7 +171,7 @@ TURN_STEPS = ('speech_end', 'heard_start', 'heard', 'ask', 'replied', 'speak', '
 TIMING_ENV_NAME = 'TALK_TIMING'
 
 # Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
-TALK_MODE_NAMES = ('local', 'cloud', 'realtime')
+TALK_MODE_NAMES = ('local', 'cloud', 'realtime', 'gemini_live')
 
 # Config the config.json key that serves the local model with LiteRT instead of llama.cpp, set litert true
 LITERT_CONFIG_NAME = 'litert'
@@ -189,6 +189,7 @@ PROMPT_MODE = False
 TIMING_MODE = False
 CLOUD_MODE = False
 REALTIME_MODE = False
+GEMINI_MODE = False
 ACCENT_MODE = False
 LITERT_MODE = False
 LOCAL_REASON_SHOWN = False
@@ -217,17 +218,24 @@ import robot_move
 import volume
 text_ask.set_talk_module(sys.modules[__name__])
 
-# Import the realtime provider on its own, only --realtime needs websocket-client
+# Import the realtime providers on their own, OpenAI needs websocket-client and Gemini needs google-genai
 try:
-    import realtime_openai as realtime
+    import realtime_openai
 except ImportError:
-    realtime = None
+    realtime_openai = None
+try:
+    import realtime_gemini
+except ImportError:
+    realtime_gemini = None
+
+# Pick the provider the realtime calls go to, main switches it to Gemini when that mode runs
+realtime = realtime_openai
 
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, ACCENT_MODE, LITERT_MODE, text_server_process
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, GEMINI_MODE, ACCENT_MODE, LITERT_MODE, text_server_process, realtime
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE, gemini_flag = parse_args()
 
     # Load the saved mode, the robot service has no flags so it lives in config.json
     saved_mode = load_saved_mode()
@@ -241,22 +249,33 @@ def main():
     TIMING_MODE = TIMING_MODE or bool(utils.load_config({TIMING_CONFIG_NAME: False})[TIMING_CONFIG_NAME])
 
     # Run the saved mode unless a flag picked one
-    if not realtime_flag and not cloud_flag and not local_flag:
+    if not realtime_flag and not cloud_flag and not local_flag and not gemini_flag:
         realtime_flag = saved_mode == 'realtime'
+        gemini_flag = saved_mode == 'gemini_live'
         cloud_flag = saved_mode == 'cloud'
         local_flag = saved_mode == 'local'
-    REALTIME_MODE = realtime_flag
+    REALTIME_MODE = realtime_flag or gemini_flag
+    GEMINI_MODE = gemini_flag
 
     # Two flags that contradict each other, say so rather than quietly pick one
-    if realtime_flag and local_flag:
-        print('Error: --realtime needs OpenAI, so it cannot be used with --local.')
+    if realtime_flag and gemini_flag:
+        print('Error: use --realtime or --gemini, not both.')
+        print_usage()
+        sys.exit(1)
+    if REALTIME_MODE and local_flag:
+        print('Error: --realtime and --gemini need the internet, so they cannot be used with --local.')
         print_usage()
         sys.exit(1)
 
-    # Realtime needs OpenAI, so --local and config local turn it off
+    # Realtime needs the internet, so --local and config local turn it off
     if local_flag:
         REALTIME_MODE = False
+        GEMINI_MODE = False
         print('Local: True', flush=True)
+
+    # Send the realtime calls to Gemini when that mode runs
+    if GEMINI_MODE:
+        realtime = realtime_gemini
 
     # Drop realtime when the socket, the net, or the key is missing
     if REALTIME_MODE:
@@ -264,15 +283,20 @@ def main():
         if reason:
             print(f'{reason} Using local.', flush=True)
             REALTIME_MODE = False
+            GEMINI_MODE = False
 
             # Realtime was asked for, so a missing key opens the setup
             if reason == NO_KEY_REASON:
                 offer_key_setup(True)
         else:
-            print('Realtime: True', flush=True)
+            print('Gemini Live: True' if GEMINI_MODE else 'Realtime: True', flush=True)
 
-    # Realtime streams to OpenAI, so it forces the cloud backend and never starts llama-server
-    CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
+    # Gemini needs no text backend, OpenAI realtime forces the cloud one, and neither starts llama-server
+    if GEMINI_MODE:
+        CLOUD_MODE = False
+        text_client.disable_cloud()
+    else:
+        CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
 
     # Update the mode button on screen
     robot_move.show_talk_mode(running_mode_name(), available_mode_names())
@@ -344,6 +368,7 @@ def parse_args():
     cloud_mode = False
     local_mode = False
     realtime_mode = False
+    gemini_mode = False
     accent_mode = False
     model_name = ""
     arguments = sys.argv[1:]
@@ -368,6 +393,8 @@ def parse_args():
             cloud_mode = True
         elif argument == '--realtime':
             realtime_mode = True
+        elif argument == '--gemini':
+            gemini_mode = True
         elif argument == '--local':
             local_mode = True
         elif argument == '--accent':
@@ -393,14 +420,14 @@ def parse_args():
         sys.exit(1)
 
     # Return the arguments
-    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, timing_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode
+    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, timing_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode, gemini_mode
 
 # Read the one mode config.json has true, empty when none is, and stop when more than one is
 def load_saved_mode():
     config = utils.load_config({name: False for name in TALK_MODE_NAMES})
     saved = [name for name in TALK_MODE_NAMES if config[name]]
     if len(saved) > 1:
-        print(f'Error: config.json has {", ".join(saved)} true, set only one of local, cloud, or realtime.')
+        print(f'Error: config.json has {", ".join(saved)} true, set only one of local, cloud, realtime, or gemini_live.')
         sys.exit(1)
     return saved[0] if saved else ''
 
@@ -486,6 +513,8 @@ def use_local_text():
 
 # Name the mode talk is running in, the same names as the robot mode buttons
 def running_mode_name():
+    if GEMINI_MODE:
+        return 'gemini'
     if REALTIME_MODE:
         return 'realtime'
     if CLOUD_MODE:
@@ -503,20 +532,29 @@ def available_mode_names():
     online = utils.network_available() and bool(text_client.cloud_api_key())
     if online:
         names.append('cloud')
-    if online and realtime is not None:
+    if online and realtime_openai is not None:
         names.append('realtime')
+    if utils.network_available() and realtime_gemini is not None and realtime_gemini.load_key():
+        names.append('gemini')
     return names
 
 # Why realtime cannot start, empty when it can
 def realtime_unavailable_reason():
     global LOCAL_REASON_SHOWN
     if realtime is None:
-        return 'Realtime needs websocket-client. Run ./install.sh to install it.'
+        return 'Realtime needs its packages. Run ./install.sh to install them.'
 
     # No net and no key also stop the text cloud path, so the caller speaks for both
     if not utils.network_available():
         LOCAL_REASON_SHOWN = True
         return 'Realtime needs internet.'
+
+    # Gemini has its own key
+    if GEMINI_MODE:
+        if not realtime.load_key():
+            LOCAL_REASON_SHOWN = True
+            return 'Gemini Live needs a key, write talk/gemini.env.'
+        return ''
 
     # The spoken session needs the same key the text cloud path uses
     text_client.load_openai_env_file()
@@ -541,7 +579,7 @@ def say_accent_phrase():
 
 # Print usage help
 def print_usage():
-    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--timing] [--cloud] [--realtime] [--local] [--model name]')
+    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--timing] [--cloud] [--realtime] [--gemini] [--local] [--model name]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --accent           say the accent test phrase in the current voice, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
@@ -552,6 +590,7 @@ def print_usage():
     print('  --timing           print step timing after each spoken reply, or set TALK_TIMING=1 or timing in config.json')
     print('  --cloud            ask OpenAI instead of the local llama-server, see config.json')
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
+    print('  --gemini           stream audio to Gemini Live both ways after the wake word, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
     print('  (no arg)           say "deskman" then a command, uses OpenAI when online, else local Gemma')
@@ -705,7 +744,7 @@ def say_out_loud(listener, kokoro_pipeline, text):
             said = realtime.speak_line(text)
         except Exception as error:
             print_error('realtime line failed', error)
-            robot_move.print_warning(*text_client.openai_warning(error))
+            robot_move.print_warning(*realtime_warning(error))
         finally:
             listener.unmute()
 
@@ -760,10 +799,16 @@ def run_realtime_turn(listener, command):
         return True
     return silenced
 
+# Name a realtime failure for the face with the provider that is running
+def realtime_warning(error):
+    if GEMINI_MODE:
+        return realtime.describe_error(error), ''
+    return text_client.openai_warning(error)
+
 # Show why realtime failed and play the error tone, the next wake word tries realtime again
 def report_realtime_failure(listener, label, error):
     print_error(label, error)
-    robot_move.print_warning(*text_client.openai_warning(error))
+    robot_move.print_warning(*realtime_warning(error))
     play_tone(listener, ensure_tone(ERROR_WAV, ERROR_TONE_NOTES))
 
 # Ask the local text model for a spoken reply
@@ -1978,6 +2023,9 @@ def print_cloud_text_model():
 # Name the model that answers, realtime never sends a question to the text one
 def print_realtime_model():
     config = realtime.load_config()
+    if GEMINI_MODE:
+        print(f'Realtime model: {config["gemini_model"]} on Gemini, voice {config["realtime_voice"]}.', flush=True)
+        return
     print(f'Realtime model: {config["realtime_model"]} on {text_client.cloud_provider_name()}, voice {config["realtime_voice"]}.', flush=True)
 
 # Restart the text server when it died, return true when healthy again

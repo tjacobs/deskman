@@ -19,7 +19,7 @@ PYTHON_VERSION="3.12"
 JETSON_PYTHON_VERSION="3.10"
 
 # Pin transformers so tokenizers comes from a wheel, 4.12 builds from source and needs Rust
-PYTHON_PACKAGES=(kokoro soundfile soco websocket-client 'transformers>=4.46,<5')
+PYTHON_PACKAGES=(kokoro soundfile soco websocket-client google-genai 'transformers>=4.46,<5')
 SPACY_MODEL_URL="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
 LISTEN_PACKAGES=(faster-whisper)
 BUILD_PACKAGES=(pybind11 wheel)

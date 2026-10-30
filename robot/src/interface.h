@@ -105,6 +105,7 @@ void send_quiet();
 const int TALK_MODE_LOCAL = 0;
 const int TALK_MODE_CLOUD = 1;
 const int TALK_MODE_REALTIME = 2;
+const int TALK_MODE_GEMINI = 3;
 const int TALK_MODE_NONE = -1;
 
 // Show whether the camera preview is up, so the Camera button can say so

@@ -13,6 +13,7 @@ Scripts:
 - `listen.py` — live speech to text transcription from the microphone
 - `talk.py` — listens for wake word "deskman" and a command, feeds it into the LLM, and speaks a reply
 - `realtime_openai.py` — streams microphone audio to OpenAI and plays the spoken reply, no local models in the loop
+- `realtime_gemini.py` — streams microphone audio to Gemini Live and plays the spoken reply, no local models in the loop
 - `voice.py` — shared voice functions for live realtime models, microphone, speaker, conversation loop, tool handling
 - `utils.py` — shared audio, cache, device, and microphone helpers for those scripts
 
@@ -140,7 +141,7 @@ Flags that help debug audio and memory, and combine with each other and with `--
 
 A near miss is always played back, whether or not `--replay` is set, since hearing it is the whole point of reporting one.
 
-Pass `--realtime` to answer with OpenAI speech to speech instead of the local text and speech models. See below.
+Pass `--realtime` to answer with OpenAI speech to speech instead of the local text and speech models. See below. Pass `--gemini`, or set `gemini_live` true in `config.json`, to use Gemini Live instead, with the key in `GEMINI_API_KEY` or `talk/gemini.env`.
 
 ## realtime_openai.py
 
