@@ -67,6 +67,7 @@ main() {
     allow_network_control
     hide_builtin_usb
     install_browser
+    set_login_directory
     echo "Done."
 }
 
@@ -131,6 +132,9 @@ BUILTIN_USB_IDS="1d6b:0002|1d6b:0003|0bda:5489|0bda:0489|13d3:3549"
 ZRAM_CONF="/etc/systemd/zram-generator.conf"
 ZRAM_SIZE="ram / 2"
 ZRAM_COMPRESSION="zstd"
+
+# Line appended to .bashrc so login shells start in the deskman repo
+BASHRC_LOGIN_CD="cd ~/deskman"
 
 # Kill a process before memory runs out and the board freezes, only once swap is low too so the language model can use it
 EARLYOOM_CONF="/etc/default/earlyoom"
@@ -1283,6 +1287,21 @@ install_browser() {
 
     # Stock Ubuntu points links at Firefox, which is not installed
     run_as_user xdg-mime default "${JETSON_BROWSER_DESKTOP}" ${BROWSER_LINK_TYPES}
+}
+
+# Make login shells start in the deskman repo
+set_login_directory() {
+    bashrc_path="${RUN_HOME}/.bashrc"
+
+    # Leave it alone once the line is already there
+    if [[ -f "${bashrc_path}" ]] && grep -qxF "${BASHRC_LOGIN_CD}" "${bashrc_path}"; then
+        return
+    fi
+
+    echo "Starting shells in ~/deskman"
+    touch "${bashrc_path}"
+    printf '\n%s\n' "${BASHRC_LOGIN_CD}" >> "${bashrc_path}"
+    chown "${RUN_USER}:${RUN_USER}" "${bashrc_path}"
 }
 
 # Keep the Jetson fan stopped while the board is cool, then ramp it up as the stock quiet profile does
