@@ -211,9 +211,9 @@ import robot_move
 import volume
 text_ask.set_talk_module(sys.modules[__name__])
 
-# Import the realtime helper on its own, only --realtime needs websocket-client
+# Import the realtime provider on its own, only --realtime needs websocket-client
 try:
-    import realtime
+    import realtime_openai as realtime
 except ImportError:
     realtime = None
 

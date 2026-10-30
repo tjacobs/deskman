@@ -12,7 +12,8 @@ Scripts:
 - `say.py` — speak phrases by pressing keys, with voice and speed control
 - `listen.py` — live speech to text transcription from the microphone
 - `talk.py` — listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
-- `realtime.py` — streams microphone audio to OpenAI and plays the spoken reply, no local models in the loop
+- `realtime_openai.py` — streams microphone audio to OpenAI and plays the spoken reply, no local models in the loop
+- `realtime.py` — the parts every speech to speech provider shares, the microphone, speaker, conversation loop, and tool handling
 - `utils.py` — shared audio, cache, device, and microphone helpers for those scripts
 
 The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.
@@ -22,7 +23,7 @@ The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference.
 ./say.py
 ./listen.py
 ./talk.py
-./realtime.py
+./realtime_openai.py
 ./test.py
 ```
 
@@ -141,17 +142,17 @@ A near miss is always played back, whether or not `--replay` is set, since heari
 
 Pass `--realtime` to answer with OpenAI speech to speech instead of the local text and speech models. See below.
 
-## realtime.py
+## realtime_openai.py
 
 Streams microphone audio up to the [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime) over a WebSocket and plays the spoken reply back as it arrives, so the model hears you directly. Nothing is transcribed, sent as text, and read back out, which is what makes it answer faster and keep tone, pauses, and accent.
 
 ```bash
-./realtime.py
-./realtime.py "what is the time"
+./realtime_openai.py
+./realtime_openai.py "what is the time"
 ./talk.py --realtime
 ```
 
-On its own, `realtime.py` opens the microphone and talks until the room goes quiet for 20 seconds. Pass a question to send that first instead of waiting for speech. `--model` and `--voice` override `config.json` for one run.
+On its own, `realtime_openai.py` opens the microphone and talks until the room goes quiet for 20 seconds. Pass a question to send that first instead of waiting for speech. `--model` and `--voice` override `config.json` for one run.
 
 Under `talk.py --realtime`, the wake word still runs locally on whisper, and only what follows is streamed, so the microphone is not on a paid connection all day. Startup greets on the realtime session and keeps it open, so the first line needs no wake word. Each conversation closes after 20 seconds of quiet, then a 20 second follow-up window still takes speech without the wake word, then it waits for `robot` again. Turns are written to `history/` the same as any other.
 
@@ -163,11 +164,11 @@ Realtime needs OpenAI, so it forces the cloud backend and never starts the local
 
 Audio only travels at 24 kHz mono, the only rate the API takes, so microphone blocks are resampled up from 16 kHz on the way out. The microphone is muted while it speaks, so it does not hear itself, which also means you cannot interrupt it mid-reply.
 
-Input audio is transcribed by a second, cheap model purely so the heard lines reach the console and `history/`. The model itself never reads that text. `gpt-live-transcribe` runs by default and sends words while you are still talking, so the `Heard:` line fills in as you speak. The model's own words are not a second transcriber, they arrive as `response.output_audio_transcript.delta` from the realtime model while it speaks, so the `Reply:` line fills in the same way. Set `TRANSCRIBE_LIVE` to false in `realtime.py` for the older `gpt-4o-mini-transcribe` on input and to print each `Reply:` in one go after the turn, which is what `PRINT_REPLY_LIVE` follows. Dropping the `transcription` key from the session would still answer normally, it would just have no record of what you said.
+Input audio is transcribed by a second, cheap model purely so the heard lines reach the console and `history/`. The model itself never reads that text. `gpt-live-transcribe` runs by default and sends words while you are still talking, so the `Heard:` line fills in as you speak. The model's own words are not a second transcriber, they arrive as `response.output_audio_transcript.delta` from the realtime model while it speaks, so the `Reply:` line fills in the same way. Set `TRANSCRIBE_LIVE` to false in `realtime_openai.py` for the older `gpt-4o-mini-transcribe` on input and to print each `Reply:` in one go after the turn, which is what `PRINT_REPLY_LIVE` follows. Dropping the `transcription` key from the session would still answer normally, it would just have no record of what you said.
 
 ## config.json
 
-Realtime settings live in `config.json`, next to `talk.py`. Anything missing falls back to the constants at the top of `realtime.py`.
+Realtime settings live in `config.json`, next to `talk.py`. Anything missing falls back to the constants at the top of `realtime_openai.py`.
 
 ```json
 {
