@@ -5,6 +5,7 @@
 # Imports
 import os
 import re
+import socket
 import sys
 import time
 
@@ -30,9 +31,12 @@ SPEECH_SPEED = 1.2
 SPEECH_SAMPLE_RATE = 24000
 
 # Config wake words and phrases, desk man is how whisper often writes deskman
-WAKE_WORDS = ('robot', 'deskman', 'desk man')
-NEAR_WAKE_WORDS = ('rob', 'rub')
-WAKE_WORD_PATTERN = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in WAKE_WORDS) + r')\b', re.IGNORECASE)
+NUMBER_WORDS = {'0': 'zero', '1': 'one', '2': 'two', '3': 'three', '4': 'four', '5': 'five', '6': 'six', '7': 'seven', '8': 'eight', '9': 'nine'}
+ROBOT_NUMBER = ''.join(re.findall(r'\d+$', socket.gethostname()))
+NUMBER_WAKE_WORDS = tuple(f'number {phrase}' for phrase in (ROBOT_NUMBER, NUMBER_WORDS.get(ROBOT_NUMBER)) if phrase)
+WAKE_WORDS = ('deskman', 'desk man') + NUMBER_WAKE_WORDS
+NEAR_WAKE_WORDS = ('desk', 'dusk')
+WAKE_WORD_PATTERN = re.compile(r'\b(?:' + '|'.join(r'\s+'.join(re.escape(part) for part in word.split()) for word in WAKE_WORDS) + r')\b', re.IGNORECASE)
 GREETING = 'Hi!'
 SAY_HI = True
 TALK_READY = 'Idle.'
@@ -550,7 +554,7 @@ def print_usage():
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
-    print('  (no arg)           say "robot" or "deskman" then a command, uses OpenAI when online, else local Gemma')
+    print('  (no arg)           say "deskman" then a command, uses OpenAI when online, else local Gemma')
 
 # Run the talk loop with models already loaded
 def run_talk(record, whisper_model, vad_model, kokoro_pipeline):
@@ -1162,7 +1166,7 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
     # Show when it nearly heard its name
     near_miss = near_wake_word(text)
     if near_miss:
-        print('Nearly robot or deskman', flush=True)
+        print('Nearly deskman', flush=True)
 
     # Play back the recording, then say the words back, realtime only logs a near miss as kokoro stays unloaded
     local_voice = not REALTIME_MODE

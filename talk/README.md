@@ -11,7 +11,7 @@ Scripts:
 - `speak.py` — speak a phrase once, with timing stats
 - `say.py` — speak phrases by pressing keys, with voice and speed control
 - `listen.py` — live speech to text transcription from the microphone
-- `talk.py` — listens for wake word "robot" and a command, feeds it into the LLM, and speaks a reply
+- `talk.py` — listens for wake word "deskman" and a command, feeds it into the LLM, and speaks a reply
 - `realtime_openai.py` — streams microphone audio to OpenAI and plays the spoken reply, no local models in the loop
 - `realtime.py` — the parts every speech to speech provider shares, the microphone, speaker, conversation loop, and tool handling
 - `utils.py` — shared audio, cache, device, and microphone helpers for those scripts
@@ -102,7 +102,7 @@ Use `--terminal` over SSH, it skips the browser and paste box and prompts on the
 
 ## talk.py
 
-Say the wake word `robot`, then a command, and it speaks a reply from the local text model. Say `robot, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop`.
+Say the wake word `deskman`, or `number 4` when the hostname ends in 4, then a command, and it speaks a reply from the local text model. Say `deskman, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop`.
 
 ```bash
 ./install.sh
@@ -112,7 +112,7 @@ Say the wake word `robot`, then a command, and it speaks a reply from the local 
 
 With no flags, talk pings `1.1.1.1` and uses OpenAI when that works and a key is in `OPENAI_API_KEY` or `openai.env`. Otherwise it starts the local Gemma server. `--cloud` forces OpenAI, `--local` forces Gemma. Optional: `TALK_LLM=cloud`, `TALK_CLOUD_MODEL` or `--model` (default `gpt-4o-mini`), `TALK_CLOUD_BASE` (default `https://api.openai.com`). Whisper and Kokoro stay local.
 
-Say `robot what is the time`, and it answers straight away. Say just `robot` and it replies `Question for me?`, then waits for the command. You can keep talking for 20 seconds after a reply without saying `robot` again.
+Say `deskman what is the time`, and it answers straight away. Say just `deskman` and it replies `Question for me?`, then waits for the command. You can keep talking for 20 seconds after a reply without saying `deskman` again.
 
 The microphone stays open the whole time. A background thread reads it into blocks, the Silero voice activity detector finds where each utterance starts and ends, and only whole utterances go to whisper. The mic is muted while it speaks, so it does not hear itself.
 
@@ -126,7 +126,7 @@ Conversations are appended to `history/YYYY-MM-DD.txt`, including tool calls and
 
 Say `remind me at dinner time` or `remind me at 10 PM for bedtime` to schedule a spoken reminder. Say `what reminders do I have` to list them, or `cancel the dinner reminder` to remove one. On startup, dinner and bedtime reminders are seeded from matching memory facts when those reminders are missing.
 
-When it nearly hears its name, a transcription with `rob` or `rub` in it but not `robot`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
+When it nearly hears its name, a transcription with `desk` or `dusk` in it but not `deskman`, it plays the recording back and says what it heard, so you can tell why it did not wake. Near miss words are in `NEAR_WAKE_WORDS`.
 
 On an 8 GB machine the text server, whisper, and kokoro together need a few GB of RAM. Talk loads whisper and kokoro first, then the text server, so a tight memory load does not kill an already-running Gemma. It warns when free RAM is below the expected cost before loading. If the text server dies later, often from out of memory, talk prints that and tries to restart it a few times before giving up. Startup failures are logged to `text/server.log`.
 
@@ -154,7 +154,7 @@ Streams microphone audio up to the [OpenAI Realtime API](https://platform.openai
 
 On its own, `realtime_openai.py` opens the microphone and talks until the room goes quiet for 20 seconds. Pass a question to send that first instead of waiting for speech. `--model` and `--voice` override `config.json` for one run.
 
-Under `talk.py --realtime`, the wake word still runs locally on whisper, and only what follows is streamed, so the microphone is not on a paid connection all day. Startup greets on the realtime session and keeps it open, so the first line needs no wake word. Each conversation closes after 20 seconds of quiet, then a 20 second follow-up window still takes speech without the wake word, then it waits for `robot` again. Turns are written to `history/` the same as any other.
+Under `talk.py --realtime`, the wake word still runs locally on whisper, and only what follows is streamed, so the microphone is not on a paid connection all day. Startup greets on the realtime session and keeps it open, so the first line needs no wake word. Each conversation closes after 20 seconds of quiet, then a 20 second follow-up window still takes speech without the wake word, then it waits for `deskman` again. Turns are written to `history/` the same as any other.
 
 The local tools all still work, bridged into Realtime function calls, so the head, clock, memory, reminders, and volume behave as usual. The kokoro voice tools are held back, they pick a voice OpenAI is not speaking with, so `set_voice` and `list_voices` are answered here instead with the ten OpenAI voices.
 
