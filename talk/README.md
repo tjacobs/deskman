@@ -2,7 +2,7 @@
 
 Speech to text, LLM inference, and text to speech generation.
 
-Runs locally, offline, no cloud/internet/wifi needed once downloaded. With no flags, `talk.py` uses OpenAI when the internet and `OPENAI_API_KEY` are present, otherwise the local Gemma server. `--cloud` and `--local` override. `--realtime` skips the local speech models entirely and streams audio both ways to OpenAI.
+Runs locally, offline, no cloud/internet/wifi needed once downloaded. With no flags, `talk.py` uses OpenAI when the internet and `OPENAI_API_KEY` are present, otherwise the local Gemma server. `--cloud` and `--local` override. `--realtime` skips the local speech models entirely and streams audio both ways to OpenAI, and `--gemini` does the same with Gemini Live.
 
 Conversational AI bot with tools like time, date, volume, and google calendar integration.
 
@@ -178,27 +178,55 @@ Audio only travels at 24 kHz mono, the only rate the API takes, so microphone bl
 
 Input audio is transcribed by a second, cheap model purely so the heard lines reach the console and `history/`. The model itself never reads that text. `gpt-live-transcribe` runs by default and sends words while you are still talking, so the `Heard:` line fills in as you speak. The model's own words are not a second transcriber, they arrive as `response.output_audio_transcript.delta` from the realtime model while it speaks, so the `Reply:` line fills in the same way. Set `TRANSCRIBE_LIVE` to false in `realtime_openai.py` for the older `gpt-4o-mini-transcribe` on input and to print each `Reply:` in one go after the turn, which is what `PRINT_REPLY_LIVE` follows. Dropping the `transcription` key from the session would still answer normally, it would just have no record of what you said.
 
+## realtime_gemini.py
+
+Streams microphone audio up to [Gemini Live](https://ai.google.dev/gemini-api/docs/live) and plays the spoken reply as it arrives, the same idea as `realtime_openai.py` with the same conversation loop, tools, and wake word flow from `voice.py`. It uses the `google-genai` SDK, which `install.sh` installs, and the key from `install_gemini_key.sh`.
+
+```bash
+./realtime_gemini.py
+./realtime_gemini.py "what is the time"
+./talk.py --gemini
+```
+
+`--model` and `--voice` override `config.json` for one run, and `talk.py` runs it when `gemini_live` is true. Like OpenAI it needs the internet, forces no text backend, and cannot be combined with `--local`.
+
+What differs from OpenAI:
+
+- Gemini finds the ends of sentences itself, and what you said arrives as one block when you stop, so the `Heard:` line appears all at once instead of filling in as you speak. The `Reply:` line still fills in as it speaks.
+- Audio goes up at 16 kHz and comes back at 24 kHz, so the microphone is not resampled up. The microphone is still muted while it speaks, so it cannot be interrupted mid-reply.
+- Tools are declared as blocking, so the model waits for each result before it talks. A voice change skips sending the result, since the session is about to be replaced.
+- Gemini has no cancel and no input buffer to clear, closing the session is how a reply is cut off.
+- The voices are `achird`, `enceladus`, `umbriel`, and `alnilam`, picked by ear, with `achird` as the default. A voice set in `config.json` that is not one of these falls back to the default, since `realtime_voice` and `realtime_accent` are shared with OpenAI.
+- A voice change opens a new session and puts the last ten turns into its instructions, since Gemini ignores history sent after the session starts.
+- The model thinks before it answers and the thinking tokens are billed, so a turn costs a little more than its audio.
+
+The first reply audio can arrive in small, late pieces, so `voice.py` holds back the first fraction of a second of any reply before the speaker starts, which stops it running dry.
+
 ## config.json
 
-Realtime settings live in `config.json`, next to `talk.py`. Anything missing falls back to the constants at the top of `realtime_openai.py`.
+Realtime settings live in `config.json`, next to `talk.py`. Anything missing falls back to the constants at the top of `realtime_openai.py` or `realtime_gemini.py`.
 
 ```json
 {
   "local": false,
   "cloud": false,
   "realtime": true,
+  "gemini_live": false,
   "realtime_model": "gpt-realtime-2.1-mini",
+  "gemini_model": "gemini-3.8-live",
   "realtime_voice": "echo",
   "realtime_accent": "You are a British man from London. Speak with a natural British accent."
 }
 ```
 
-- `local`, `cloud`, `realtime` — the saved mode, set exactly one true, the robot mode buttons write these
+- `local`, `cloud`, `realtime`, `gemini_live` — the saved mode, set exactly one true, the robot mode buttons write these
 - `local` — the local Gemma server, the same as passing `--local`
 - `cloud` — OpenAI for text with the kokoro voice, the same as passing `--cloud`
 - `realtime` — OpenAI speech to speech, the same as passing `--realtime`
-- `realtime_model` — the realtime model, the mini one is cheaper and quick enough to hold a conversation
-- `realtime_voice` — the OpenAI voice, separate from the kokoro `VOICES` the local path uses
+- `gemini_live` — Gemini Live speech to speech, the same as passing `--gemini`
+- `realtime_model` — the OpenAI realtime model, the mini one is cheaper and quick enough to hold a conversation
+- `gemini_model` — the Gemini Live model
+- `realtime_voice` — the realtime voice for whichever provider runs, separate from the kokoro `VOICES` the local path uses
 - `realtime_accent` — appended to the system prompt, the voices are American by default and this is what makes one sound British
 
 ## robot service
@@ -219,7 +247,7 @@ journalctl -u robot -f
 tail -f log.txt
 ```
 
-The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Tap Local, Cloud, or Realtime in the robot menu, or set exactly one of `"local"`, `"cloud"`, or `"realtime"` true in `config.json` and restart. With none true, talk uses OpenAI when online with a key, otherwise Gemma. `--cloud`, `--realtime`, and `--local` on the command line still win.
+The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Tap Local, Cloud, Realtime, or Gemini in the robot menu, or set exactly one of `"local"`, `"cloud"`, `"realtime"`, or `"gemini_live"` true in `config.json` and restart. With none true, talk uses OpenAI when online with a key, otherwise Gemma. `--cloud`, `--realtime`, `--gemini`, and `--local` on the command line still win.
 
 ## Testing
 
