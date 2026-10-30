@@ -22,7 +22,7 @@ import reminders
 import system
 import talks
 import video
-import voice
+import voices
 import volume
 
 # Config paths
@@ -43,7 +43,7 @@ MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
 
 # Tools the local model can call, Sonos and Google Calendar are added when an account is saved
-BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + video.TOOLS + voice.TOOLS + volume.TOOLS
+BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + video.TOOLS + voices.TOOLS + volume.TOOLS
 
 # Conversation history kept across asks in this process
 conversation_history = []
@@ -328,8 +328,8 @@ def ask_model(prompt):
                 continue
 
             # Force or apply set_voice when the model skipped a voice change
-            if voice.needs_set_voice(prompt) and "set_voice" not in used:
-                forced = voice.force_set_voice(prompt, messages, message, "voice" in retried, record_tool)
+            if voices.needs_set_voice(prompt) and "set_voice" not in used:
+                forced = voices.force_set_voice(prompt, messages, message, "voice" in retried, record_tool)
                 action = apply_forced(forced, messages, "voice", retried)
                 if action == "retry":
                     continue
@@ -337,12 +337,12 @@ def ask_model(prompt):
                     return action
 
             # Prefer the exact list_voices tool text when listing
-            if voice.needs_list_voices(prompt) and not voice.needs_set_voice(prompt):
+            if voices.needs_list_voices(prompt) and not voices.needs_set_voice(prompt):
                 if last_list_voices_result:
                     remember_turn(messages, last_list_voices_result)
                     return last_list_voices_result
-                arguments = voice.list_voices_arguments(prompt)
-                result = voice.run_list_voices(arguments)
+                arguments = voices.list_voices_arguments(prompt)
+                result = voices.run_list_voices(arguments)
                 record_tool("list_voices", arguments, result)
                 remember_turn(messages, result)
                 return result
@@ -400,7 +400,7 @@ def ask_model(prompt):
             messages.append(message)
         tool_result_lines = []
         for tool_call in tool_calls:
-            voice.inject_list_voices_count(tool_call, prompt)
+            voices.inject_list_voices_count(tool_call, prompt)
 
             # 1b often omits calculate.expression, fill a simple one from the user prompt
             if content_tools:
@@ -542,8 +542,8 @@ def ask_model(prompt):
                 return action
 
         # If it listed voices instead of setting one, set it in Python now
-        if voice.needs_set_voice(prompt) and "set_voice" not in used:
-            forced = voice.force_set_voice(prompt, messages, None, True, record_tool)
+        if voices.needs_set_voice(prompt) and "set_voice" not in used:
+            forced = voices.force_set_voice(prompt, messages, None, True, record_tool)
             action = apply_forced(forced, messages, "voice", retried)
             if action == "retry":
                 used.add("set_voice")
@@ -552,7 +552,7 @@ def ask_model(prompt):
                 return action
 
         # Speak the exact voice list from the tool, do not let the model shorten it
-        if voice.needs_list_voices(prompt) and last_list_voices_result and not voice.needs_set_voice(prompt):
+        if voices.needs_list_voices(prompt) and last_list_voices_result and not voices.needs_set_voice(prompt):
             remember_turn(messages, last_list_voices_result)
             return last_list_voices_result
 
@@ -995,11 +995,11 @@ def run_tool(tool_call):
 
     # Change or list speaking voices
     if name == "set_voice":
-        result = voice.run_set_voice(arguments)
+        result = voices.run_set_voice(arguments)
         record_tool(name, arguments, result)
         return result
     if name == "list_voices":
-        result = voice.run_list_voices(arguments)
+        result = voices.run_list_voices(arguments)
         record_tool(name, arguments, result)
         return result
 
@@ -1314,7 +1314,7 @@ def clear_prompt_cache():
 
 # Let talk.py register itself when running as __main__
 def set_talk_module(module):
-    voice.set_talk_module(module)
+    voices.set_talk_module(module)
 
 # Main
 if __name__ == "__main__":

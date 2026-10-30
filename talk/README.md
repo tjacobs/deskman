@@ -13,7 +13,7 @@ Scripts:
 - `listen.py` — live speech to text transcription from the microphone
 - `talk.py` — listens for wake word "deskman" and a command, feeds it into the LLM, and speaks a reply
 - `realtime_openai.py` — streams microphone audio to OpenAI and plays the spoken reply, no local models in the loop
-- `realtime.py` — the parts every speech to speech provider shares, the microphone, speaker, conversation loop, and tool handling
+- `voice.py` — shared voice functions for live realtime models, microphone, speaker, conversation loop, tool handling
 - `utils.py` — shared audio, cache, device, and microphone helpers for those scripts
 
 The Nvidia CUDA GPU is used when available. Pass `--cpu` to force CPU inference. Every script takes `--help`.

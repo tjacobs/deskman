@@ -1,4 +1,4 @@
-# Realtime.py holds what every speech to speech provider shares, the microphone, the speaker, the conversation loop, and the tool handling.
+# Voice.py holds shared voice functions for live realtime models, the microphone, the speaker, the conversation loop, and tool handling.
 
 # Imports
 import sys

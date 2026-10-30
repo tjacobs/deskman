@@ -10,8 +10,8 @@ import argparse
 import threading
 import websocket
 
-# Imports from the shared realtime helper, which also puts the text helper on the path
-import realtime
+# Imports from the shared voice helper, which also puts the text helper on the path
+import voice
 import client
 import robot_move
 
@@ -65,7 +65,7 @@ def main():
         config['realtime_voice'] = arguments.voice
 
     # Open the microphone before the socket, muted so connect time is not sent as speech
-    microphone = realtime.Microphone()
+    microphone = voice.Microphone()
     microphone.mute()
 
     # Open the session
@@ -74,7 +74,7 @@ def main():
     # Talk until the room goes quiet
     try:
         # Run the conversation
-        realtime.run_conversation(session, microphone, arguments.ask, realtime.ignore_turn, '')
+        voice.run_conversation(session, microphone, arguments.ask, voice.ignore_turn, '')
     except KeyboardInterrupt:
         # Stop the conversation
         print('Stopped.', flush=True)
@@ -95,7 +95,7 @@ def parse_args():
 # Read config.json, falling back to the defaults above for anything missing
 def load_config():
     # Load the settings with the defaults above
-    return realtime.load_config({'realtime_model': REALTIME_MODEL, 'realtime_voice': REALTIME_VOICE, 'realtime_accent': REALTIME_ACCENT})
+    return voice.load_config({'realtime_model': REALTIME_MODEL, 'realtime_voice': REALTIME_VOICE, 'realtime_accent': REALTIME_ACCENT})
 
 # Connect to the realtime endpoint and configure the session
 def open_session(config):
@@ -108,15 +108,15 @@ def open_session(config):
     model = config['realtime_model']
     print('Connecting to OpenAI...', flush=True)
     socket = websocket.create_connection(f'{REALTIME_URL}?model={model}', header=[f'Authorization: Bearer {key}'], timeout=CONNECT_TIMEOUT)
-    socket.settimeout(realtime.RECEIVE_TIMEOUT)
+    socket.settimeout(voice.RECEIVE_TIMEOUT)
     session = OpenAISession(socket)
     session.config = config
     print('Connected.', flush=True)
 
     # Describe the voice, the turn taking, and the tools before any audio moves
     audio_input = {'format': {'type': 'audio/pcm', 'rate': REALTIME_RATE}, 'turn_detection': {'type': TURN_DETECTION}, 'transcription': {'model': transcription_model()}}
-    audio_output = {'format': {'type': 'audio/pcm', 'rate': realtime.OUTPUT_RATE}, 'voice': config['realtime_voice']}
-    instructions = realtime.session_instructions(config['realtime_accent'])
+    audio_output = {'format': {'type': 'audio/pcm', 'rate': voice.OUTPUT_RATE}, 'voice': config['realtime_voice']}
+    instructions = voice.session_instructions(config['realtime_accent'])
     update = {'type': 'realtime', 'output_modalities': ['audio'], 'audio': {'input': audio_input, 'output': audio_output}, 'instructions': instructions, 'tools': session_tools(), 'tool_choice': 'auto'}
     session.send({'type': 'session.update', 'session': update})
     return session
@@ -131,12 +131,12 @@ def transcription_model():
 # Wrap the shared tool list in the shape a realtime session expects
 def session_tools():
     # Add the function type to each tool
-    return [{'type': 'function', **tool} for tool in realtime.tool_definitions(VOICE_EXAMPLES)]
+    return [{'type': 'function', **tool} for tool in voice.tool_definitions(VOICE_EXAMPLES)]
 
 # Run the conversation on the shared loop, talk.py calls every provider the same way
 def run_conversation(session, microphone, first_question, on_turn, greet_text):
     # Run the shared loop
-    return realtime.run_conversation(session, microphone, first_question, on_turn, greet_text)
+    return voice.run_conversation(session, microphone, first_question, on_turn, greet_text)
 
 # Close the socket, the session is finished
 def close_session(session):
@@ -152,7 +152,7 @@ def close_session(session):
 # Say whether the last conversation ended because OpenAI turned it down
 def turn_failed():
     # Return the shared failure flag
-    return realtime.turn_failed()
+    return voice.turn_failed()
 
 # Speak one line in the realtime voice, the greeting lands before any conversation opens
 def speak_line(text):
@@ -174,7 +174,7 @@ def speak_instruction(instruction):
     session.say(f'{config["realtime_accent"]} {instruction}')
 
     # Play it and hang up, there is no conversation to keep open yet
-    speaker = realtime.Speaker()
+    speaker = voice.Speaker()
     try:
         return play_reply(session, speaker)
     finally:
@@ -187,7 +187,7 @@ def play_reply(session, speaker):
     said = ''
 
     # Give up rather than hang, this runs during startup
-    deadline = time.time() + realtime.SPEAK_LINE_SECONDS
+    deadline = time.time() + voice.SPEAK_LINE_SECONDS
     while time.time() < deadline:
         event = session.receive()
         if event is None:
@@ -234,7 +234,7 @@ def report_error(session, event):
 
     # Hang up when retrying cannot help
     if client.openai_error_is_fatal(name):
-        realtime.fail_turn(session)
+        voice.fail_turn(session)
 
 # Return the error on a failed response, empty when it finished fine
 def response_failure(event):
@@ -248,7 +248,7 @@ def response_failure(event):
 
 
 # A realtime socket that is safe to send on from more than one thread
-class OpenAISession(realtime.Session):
+class OpenAISession(voice.Session):
     def __init__(self, socket):
         super().__init__()
         self.socket = socket
@@ -334,33 +334,33 @@ class OpenAISession(realtime.Session):
 
         # Play the reply as it arrives
         if kind == 'response.output_audio.delta':
-            return realtime.play_audio(self, microphone, speaker, base64.b64decode(event['delta']))
+            return voice.play_audio(self, microphone, speaker, base64.b64decode(event['delta']))
 
         # Let the microphone back in once the reply is done
         if kind == 'response.output_audio.done':
-            return realtime.finish_audio(self, microphone, speaker)
+            return voice.finish_audio(self, microphone, speaker)
 
         # Print the heard words as they arrive, the live transcriber sends them mid sentence
         if kind == 'conversation.item.input_audio_transcription.delta':
-            return realtime.heard_delta(self, microphone, event.get('delta', ''))
+            return voice.heard_delta(self, microphone, event.get('delta', ''))
 
         # Keep the heard text once the transcriber has finished it
         if kind == 'conversation.item.input_audio_transcription.completed':
-            return realtime.heard_done(self, microphone, speaker, event.get('transcript', ''))
+            return voice.heard_done(self, microphone, speaker, event.get('transcript', ''))
 
         # Print the model's words as it speaks, these come from the realtime model itself not a transcriber
         if kind == 'response.output_audio_transcript.delta':
             if not PRINT_REPLY_LIVE:
                 return True
-            return realtime.reply_delta(self, event.get('delta', ''))
+            return voice.reply_delta(self, event.get('delta', ''))
 
         # Print the finished reply and log the turn
         if kind == 'response.output_audio_transcript.done':
-            return realtime.reply_done(self, event.get('transcript', ''))
+            return voice.reply_done(self, event.get('transcript', ''))
 
         # Run the tool here and hand the result back, the tools are all local
         if kind == 'response.function_call_arguments.done':
-            realtime.run_function_call(self, event.get('name'), event.get('arguments'), event.get('call_id'))
+            voice.run_function_call(self, event.get('name'), event.get('arguments'), event.get('call_id'))
             return True
 
         # Finish the turn, some failures only come back on the finished response
@@ -369,11 +369,11 @@ class OpenAISession(realtime.Session):
             if failure:
                 report_error(self, {'error': failure})
                 return False
-            return realtime.finish_turn(self, speaker)
+            return voice.finish_turn(self, speaker)
 
         # Show why the server gave up
         if kind == 'error':
-            realtime.close_stream_lines(self)
+            voice.close_stream_lines(self)
             report_error(self, event)
             return False
         return False
