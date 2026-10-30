@@ -45,6 +45,10 @@ BLOCKS_PER_SECOND = 10
 OUTPUT_RATE = 24000
 OUTPUT_CHANNELS = 1
 
+# Config how much reply audio is held back before the speaker starts, so a slow start does not run it dry
+LEAD_IN_SECONDS = 0.4
+LEAD_IN_BYTES = int(OUTPUT_RATE * 2 * OUTPUT_CHANNELS * LEAD_IN_SECONDS)
+
 # State, the voice a set_voice call picked, it holds for the rest of the run but not past a restart
 CHOSEN_VOICE = ''
 
@@ -719,25 +723,36 @@ class Microphone:
         self.recorder.terminate()
 
 
-# Raw audio written straight to the speaker as it arrives
+# Raw audio written straight to the speaker as it arrives, held back briefly at the start so the player never runs dry
 class Speaker:
     def __init__(self):
         self.player = None
+        self.waiting = b''
 
-    # Start a player on the first chunk, then keep feeding the same one, nothing plays at bedtime
+    # Hold the first chunks until there is a lead in, then keep feeding the same player, nothing plays at bedtime
     def play(self, chunk):
         if utils.is_bedtime():
             return
+        self.waiting += chunk
+        if self.player is None and len(self.waiting) < LEAD_IN_BYTES:
+            return
+        self.flush()
+
+    # Start the player when it is not running and write what is waiting
+    def flush(self):
         if self.player is None:
-            self.player = subprocess.Popen(utils.play_raw_command(OUTPUT_RATE, OUTPUT_CHANNELS), stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.player = subprocess.Popen(utils.play_raw_command(OUTPUT_RATE, OUTPUT_CHANNELS), stdin=subprocess.PIPE)
         try:
-            self.player.stdin.write(chunk)
+            self.player.stdin.write(self.waiting)
             self.player.stdin.flush()
         except (BrokenPipeError, ValueError):
             self.player = None
+        self.waiting = b''
 
-    # Wait for the reply to finish playing
+    # Wait for the reply to finish playing, a reply shorter than the lead in starts here
     def drain(self):
+        if self.waiting:
+            self.flush()
         if self.player is None:
             return
         try:
@@ -749,6 +764,7 @@ class Speaker:
 
     # Stop the player straight away
     def stop(self):
+        self.waiting = b''
         if self.player is None:
             return
         self.player.kill()
