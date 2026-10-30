@@ -6,10 +6,14 @@
 - [done] make a demo mode so it stays listening and looks around
 - [done] put SSH details on wifi screen for new users to see
 - [done] make a nice one page intro guide document on how to use
-- make a nice what can I say screen for new users to learn
-- make a hold down of quiet button lock quiet mode on
-- make local gemma talk mode work on pi with 2gb memory
+- [done] make a hold down of quiet button lock quiet mode on
+- make gemini live an option for audio to audio chat mode
+- make openai GPT live an option for audio to audio chat mode
 - make hat go down when asleep at bedtime, up in the morning
+- make local gemma talk mode work on pi with 4gb memory
+- make a nice what can I say screen for new users to learn
+- make it know the weather and other day to day news events
+- make it wake up if looked at from face detection direction
 - make it recognize individual people and remember them and say hi name
-- bluetooth connection from cursor to robot, no wifi
+- make it have a bluetooth connection from cursor to robot, no wifi
 
