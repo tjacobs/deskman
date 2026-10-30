@@ -140,8 +140,9 @@ TEXT_SERVER_RESTART_TRIES = 3
 
 # Script that opens the key page and saves what gets pasted, and the reason that calls for it
 KEY_SCRIPT_NAME = 'install_openai_key.sh'
-KEY_SCRIPT = os.path.join(utils.SCRIPT_DIR, KEY_SCRIPT_NAME)
+GEMINI_KEY_SCRIPT_NAME = 'install_gemini_key.sh'
 NO_KEY_REASON = 'No OpenAI key.'
+GEMINI_NO_KEY_REASON = 'No Gemini key.'
 
 # How long Kokoro and the first inference usually take on a Pi, shown on those loading lines
 PI_KOKORO_LOAD_SECONDS = 30
@@ -287,7 +288,9 @@ def main():
 
             # Realtime was asked for, so a missing key opens the setup
             if reason == NO_KEY_REASON:
-                offer_key_setup(True)
+                offer_key_setup(True, KEY_SCRIPT_NAME)
+            elif reason == GEMINI_NO_KEY_REASON:
+                offer_key_setup(True, GEMINI_KEY_SCRIPT_NAME)
         else:
             print('Gemini Live: True' if GEMINI_MODE else 'Realtime: True', flush=True)
 
@@ -452,7 +455,7 @@ def try_cloud_text(model_name, forced):
         return use_local_text()
     if not text_client.cloud_api_key():
         warn_using_local('no OpenAI key')
-        offer_key_setup(forced)
+        offer_key_setup(forced, KEY_SCRIPT_NAME)
         return use_local_text()
 
     # Cloud setup can still fail after the key check
@@ -478,30 +481,31 @@ def warn_using_local(reason):
     print(f'Warning: {reason}, using local model.', flush=True)
 
 # Open the key setup when cloud or realtime was asked for, only say how when it was just the auto pick
-def offer_key_setup(asked_for_cloud):
+def offer_key_setup(asked_for_cloud, script_name):
     global KEY_SETUP_OFFERED
     if KEY_SETUP_OFFERED:
         return
     KEY_SETUP_OFFERED = True
 
     # Nothing to open without the script, or without a screen to put the browser on
+    script = os.path.join(utils.SCRIPT_DIR, script_name)
     has_display = os.environ.get('WAYLAND_DISPLAY') or os.environ.get('DISPLAY')
-    if not asked_for_cloud or not has_display or not os.path.isfile(KEY_SCRIPT):
-        print(f'Run ./{KEY_SCRIPT_NAME} to add one.', flush=True)
+    if not asked_for_cloud or not has_display or not os.path.isfile(script):
+        print(f'Run ./{script_name} to add one.', flush=True)
         return
 
     # Leave a setup that is already open alone, it outlives a talk restart from the mode buttons
-    if key_setup_running():
-        print('The OpenAI key setup is already open, copy your key and it is saved.', flush=True)
+    if key_setup_running(script):
+        print('The key setup is already open, copy your key and it is saved.', flush=True)
         return
 
     # Leave it to run on its own, talk answers from the local model until the robot restarts it on the saved key
-    print('Opening the OpenAI key page, copy your key and it is saved.', flush=True)
-    subprocess.Popen([KEY_SCRIPT, '--restart-talk'], cwd=utils.SCRIPT_DIR, start_new_session=True)
+    print('Opening the key page, copy your key and it is saved.', flush=True)
+    subprocess.Popen([script, '--restart-talk'], cwd=utils.SCRIPT_DIR, start_new_session=True)
 
 # True when a key setup from an earlier talk is still waiting for a key
-def key_setup_running():
-    result = subprocess.run(['pgrep', '-f', KEY_SCRIPT], capture_output=True)
+def key_setup_running(script):
+    result = subprocess.run(['pgrep', '-f', script], capture_output=True)
     return result.returncode == 0
 
 # Leave the cloud path and keep Hugging Face offline when the net is down
@@ -553,7 +557,7 @@ def realtime_unavailable_reason():
     if GEMINI_MODE:
         if not realtime.load_key():
             LOCAL_REASON_SHOWN = True
-            return 'Gemini Live needs a key, write talk/gemini.env.'
+            return GEMINI_NO_KEY_REASON
         return ''
 
     # The spoken session needs the same key the text cloud path uses

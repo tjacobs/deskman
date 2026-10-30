@@ -101,6 +101,17 @@ Use `--terminal` over SSH, it skips the browser and paste box and prompts on the
 
 `talk.py` opens this by itself when it starts with cloud or realtime mode on, from `--cloud`, `--realtime`, or `config.json`, and no key is saved. Local mode leaves it alone and carries on with the local model.
 
+## install_gemini_key.sh
+
+Saves a Gemini API key so `talk.py` can use Gemini Live. It works the same way as `install_openai_key.sh`, opening [Google AI Studio](https://aistudio.google.com/apikey) in a browser with a paste box on top, and a copied key is saved at once.
+
+```bash
+./install_gemini_key.sh
+./install_gemini_key.sh --run
+```
+
+The key is checked against the Gemini models list before saving, then written to `gemini.env` as `GEMINI_API_KEY=`, readable only by you. `GEMINI_API_KEY` in the environment wins over the file. `talk.py` opens this by itself when Gemini Live is on and no key is saved. `--terminal` skips the browser and prompts on the terminal.
+
 ## talk.py
 
 Say the wake word `deskman`, or `number 4` when the hostname ends in 4, then a command, and it speaks a reply from the local text model. Say `deskman, quit` or CTRL-C to stop. Starts `./text/server.sh` itself when the model is not already running. Only one `talk.py` is allowed at a time; stop the other with `sudo service robot stop`.
