@@ -72,6 +72,9 @@ bool take_talk_restart_request();
 // True while face tracking should follow, off in ready until talk hears the wake word
 bool listen_open();
 
+// Mute the moment Listen has been held long enough, called every frame
+void update_listen_hold();
+
 // True while a call is connected
 bool call_open();
 

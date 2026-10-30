@@ -36,6 +36,7 @@ WAKE_WORD_PATTERN = re.compile(r'\b(?:' + '|'.join(re.escape(word) for word in W
 GREETING = 'Hi!'
 SAY_HI = True
 TALK_READY = 'Idle.'
+TALK_MUTED = 'Muted.'
 TALK_LISTENING = 'Listening...'
 ACKNOWLEDGEMENT = 'Question for me?'
 GOODBYE = 'Goodbye!'
@@ -196,6 +197,7 @@ TURN_TIMES = {}
 kokoro_model = None
 kokoro_pipelines = {}
 speak_lock = threading.Lock()
+player_process = None
 text_server_log_file = None
 text_server_process = None
 text_server_seen_up = False
@@ -280,6 +282,8 @@ def main():
     # Hold a socket so Listen and Quiet arrive as pushes, and pick up demo mode if it is already on
     robot_move.start_push_listener()
     robot_move.sync_demo()
+    robot_move.stop_speech_hook = stop_speech
+    robot_move.sync_mute()
 
     # Clear a warning a past run left on the face, this run has not failed yet
     robot_move.show_warning('', '')
@@ -568,7 +572,7 @@ def run_talk_loop(whisper_model, kokoro_pipeline, listener):
     start_render_watch()
 
     # Say hi once loading is done, then listen for one follow-up window
-    if SAY_HI:
+    if SAY_HI and not robot_move.muted:
         greet(listener, kokoro_pipeline)
         LAST_ASK_AT = time.time()
 
@@ -719,7 +723,7 @@ def print_talk_status():
         set_robot_listening(True)
         print(TALK_LISTENING, flush=True)
         return
-    print(TALK_READY, flush=True)
+    print_ready()
 
 # Hold one spoken conversation with OpenAI, true when it ended by being silenced or failing
 def run_realtime_turn(listener, command):
@@ -1095,6 +1099,10 @@ def conversation_remaining():
         return 0.0
     return remaining
 
+# Print that talk is ready, or muted when the mute is on
+def print_ready():
+    print(TALK_MUTED if robot_move.muted else TALK_READY, flush=True)
+
 # Close the follow-up window and show ready, demo mode goes straight back to listening
 def close_conversation():
     global LAST_ASK_AT
@@ -1105,10 +1113,13 @@ def close_conversation():
         return
     LAST_ASK_AT = 0.0
     set_robot_listening(False)
-    print(TALK_READY, flush=True)
+    print_ready()
 
 # Tell the robot when talk is listening or has gone back to ready
 def set_robot_listening(open):
+    # Stay not listening while muted, the hat must stay down
+    if open and robot_move.muted:
+        return
     try:
         robot_move.set_listen(open)
     except Exception:
@@ -1133,6 +1144,10 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
     if audio is None:
         return None
     if len(audio) == 0:
+        return ''
+
+    # Drop the audio without transcribing while muted, so the wake word is not heard
+    if robot_move.muted:
         return ''
 
     # Transcribe, stamping when speech ended and how long whisper took
@@ -1341,6 +1356,9 @@ def speak(kokoro_pipeline, text):
     pipeline = get_kokoro_pipeline(VOICE[0])
     generator = pipeline(text, voice=VOICE, speed=SPEECH_SPEED)
     for index, (graphemes, phonemes, audio) in enumerate(generator):
+        # Stop speaking the moment mute is on
+        if robot_move.muted:
+            break
         wav_path = os.path.join(utils.AUDIO_DIR, SPOKEN_WAV)
         soundfile.write(wav_path, audio, SPEECH_SAMPLE_RATE)
         if index == 0:
@@ -1586,7 +1604,14 @@ def ensure_tone(file_name, notes):
 def play_wav(wav_path):
     if utils.is_bedtime():
         return
-    subprocess.run(utils.play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    global player_process
+    player_process = subprocess.Popen(utils.play_wav_command(wav_path), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    player_process.wait()
+
+# Cut off the wav being played, so mute silences the robot at once
+def stop_speech():
+    if player_process is not None and player_process.poll() is None:
+        player_process.kill()
 
 # Keep the microphone open and hand out one utterance at a time
 class Listener:

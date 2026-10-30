@@ -18,11 +18,13 @@ PHOTO_SETTLE_SECONDS = 1.5
 CONNECT_TIMEOUT_SEC = 2.0
 READ_TIMEOUT_SEC = 5.0
 PUSH_RETRY_SECONDS = 1.0
-PUSH_COMMANDS = ('wake', 'quiet', 'demo')
+PUSH_COMMANDS = ('wake', 'quiet', 'demo', 'mute')
 
 # Face menu presses pushed by the robot, one held socket, and whether demo mode holds listening open
 pending_requests = {'wake': False, 'quiet': False, 'demo': False}
 demo_on = False
+muted = False
+stop_speech_hook = None
 pending_lock = threading.Lock()
 push_listener_started = False
 
@@ -240,7 +242,7 @@ def read_pushes():
                 line, data = data.split(b'\n', 1)
                 note_push_line(line)
 
-# Remember a Listen, Quiet, or Demo press from the face
+# Remember a Listen, Quiet, Demo, or Mute press from the face
 def note_push_line(line):
     try:
         event = json.loads(line.decode('utf-8', errors='replace'))
@@ -251,6 +253,9 @@ def note_push_line(line):
         return
     if command == 'demo':
         set_demo(bool(event.get('on')))
+        return
+    if command == 'mute':
+        set_mute(bool(event.get('on')))
         return
     with pending_lock:
         pending_requests[command] = True
@@ -263,6 +268,25 @@ def set_demo(on):
             return
         demo_on = on
         pending_requests['demo'] = True
+
+# Take mute on or off, and cut off any speech now as the main loop may be busy talking
+def set_mute(on):
+    global muted
+    if muted == on:
+        return
+    muted = on
+    if not on:
+        print('Unmuted.', flush=True)
+    if on and stop_speech_hook:
+        stop_speech_hook()
+
+# Ask the robot whether it is muted, for a talk that started after the hold
+def sync_mute():
+    try:
+        reply = send_command({"command": "mute"})
+    except Exception:
+        return
+    set_mute(bool(reply.get("on")))
 
 # Ask the robot whether demo is on, for a talk that started after it was tapped
 def sync_demo():

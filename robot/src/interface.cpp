@@ -60,6 +60,9 @@ static const bool LOG_TAPS = false;
 // A tap has no client waiting on a reply, so every client hears the broadcast
 static const int NO_CLIENT = -1;
 
+// How long Listen is held to mute, a shorter press is a tap
+static const int MUTE_HOLD_MS = 800;
+
 // Menu items stacked above the button
 static const int MENU_LISTEN = 0;
 static const int MENU_CAMERA = 1;
@@ -84,6 +87,9 @@ static const int MENU_SETTINGS_COUNT = 6;
 // The Record item says how to end the recording while one is running, and Listen says Quiet while talk listens
 static const char* MENU_STOP_LABEL = "Stop";
 static const char* MENU_QUIET_LABEL = "Quiet";
+
+// Listen says Unmute while muted, a tap on it lets talk listen again
+static const char* MENU_UNMUTE_LABEL = "Unmute";
 
 // Which model talk runs, a row of one button each along the bottom while the menu is open
 static const char* TALK_MODE_LABELS[] = {"Local", "Cloud", "Realtime"};
@@ -232,6 +238,13 @@ static atomic<bool> g_talk_restart_request{false};
 // Whether demo mode is on, talk stays listening and the head looks around
 static atomic<bool> g_demo_on{false};
 
+// Whether muted, talk neither transcribes nor wakes until Listen is tapped
+static atomic<bool> g_muted{false};
+
+// A press on Listen waiting for its release, and when it started
+static atomic<bool> g_listen_pressing{false};
+static steady_clock::time_point g_listen_press_start{};
+
 // Who saves a camera photo when a program asks for one
 static function<string()> g_photo_handler;
 static mutex g_photo_mutex;
@@ -303,6 +316,8 @@ static bool teleport_running();
 static void start_teleport_for_call();
 static void set_menu_open(bool open);
 static void set_demo(bool on);
+static void set_mute(bool on);
+static void finish_listen_press();
 static const char* menu_item_label(int index);
 static SDL_Color menu_item_color(int index);
 static SDL_Rect menu_button_rect();
@@ -611,6 +626,10 @@ static string handle_request(const string& line, int from_fd) {
         } else if (command == "demo") {
             reply = {{"ok", true}, {"on", g_demo_on.load()}};
 
+        // Say whether muted, for a talk that started after the hold
+        } else if (command == "mute") {
+            reply = {{"ok", true}, {"on", g_muted.load()}};
+
         // Light the mode talk is running and dim the ones it cannot run. A fallback does not change the saved mode.
         } else if (command == "talk_mode") {
             int mode = talk_mode_from_name(request.value("mode", ""));
@@ -780,6 +799,8 @@ void complete_call_handoff(bool ok) {
 static const char* menu_item_label(int index) {
     if (index == MENU_RECORD && recording())
         return MENU_STOP_LABEL;
+    if (index == MENU_LISTEN && g_muted.load())
+        return MENU_UNMUTE_LABEL;
     if (index == MENU_LISTEN && g_listen_open.load())
         return MENU_QUIET_LABEL;
     return MENU_ITEM_LABELS[index];
@@ -788,6 +809,8 @@ static const char* menu_item_label(int index) {
 // Colour one popup item, Exit is red, Stop goes brighter red, and Camera goes green while the preview is up
 static SDL_Color menu_item_color(int index) {
     if (index == MENU_RECORD && recording())
+        return RECORDING_BUTTON_COLOR;
+    if (index == MENU_LISTEN && g_muted.load())
         return RECORDING_BUTTON_COLOR;
     if (index == MENU_CAMERA && g_camera_showing.load())
         return CAMERA_ON_COLOR;
@@ -1378,6 +1401,12 @@ static void set_menu_open(bool open) {
 
 // Route a screen tap to the menu popup, or to the status bar
 void handle_call_event(const SDL_Event& event) {
+    // A release ends a press on Listen, wherever the finger lifted
+    if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+        finish_listen_press();
+        return;
+    }
+
     // Take the tap from the mouse event, touch arrives as one with the xrandr mapping
     int x = 0;
     int y = 0;
@@ -1394,6 +1423,9 @@ void handle_call_event(const SDL_Event& event) {
     }
     if (!tap)
         return;
+
+    // A new press drops one that never saw its release
+    g_listen_pressing = false;
 
     // The lists and a playing video take the tap before anything else
     if (!menu_open() && handle_video_tap(x, y))
@@ -1459,6 +1491,13 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
 
+    // Listen waits for the release while talk runs, a hold mutes and a tap does what Listen always did
+    if (item == MENU_LISTEN && g_talk_running.load()) {
+        g_listen_pressing = true;
+        g_listen_press_start = steady_clock::now();
+        return;
+    }
+
     // Settings shows or hides its column, the menu stays up
     if (item == MENU_SETTINGS) {
         g_settings_open = !g_settings_open.load();
@@ -1474,14 +1513,9 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
 
-    // Listen starts talk when it is not running, wakes it, and quiets it when it is already listening
+    // Listen starts talk when it is not running, a running talk was handled on release
     if (item == MENU_LISTEN) {
-        if (!g_talk_running.load())
-            g_talk_start_request = true;
-        else if (g_listen_open.load())
-            send_quiet();
-        else
-            send_to_clients(json{{"command", "wake"}}.dump(), NO_CLIENT);
+        g_talk_start_request = true;
         return;
     }
     if (item == MENU_DEMO) {
@@ -1553,6 +1587,51 @@ void handle_call_event(const SDL_Event& event) {
         return;
     }
     set_status_bar_visible(!bar_showing);
+}
+
+// Finish a tap on Listen, a hold was already handled by update_listen_hold
+static void finish_listen_press() {
+    // Skip a release that did not start a tap on Listen
+    if (!g_listen_pressing.exchange(false))
+        return;
+
+    // Close the list now the press is done
+    set_menu_open(false);
+
+    // Unmute on a tap while muted
+    if (g_muted.load()) {
+        set_mute(false);
+        return;
+    }
+
+    // Wake talk, or quiet it when it is already listening
+    if (g_listen_open.load())
+        send_quiet();
+    else
+        send_to_clients(json{{"command", "wake"}}.dump(), NO_CLIENT);
+}
+
+// Mute the moment a press on Listen has been held long enough, and drop the listening state so the hat goes down at once
+void update_listen_hold() {
+    // Wait for a press held long enough
+    if (!g_listen_pressing.load() || duration_cast<milliseconds>(steady_clock::now() - g_listen_press_start).count() < MUTE_HOLD_MS)
+        return;
+
+    // Take the press, so its release is not a tap, and close the list
+    g_listen_pressing = false;
+    set_menu_open(false);
+
+    // Stop listening on the face now, then mute and silence talk
+    g_listen_open = false;
+    set_mute(true);
+}
+
+// Mute or unmute, tell talk so it stops hearing its name, then end any conversation already going so it reads muted
+static void set_mute(bool on) {
+    g_muted = on;
+    send_to_clients(json{{"command", "mute"}, {"on", on}}.dump(), NO_CLIENT);
+    if (on)
+        send_quiet();
 }
 
 // Turn demo mode on or off, tell talk so it holds listening open or lets go, and set the speaker level when it turns on

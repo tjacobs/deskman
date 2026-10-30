@@ -422,6 +422,9 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
         if (audio_pressed)
             start_audio_test();
 
+        // Mute the moment Listen has been held long enough, so the hat goes down at once
+        update_listen_hold();
+
         // Raise the hat while talk listens, lower it when talk goes idle
         apply_listen_hat();
 
