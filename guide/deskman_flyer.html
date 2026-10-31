@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Deskman Flyer</title>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #201d1a;
+      --ink-soft: #5f5a52;
+      --line: #e9e2d7;
+      --brand: #3b5bdb;
+      --brand-2: #12b3a6;
+      --pro: #0d8a7f;
+      --accent: #ff7a4d;
+      --eye: #26324a;
+      --bg-soft: #f6f1e9;
+      --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    @page { size: 8.5in 11in; margin: 0; }
+    html, body { width: 8.5in; height: 11in; }
+    body {
+      font-family: "Inter", system-ui, sans-serif;
+      color: var(--ink);
+      background: #fffdf9;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .page {
+      width: 8.5in; height: 11in; padding: 0.4in 0.55in 0.34in;
+      display: flex; flex-direction: column;
+    }
+    h1, h2, h3 { font-family: var(--display); font-weight: 600; line-height: 1.02; letter-spacing: -0.005em; }
+
+    /* Header */
+    .head { display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: flex; align-items: center; gap: 9px; }
+    .brand-face {
+      width: 32px; height: 28px; border-radius: 10px 10px 8px 8px;
+      background: #fff; border: 2.5px solid var(--eye);
+      display: flex; align-items: center; justify-content: center; gap: 5px;
+    }
+    .brand-face i { width: 5px; height: 10px; border-radius: 50%; background: var(--eye); }
+    .brand-name { font-family: var(--display); font-size: 27px; font-weight: 700; }
+    .kicker { font-family: var(--mono); font-weight: 600; color: var(--ink-soft); font-size: 11.5px; }
+
+    /* Hero */
+    .hero { display: flex; gap: 24px; margin-top: 14px; }
+    .hero__photo {
+      width: 2.4in; flex: none; border-radius: 18px; overflow: hidden;
+      border: 1px solid var(--line); box-shadow: 0 12px 30px rgba(40,34,28,.14);
+    }
+    .hero__photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .hero__copy { flex: 1; display: flex; flex-direction: column; }
+    .eyebrow { text-transform: uppercase; letter-spacing: 0.16em; font-size: 10.5px; font-weight: 700; color: var(--accent); margin-top: 6px; }
+    .hero__copy h1 { font-size: 54px; margin-top: 8px; white-space: nowrap; }
+    .hero__copy h1 span { color: var(--brand); }
+    .lede { color: var(--ink-soft); font-size: 14px; line-height: 1.5; margin-top: 12px; }
+
+    /* If you can code, you're ready */
+    .ready { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .ready h2 { font-size: 24px; }
+    .ready h2 small { font-family: "Inter", sans-serif; font-size: 12.5px; font-weight: 500; color: var(--ink-soft); margin-left: 6px; letter-spacing: 0; }
+    .ready__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 11px; }
+    .ready h3 { font-size: 16px; font-weight: 700; margin-bottom: 7px; }
+    .checks { list-style: none; display: grid; gap: 7px; }
+    .checks li { position: relative; padding-left: 20px; font-size: 12px; line-height: 1.35; }
+    .checks li::before { content: ""; position: absolute; left: 0; top: 0.05em; width: 13px; height: 13px; border-radius: 50%; background: rgba(59, 91, 219, 0.14); }
+    .checks li::after { content: ""; position: absolute; left: 4px; top: 0.33em; width: 5px; height: 2.5px; border-left: 1.8px solid var(--brand); border-bottom: 1.8px solid var(--brand); transform: rotate(-45deg); }
+    .checks--learn li::before { background: rgba(18, 179, 166, 0.16); }
+    .checks--learn li::after { border-color: var(--brand-2); }
+
+    /* Teach Deskman tricks */
+    .skills { margin-top: 14px; }
+    .skills > h2 { font-size: 25px; text-align: center; }
+    .skills__grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px; }
+    .skill { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 14px; padding: 9px 11px 10px; }
+    .skill h3 { font-size: 16px; font-weight: 700; padding-bottom: 4px; margin-bottom: 7px; border-bottom: 2px solid var(--brand); display: inline-block; }
+    .skill ul { list-style: none; display: grid; gap: 6px; }
+    .skill li { font-size: 10.5px; line-height: 1.3; }
+    .tag { display: inline-block; margin-top: 3px; font-family: var(--mono); font-size: 8.5px; font-weight: 600; color: var(--brand); background: rgba(59, 91, 219, 0.1); border-radius: 999px; padding: 1px 7px; }
+
+    /* Photos and what's included */
+    .row { display: flex; gap: 12px; margin-top: 12px; }
+    .thumb { width: 1.05in; height: 1.05in; flex: none; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; object-position: center 35%; display: block; }
+    .specs {
+      flex: 1; align-content: center; background: var(--bg-soft); border: 1px solid var(--line);
+      border-radius: 14px; padding: 10px 16px;
+      display: flex; flex-wrap: wrap; gap: 7px 14px; align-items: center;
+    }
+    .specs__title { flex-basis: 100%; font-family: var(--display); font-weight: 700; font-size: 17px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+    .specs span { font-size: 11.5px; }
+    .specs span::before { content: "▪"; color: var(--brand-2); margin-right: 5px; }
+
+    /* Pricing */
+    .pricing { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .plan { border: 1.5px solid var(--brand); border-radius: 16px; padding: 10px 15px 11px; background: #fff; display: flex; flex-direction: column; }
+    .plan--pro { border-color: var(--pro); }
+    .plan__tag { align-self: flex-start; font-family: var(--mono); font-size: 9.5px; font-weight: 600; color: var(--brand); background: rgba(59, 91, 219, 0.1); border-radius: 999px; padding: 2px 9px; }
+    .plan--pro .plan__tag { color: var(--pro); background: rgba(18, 179, 166, 0.14); }
+    .plan h3 { font-size: 19px; font-weight: 700; margin-top: 5px; }
+    .plan__price { font-family: var(--display); font-size: 34px; font-weight: 700; line-height: 1; margin-top: 3px; }
+    .plan__price small { font-family: "Inter", sans-serif; font-size: 11.5px; font-weight: 500; color: var(--ink-soft); margin-left: 6px; }
+    .plan__desc { color: var(--ink-soft); font-size: 11px; line-height: 1.38; margin-top: 4px; }
+
+    /* Closing bar */
+    .cta {
+      margin-top: auto; background: #fff; border: 2px solid var(--ink);
+      border-radius: 16px; padding: 9px 20px;
+      display: flex; align-items: center; justify-content: center; gap: 28px;
+    }
+    .cta__text { text-align: center; }
+    .cta__side { width: 1in; flex: none; display: flex; justify-content: center; }
+    .qr { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 6px; width: 0.8in; height: 0.8in; }
+    .qr img { width: 100%; height: 100%; display: block; }
+    .cta .big { font-family: var(--display); font-weight: 600; font-size: 23px; line-height: 1.05; }
+    .cta .sub { font-size: 12px; color: var(--ink-soft); margin-top: 6px; display: flex; align-items: center; justify-content: center; }
+    .cta .url {
+      font-family: var(--mono); font-weight: 700; font-size: 15px;
+      color: var(--ink); background: #ffd84d; padding: 2px 8px; border-radius: 6px; margin-left: 8px;
+    }
+    .cta .buy {
+      background: var(--brand); color: #fff; font-family: var(--display); font-weight: 600;
+      font-size: 19px; letter-spacing: 0.02em; padding: 7px 20px; border-radius: 999px; white-space: nowrap;
+    }
+    .madein { text-align: center; color: var(--ink-soft); font-size: 10.5px; margin-top: 8px; }
+    a { color: inherit; text-decoration: none; }
+
+    /* On-screen viewing (print/PDF output is unaffected) */
+    .toolbar { display: none; }
+    @media screen {
+      html, body { width: auto; height: auto; }
+      body { background: #e8e2d8; padding: 0 12px 40px; }
+      .toolbar {
+        display: flex; justify-content: space-between; align-items: center; gap: 12px;
+        max-width: 8.5in; margin: 0 auto; padding: 16px 0;
+        font-family: var(--display); font-weight: 600; font-size: 18px;
+      }
+      .toolbar a { color: var(--ink); }
+      .toolbar .dl { background: var(--brand); color: #fff; padding: 7px 18px; border-radius: 999px; }
+      .page {
+        margin: 0 auto; background: #fffdf9; border-radius: 8px;
+        box-shadow: 0 18px 50px rgba(40,34,28,.18); zoom: var(--fit, 1);
+      }
+    }
+    @media print { .toolbar { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <a href="https://teleportconnect.com/">← teleportconnect.com</a>
+    <a class="dl" href="deskman_flyer.pdf" download>Download PDF</a>
+  </div>
+  <div class="page">
+    <div class="head">
+      <div class="brand">
+        <span class="brand-face"><i></i><i></i></span>
+        <span class="brand-name">Deskman</span>
+      </div>
+      <span class="kicker">teleportconnect.com</span>
+    </div>
+
+    <div class="hero">
+      <div class="hero__photo"><img src="hero.webp" alt="Deskman" /></div>
+      <div class="hero__copy">
+        <p class="eyebrow">Physical AI, for software people</p>
+        <h1>Give your code <span>a face.</span></h1>
+        <p class="lede">Deskman is a compact robot built for developers who want to learn physical AI. Talk to it, script it, swap its parts, rewrite its brain.</p>
+
+        <div class="ready">
+          <h2>If you can code, you're ready.<small>Deskman teaches you the rest.</small></h2>
+          <div class="ready__cols">
+            <div>
+              <h3>Skills you need</h3>
+              <ul class="checks">
+                <li>Use the command line</li>
+                <li>Cursor or Claude Code</li>
+                <li>An OpenAI account</li>
+              </ul>
+            </div>
+            <div>
+              <h3>Skills you'll learn</h3>
+              <ul class="checks checks--learn">
+                <li>Servo and motor control</li>
+                <li>Face tracking from a camera</li>
+                <li>Building a voice AI agent</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="skills">
+      <h2>Teach Deskman tricks. Learn real skills.</h2>
+      <div class="skills__grid">
+        <div class="skill">
+          <h3>Vision</h3>
+          <ul>
+            <li>Turn to look at you<br><span class="tag">Face tracking</span></li>
+            <li>Describe what you hold up<br><span class="tag">Vision-language models</span></li>
+          </ul>
+        </div>
+        <div class="skill">
+          <h3>Voice and AI</h3>
+          <ul>
+            <li>Answer with a local LLM<br><span class="tag">On-device AI</span></li>
+            <li>Translate in real time<br><span class="tag">Speech-to-speech</span></li>
+          </ul>
+        </div>
+        <div class="skill">
+          <h3>Expression and motion</h3>
+          <ul>
+            <li>Show emotions on its face<br><span class="tag">State machines</span></li>
+            <li>Follow whoever is talking<br><span class="tag">Sound localization</span></li>
+          </ul>
+        </div>
+        <div class="skill">
+          <h3>Just for fun</h3>
+          <ul>
+            <li>Suggest a recipe from your counter<br><span class="tag">Object detection + LLMs</span></li>
+            <li>Nod back at a thumbs-up<br><span class="tag">Gesture recognition</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="thumb"><img src="hero-front.webp" alt="Deskman, front view" /></div>
+      <div class="specs">
+        <div class="specs__title">Includes</div>
+        <span>7" touchscreen</span><span>1080p camera</span><span>5,800mAh, 3 hour battery</span>
+        <span>Speaker + mic</span><span>Three servos</span><span>Wi-Fi</span><span>3D-printed body</span>
+      </div>
+      <div class="thumb"><img src="real.jpg" alt="Deskman on a desk" style="object-position: center 70%" /></div>
+    </div>
+
+    <div class="pricing">
+      <div class="plan">
+        <span class="plan__tag">Standard</span>
+        <h3>Raspberry Pi edition</h3>
+        <div class="plan__price">$499<small>or lease for $49/month</small></div>
+        <p class="plan__desc">The everyday Deskman. Cloud-connected voice and video calls, ready to go. Pi 5, 2GB RAM + 32GB SD.</p>
+      </div>
+      <div class="plan plan--pro">
+        <span class="plan__tag">Pro</span>
+        <h3>NVIDIA Jetson Orin Nano edition</h3>
+        <div class="plan__price">$999<small>or lease for $99/month</small></div>
+        <p class="plan__desc">More AI power for running more models on-device, for builders and researchers. 8GB RAM + 256GB SSD.</p>
+      </div>
+    </div>
+
+    <div class="cta">
+      <div class="cta__side"><a class="buy" href="https://teleportconnect.com/buy/">Buy →</a></div>
+      <div class="cta__text">
+        <div class="big">Put a robot on your desk. SSH in. Start learning.</div>
+        <div class="sub">Buy now at <a class="url" href="https://teleportconnect.com/">teleportconnect.com</a></div>
+      </div>
+      <div class="cta__side"><div class="qr"><img src="qr.svg" alt="QR code for teleportconnect.com" /></div></div>
+    </div>
+    <div class="madein">Built in the USA by Teleport Connect</div>
+  </div>
+  <script>
+    // Scale the letter-size page down to fit narrow screens.
+    function fit() {
+      var s = Math.min(1, (document.documentElement.clientWidth - 24) / 816);
+      document.documentElement.style.setProperty('--fit', s);
+    }
+    fit();
+    window.addEventListener('resize', fit);
+  </script>
+</body>
+</html>
