@@ -1120,19 +1120,19 @@ static void reap_audio_test() {
 static int load_talk_mode() {
     ifstream file(repo_path(TALK_CONFIG_FROM_REPO));
     if (!file)
-        return TALK_MODE_LOCAL;
+        return TALK_MODE_GEMMA;
 
     // A broken file leaves the button on local rather than stopping the robot
     nlohmann::json config = nlohmann::json::parse(file, nullptr, false);
     if (config.is_discarded() || !config.is_object())
-        return TALK_MODE_LOCAL;
+        return TALK_MODE_GEMMA;
     if (config.value("gemini_live", false))
-        return TALK_MODE_GEMINI;
-    if (config.value("realtime", false))
-        return TALK_MODE_REALTIME;
-    if (config.value("cloud", false))
-        return TALK_MODE_CLOUD;
-    return TALK_MODE_LOCAL;
+        return TALK_MODE_GEMINI_LIVE;
+    if (config.value("openai_realtime", false) || config.value("realtime", false))
+        return TALK_MODE_OPENAI_REALTIME;
+    if (config.value("chatgpt", false) || config.value("cloud", false))
+        return TALK_MODE_CHATGPT;
+    return TALK_MODE_GEMMA;
 }
 
 // Save the mode for the next run, then bring talk back up on it
@@ -1148,11 +1148,16 @@ static void switch_talk_mode(int mode) {
     }
     file.close();
 
+    // Drop the old names for the modes, they would still count as true next to the new ones
+    config.erase("local");
+    config.erase("cloud");
+    config.erase("realtime");
+
     // Save only the chosen mode as true
-    config["local"] = mode == TALK_MODE_LOCAL;
-    config["cloud"] = mode == TALK_MODE_CLOUD;
-    config["realtime"] = mode == TALK_MODE_REALTIME;
-    config["gemini_live"] = mode == TALK_MODE_GEMINI;
+    config["gemma"] = mode == TALK_MODE_GEMMA;
+    config["chatgpt"] = mode == TALK_MODE_CHATGPT;
+    config["openai_realtime"] = mode == TALK_MODE_OPENAI_REALTIME;
+    config["gemini_live"] = mode == TALK_MODE_GEMINI_LIVE;
 
     // Write the file, and say so when it cannot be saved
     ofstream out(path);

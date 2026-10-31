@@ -92,10 +92,12 @@ static const char* MENU_QUIET_LABEL = "Quiet";
 static const char* MENU_UNMUTE_LABEL = "Unmute";
 
 // Which model talk runs, a row of one button each along the bottom while the menu is open
-static const char* TALK_MODE_LABELS[] = {"Local", "Cloud", "Realtime", "Gemini"};
+static const char* TALK_MODE_LABELS[] = {"Gemma", "ChatGPT", "GPT Realtime", "Gemini Live"};
+static const char* TALK_MODE_NAMES[] = {"gemma", "chatgpt", "openai_realtime", "gemini_live"};
 static const int TALK_MODE_COUNT = 4;
-static const int TALK_MODE_COLUMNS = 3;
-static const int TALK_MODE_ROWS = 2;
+static const int TALK_MODE_COLUMNS = 2;
+static const int TALK_MODE_ROWS = 3;
+static const int TALK_MODE_GRID[][2] = {{0, 0}, {2, 0}, {2, 1}, {1, 0}};
 static const char* TALK_MODE_TITLE = "Model";
 
 // Hamburger button size and its three lines
@@ -679,7 +681,7 @@ static int request_int(const json& request, const char* key, int fallback) {
 // Match a talk mode name to its button mode, any case, or no mode when it is not one
 static int talk_mode_from_name(const string& name) {
     for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
-        if (strcasecmp(name.c_str(), TALK_MODE_LABELS[mode]) == 0)
+        if (strcasecmp(name.c_str(), TALK_MODE_NAMES[mode]) == 0)
             return mode;
     }
     return TALK_MODE_NONE;
@@ -848,28 +850,27 @@ static SDL_Rect menu_item_rect(int row) {
 // Place a Settings row in the column left of the popup, stacked above the mode row so the mode buttons stay reachable
 static SDL_Rect settings_item_rect(int row) {
     SDL_Rect bottom_rect = menu_item_rect(MENU_MAIN_COUNT - 1);
-    SDL_Rect mode_rect = talk_mode_rect(TALK_MODE_COLUMNS - 1);
     int pad = status_bar_pad();
     int from_bottom = MENU_SETTINGS_COUNT - row + TALK_MODE_ROWS - 1;
     int title_room = talk_mode_title_rect().h + pad;
-    return {mode_rect.x, bottom_rect.y - from_bottom * (bottom_rect.h + pad) - title_room, bottom_rect.w, bottom_rect.h};
+    return {bottom_rect.x - pad - bottom_rect.w, bottom_rect.y - from_bottom * (bottom_rect.h + pad) - title_room, bottom_rect.w, bottom_rect.h};
 }
 
-// Place one mode button in the grid left of the popup, the last row level with its bottom row, Local top left
+// Place one mode button in the grid left of the popup, the last row level with its bottom row, Gemma top left
 static SDL_Rect talk_mode_rect(int mode) {
     SDL_Rect bottom_rect = menu_item_rect(MENU_MAIN_COUNT - 1);
     int pad = status_bar_pad();
-    int rows_above = TALK_MODE_ROWS - 1 - mode / TALK_MODE_COLUMNS;
-    return {pad + (mode % TALK_MODE_COLUMNS) * (bottom_rect.w + pad), bottom_rect.y - rows_above * (bottom_rect.h + pad), bottom_rect.w, bottom_rect.h};
+    int rows_above = TALK_MODE_ROWS - 1 - TALK_MODE_GRID[mode][0];
+    return {pad + TALK_MODE_GRID[mode][1] * (bottom_rect.w + pad), bottom_rect.y - rows_above * (bottom_rect.h + pad), bottom_rect.w, bottom_rect.h};
 }
 
 // Place the short title box across the top of the mode grid
 static SDL_Rect talk_mode_title_rect() {
     SDL_Rect first_rect = talk_mode_rect(0);
-    SDL_Rect last_rect = talk_mode_rect(TALK_MODE_COLUMNS - 1);
+    SDL_Rect popup_rect = menu_item_rect(0);
     int pad = status_bar_pad();
     int height = first_rect.h / 2;
-    return {first_rect.x, first_rect.y - height - pad, last_rect.x + last_rect.w - first_rect.x, height};
+    return {first_rect.x, first_rect.y - height - pad, popup_rect.x - pad - first_rect.x, height};
 }
 
 // Share the screen width between the mode grid and the popup column, so every button is the same width
@@ -1885,7 +1886,7 @@ bool take_talk_start_request() {
 
 // Name one talk mode for the log
 const char* talk_mode_name(int mode) {
-    return TALK_MODE_LABELS[mode];
+    return TALK_MODE_NAMES[mode];
 }
 
 // Close the socket, wake detached clients, and remove the socket file

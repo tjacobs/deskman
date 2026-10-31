@@ -172,7 +172,10 @@ TURN_STEPS = ('speech_end', 'heard_start', 'heard', 'ask', 'replied', 'speak', '
 TIMING_ENV_NAME = 'TALK_TIMING'
 
 # Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
-TALK_MODE_NAMES = ('local', 'cloud', 'realtime', 'gemini_live')
+TALK_MODE_NAMES = ('gemma', 'chatgpt', 'openai_realtime', 'gemini_live')
+
+# Config the older config.json names for the same modes, still read so a file written before the rename keeps working
+TALK_MODE_ALIASES = {'local': 'gemma', 'cloud': 'chatgpt', 'realtime': 'openai_realtime'}
 
 # Config the config.json key that serves the local model with LiteRT instead of llama.cpp, set litert true
 LITERT_CONFIG_NAME = 'litert'
@@ -251,10 +254,10 @@ def main():
 
     # Run the saved mode unless a flag picked one
     if not realtime_flag and not cloud_flag and not local_flag and not gemini_flag:
-        realtime_flag = saved_mode == 'realtime'
+        realtime_flag = saved_mode == 'openai_realtime'
         gemini_flag = saved_mode == 'gemini_live'
-        cloud_flag = saved_mode == 'cloud'
-        local_flag = saved_mode == 'local'
+        cloud_flag = saved_mode == 'chatgpt'
+        local_flag = saved_mode == 'gemma'
     REALTIME_MODE = realtime_flag or gemini_flag
     GEMINI_MODE = gemini_flag
 
@@ -427,10 +430,12 @@ def parse_args():
 
 # Read the one mode config.json has true, empty when none is, and stop when more than one is
 def load_saved_mode():
-    config = utils.load_config({name: False for name in TALK_MODE_NAMES})
-    saved = [name for name in TALK_MODE_NAMES if config[name]]
+    # Read each mode under its name and its older name, and count the distinct modes that are on
+    names = TALK_MODE_NAMES + tuple(TALK_MODE_ALIASES)
+    config = utils.load_config({name: False for name in names})
+    saved = sorted({TALK_MODE_ALIASES.get(name, name) for name in names if config[name]})
     if len(saved) > 1:
-        print(f'Error: config.json has {", ".join(saved)} true, set only one of local, cloud, realtime, or gemini_live.')
+        print(f'Error: config.json has {", ".join(saved)} true, set only one of {", ".join(TALK_MODE_NAMES)}.')
         sys.exit(1)
     return saved[0] if saved else ''
 
@@ -518,28 +523,28 @@ def use_local_text():
 # Name the mode talk is running in, the same names as the robot mode buttons
 def running_mode_name():
     if GEMINI_MODE:
-        return 'gemini'
+        return 'gemini_live'
     if REALTIME_MODE:
-        return 'realtime'
+        return 'openai_realtime'
     if CLOUD_MODE:
-        return 'cloud'
-    return 'local'
+        return 'chatgpt'
+    return 'gemma'
 
 # Name the modes that could run now, local once Gemma is built, cloud and realtime with the net and a key
 def available_mode_names():
     names = []
     if os.path.isfile(TEXT_SERVER_BINARY):
-        names.append('local')
+        names.append('gemma')
 
     # Cloud and realtime both need the net and the key, realtime its websocket too
     text_client.load_openai_env_file()
     online = utils.network_available() and bool(text_client.cloud_api_key())
     if online:
-        names.append('cloud')
+        names.append('chatgpt')
     if online and realtime_openai is not None:
-        names.append('realtime')
+        names.append('openai_realtime')
     if utils.network_available() and realtime_gemini is not None and realtime_gemini.load_key():
-        names.append('gemini')
+        names.append('gemini_live')
     return names
 
 # Why realtime cannot start, empty when it can

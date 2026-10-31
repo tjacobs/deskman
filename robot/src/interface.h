@@ -105,10 +105,10 @@ void draw_warning(TTF_Font* font, int x, int y, SDL_Color color);
 void send_quiet();
 
 // Which model talk runs, and no request waiting on the mode buttons
-const int TALK_MODE_LOCAL = 0;
-const int TALK_MODE_CLOUD = 1;
-const int TALK_MODE_REALTIME = 2;
-const int TALK_MODE_GEMINI = 3;
+const int TALK_MODE_GEMMA = 0;
+const int TALK_MODE_CHATGPT = 1;
+const int TALK_MODE_OPENAI_REALTIME = 2;
+const int TALK_MODE_GEMINI_LIVE = 3;
 const int TALK_MODE_NONE = -1;
 
 // Show whether the camera preview is up, so the Camera button can say so

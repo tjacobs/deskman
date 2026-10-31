@@ -208,9 +208,9 @@ Realtime settings live in `config.json`, next to `talk.py`. Anything missing fal
 
 ```json
 {
-  "local": false,
-  "cloud": false,
-  "realtime": true,
+  "gemma": false,
+  "chatgpt": false,
+  "openai_realtime": true,
   "gemini_live": false,
   "realtime_model": "gpt-realtime-2.1-mini",
   "gemini_model": "gemini-3.8-live",
@@ -219,10 +219,10 @@ Realtime settings live in `config.json`, next to `talk.py`. Anything missing fal
 }
 ```
 
-- `local`, `cloud`, `realtime`, `gemini_live` — the saved mode, set exactly one true, the robot mode buttons write these
-- `local` — the local Gemma server, the same as passing `--local`
-- `cloud` — OpenAI for text with the kokoro voice, the same as passing `--cloud`
-- `realtime` — OpenAI speech to speech, the same as passing `--realtime`
+- `gemma`, `chatgpt`, `openai_realtime`, `gemini_live` — the saved mode, set exactly one true, the robot mode buttons write these, and the older `local`, `cloud`, and `realtime` names still work
+- `gemma` — the local Gemma server, the same as passing `--local`
+- `chatgpt` — OpenAI for text with the kokoro voice, the same as passing `--cloud`
+- `openai_realtime` — OpenAI speech to speech, the same as passing `--realtime`
 - `gemini_live` — Gemini Live speech to speech, the same as passing `--gemini`
 - `realtime_model` — the OpenAI realtime model, the mini one is cheaper and quick enough to hold a conversation
 - `gemini_model` — the Gemini Live model
@@ -247,7 +247,7 @@ journalctl -u robot -f
 tail -f log.txt
 ```
 
-The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Tap Local, Cloud, Realtime, or Gemini in the robot menu, or set exactly one of `"local"`, `"cloud"`, `"realtime"`, or `"gemini_live"` true in `config.json` and restart. With none true, talk uses OpenAI when online with a key, otherwise Gemma. `--cloud`, `--realtime`, `--gemini`, and `--local` on the command line still win.
+The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Tap Gemma, ChatGPT, GPT Realtime, or Gemini Live in the robot menu, or set exactly one of `"gemma"`, `"chatgpt"`, `"openai_realtime"`, or `"gemini_live"` true in `config.json` and restart. With none true, talk uses OpenAI when online with a key, otherwise Gemma. `--cloud`, `--realtime`, `--gemini`, and `--local` on the command line still win.
 
 ## Testing
 
