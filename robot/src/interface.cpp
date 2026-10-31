@@ -1001,6 +1001,10 @@ void draw_menu(TTF_Font* font) {
     SDL_Color menu_fill = g_menu_open ? MENU_OPEN_COLOR : MENU_BUTTON_COLOR;
     if (g_demo_on.load())
         menu_fill = g_menu_open ? MENU_DEMO_OPEN_COLOR : MENU_DEMO_COLOR;
+
+    // Show red while muted, so it is clear even with the menu closed
+    if (g_muted.load())
+        menu_fill = RECORDING_BUTTON_COLOR;
     draw_bar_button(menu_rect, nullptr, menu_fill, font);
     draw_hamburger_icon(menu_rect);
 }
@@ -1643,6 +1647,11 @@ void update_listen_hold() {
     // Stop listening on the face now, then mute and silence talk
     g_listen_open = false;
     set_mute(true);
+}
+
+// True while muted
+bool is_muted() {
+    return g_muted.load();
 }
 
 // Mute or unmute, tell talk so it stops hearing its name, then end any conversation already going so it reads muted

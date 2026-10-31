@@ -1,6 +1,7 @@
 // Local
 #include "face.h"
 #include "renderer.h"
+#include "interface.h"
 
 // System
 #include <cmath>
@@ -18,6 +19,9 @@ static const float BLINK_INTERVAL = 10.0f;
 
 // How long the face takes to glide most of the way to a new look target
 static const float LOOK_EASE_MS = 100.0f;
+
+// How long the lids take to glide shut when muted and open again
+static const float EYE_CLOSE_EASE_MS = 150.0f;
 
 // Eye size, and how far down a blink pulls the lid
 static const float EYE_RADIUS_X = 45.0f;
@@ -148,6 +152,12 @@ void update_face_animation(Face* face) {
             blinkProgress = 0.0f;
         }
     }
+
+    // Glide the lids shut while muted and open again after, and a blink never opens them
+    static float muted_closed = 0.0f;
+    float closing_target = is_muted() ? 1.0f : 0.0f;
+    muted_closed += (closing_target - muted_closed) * (1.0f - exp(-elapsed_milliseconds / EYE_CLOSE_EASE_MS));
+    blinkProgress = max(blinkProgress, muted_closed);
 
     // Squash both eyes by the blink amount
     float eyeHeight = EYE_RADIUS_Y * (1.0f - blinkProgress * EYE_BLINK_CLOSE);

@@ -75,6 +75,9 @@ bool listen_open();
 // Mute the moment Listen has been held long enough, called every frame
 void update_listen_hold();
 
+// True while muted, the face closes its eyes
+bool is_muted();
+
 // True while a call is connected
 bool call_open();
 
