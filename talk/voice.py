@@ -741,7 +741,7 @@ class Speaker:
     # Start the player when it is not running and write what is waiting
     def flush(self):
         if self.player is None:
-            self.player = subprocess.Popen(utils.play_raw_command(OUTPUT_RATE, OUTPUT_CHANNELS), stdin=subprocess.PIPE)
+            self.player = subprocess.Popen(utils.play_raw_command(OUTPUT_RATE, OUTPUT_CHANNELS), stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
             self.player.stdin.write(self.waiting)
             self.player.stdin.flush()
