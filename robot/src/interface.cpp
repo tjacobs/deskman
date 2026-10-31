@@ -161,15 +161,14 @@ static const SDL_Color VIDEO_DELETE_COLOR = {140, 50, 50, 255};
 static const SDL_Color VIDEO_CONFIRM_COLOR = {220, 30, 30, 255};
 static const SDL_Color VIDEO_BACKDROP_COLOR = {20, 20, 25, 235};
 static const SDL_Color WIFI_ACTIVE_COLOR = {30, 140, 70, 255};
-static const SDL_Color MENU_BUTTON_COLOR = {40, 90, 180, 255};
-static const SDL_Color MENU_OPEN_COLOR = {30, 70, 150, 255};
+static const SDL_Color MENU_BLUE_COLOR = {40, 90, 180, 255};
 static const SDL_Color MENU_DEMO_COLOR = {110, 60, 170, 255};
 static const SDL_Color MENU_DEMO_OPEN_COLOR = {80, 40, 130, 255};
 
-// Hamburger colors that tell the robots apart, an Orin is green and deskman6 is yellow, a Pi keeps the blue
-static const SDL_Color HAMBURGER_ORIN_COLOR = {30, 140, 70, 255};
-static const SDL_Color HAMBURGER_YELLOW_COLOR = {200, 160, 20, 255};
-static const char* HAMBURGER_YELLOW_HOSTNAME = "deskman6";
+// Menu colors that tell the robots apart, an Orin is green and deskman6 is yellow, a Pi keeps the blue
+static const SDL_Color MENU_ORIN_COLOR = {30, 140, 70, 255};
+static const SDL_Color MENU_YELLOW_COLOR = {200, 160, 20, 255};
+static const char* MENU_YELLOW_HOSTNAME = "deskman6";
 
 // Mode button colors, the running mode lit green like Camera when on, the others dark, and ones that cannot run now dimmer still, all of them grey while talk is not running
 static const SDL_Color TALK_MODE_ON_COLOR = {30, 140, 70, 255};
@@ -350,6 +349,8 @@ static bool handle_volume_tap(int x, int y);
 static SDL_Rect volume_level_rect(int level);
 static void run_volume_script(int percent);
 static void run_volume_command(int percent);
+static SDL_Color menu_button_color();
+static SDL_Color menu_open_color();
 static bool handle_warning_tap(int x, int y);
 static void open_link(const string& url);
 static void draw_list_backdrop();
@@ -829,10 +830,10 @@ static SDL_Color menu_item_color(int index) {
     if (index == MENU_DEMO && g_demo_on.load())
         return CAMERA_ON_COLOR;
     if (index == MENU_SETTINGS && g_settings_open.load())
-        return MENU_OPEN_COLOR;
+        return menu_open_color();
     if (index == MENU_EXIT)
         return EXIT_BUTTON_COLOR;
-    return MENU_BUTTON_COLOR;
+    return menu_button_color();
 }
 
 // Place the menu toggle on the right of the status bar
@@ -931,7 +932,7 @@ void draw_entry_prompt(TTF_Font* font, bool bar_kept) {
     // Nothing to ask for once today's entry is recorded, or while the prompt is hidden
     if (g_entry_recorded || !ENTRY_PROMPT_SHOWN)
         return;
-    draw_bar_button(entry_prompt_rect(), ENTRY_PROMPT_TEXT, MENU_BUTTON_COLOR, font);
+    draw_bar_button(entry_prompt_rect(), ENTRY_PROMPT_TEXT, menu_button_color(), font);
 }
 
 // True when a recording from today is in the recordings folder
@@ -982,24 +983,30 @@ static void draw_hamburger_icon(SDL_Rect rect) {
     }
 }
 
-// Pick the hamburger color for this robot, yellow on deskman6, otherwise green on an Orin and blue on a Pi
-static SDL_Color pick_hamburger_color() {
+// Pick the menu color for this robot, yellow on deskman6, otherwise green on an Orin and blue on a Pi
+static SDL_Color pick_menu_color() {
     // Look up the hostname
     char hostname[WIFI_HOSTNAME_SIZE] = "";
     gethostname(hostname, sizeof(hostname) - 1);
 
     // Pick by robot, then by board
-    if (string(hostname) == HAMBURGER_YELLOW_HOSTNAME)
-        return HAMBURGER_YELLOW_COLOR;
+    if (string(hostname) == MENU_YELLOW_HOSTNAME)
+        return MENU_YELLOW_COLOR;
     if (board_name() == BOARD_ORIN_NAME)
-        return HAMBURGER_ORIN_COLOR;
-    return MENU_BUTTON_COLOR;
+        return MENU_ORIN_COLOR;
+    return MENU_BLUE_COLOR;
 }
 
-// The hamburger color, worked out once since the robot does not change under it
-static SDL_Color hamburger_color() {
-    static const SDL_Color color = pick_hamburger_color();
+// The color of the menu buttons, worked out once since the robot does not change under it
+static SDL_Color menu_button_color() {
+    static const SDL_Color color = pick_menu_color();
     return color;
+}
+
+// The darker color of a menu button that is open
+static SDL_Color menu_open_color() {
+    SDL_Color color = menu_button_color();
+    return {(Uint8)(color.r * 3 / 4), (Uint8)(color.g * 3 / 4), (Uint8)(color.b * 3 / 4), color.a};
 }
 
 // Draw the menu button, and the popup above it when it is open
@@ -1025,10 +1032,7 @@ void draw_menu(TTF_Font* font) {
 
     // Three-line toggle on the right of the status bar
     SDL_Rect menu_rect = menu_button_rect();
-    SDL_Color idle_fill = hamburger_color();
-    SDL_Color menu_fill = idle_fill;
-    if (g_menu_open)
-        menu_fill = {(Uint8)(idle_fill.r * 3 / 4), (Uint8)(idle_fill.g * 3 / 4), (Uint8)(idle_fill.b * 3 / 4), idle_fill.a};
+    SDL_Color menu_fill = g_menu_open ? menu_open_color() : menu_button_color();
     if (g_demo_on.load())
         menu_fill = g_menu_open ? MENU_DEMO_OPEN_COLOR : MENU_DEMO_COLOR;
 
@@ -1107,9 +1111,9 @@ void draw_video_list(TTF_Font* font) {
 
     // Page buttons, only when there is somewhere to page to
     if (g_video_first_row > 0)
-        draw_bar_button(video_page_rect(false), VIDEO_NEWER_LABEL, MENU_BUTTON_COLOR, font);
+        draw_bar_button(video_page_rect(false), VIDEO_NEWER_LABEL, menu_button_color(), font);
     if (g_video_first_row + rows < (int)g_recordings.size())
-        draw_bar_button(video_page_rect(true), VIDEO_OLDER_LABEL, MENU_BUTTON_COLOR, font);
+        draw_bar_button(video_page_rect(true), VIDEO_OLDER_LABEL, menu_button_color(), font);
 }
 
 // Read the folder again and show the list
