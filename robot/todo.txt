@@ -7,7 +7,7 @@
 - [done] put SSH details on wifi screen for new users to see
 - [done] make a nice one page intro guide document on how to use
 - [done] make a hold down of quiet button lock quiet mode on
-- make gemini live an option for audio to audio chat mode
+- [done] make gemini live an option for audio to audio chat mode
 - make openai GPT live an option for audio to audio chat mode
 - make hat go down when asleep at bedtime, up in the morning
 - make local gemma talk mode work on pi with 4gb memory
