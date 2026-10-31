@@ -1,7 +1,8 @@
 {
-  "local": true,
-  "cloud": false,
-  "realtime": false,
+  "gemma": true,
+  "chatgpt": false,
+  "openai_realtime": false,
+  "gemini_live": false,
   "litert": false,
   "timing": false,
   "realtime_model": "gpt-realtime-2.1-mini",
