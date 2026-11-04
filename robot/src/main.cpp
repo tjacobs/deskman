@@ -424,6 +424,7 @@ static void run_robot_loop(FaceTracker& faceTracker, bool& quit) {
 
         // Mute the moment Listen has been held long enough, so the hat goes down at once
         update_listen_hold();
+        update_mode_hold();
 
         // Raise the hat while talk listens, lower it when talk goes idle
         apply_listen_hat();
@@ -1126,6 +1127,8 @@ static int load_talk_mode() {
     nlohmann::json config = nlohmann::json::parse(file, nullptr, false);
     if (config.is_discarded() || !config.is_object())
         return TALK_MODE_GEMMA;
+    if (config.value("gpt_live", false))
+        return TALK_MODE_GPT_LIVE;
     if (config.value("gemini_live", false))
         return TALK_MODE_GEMINI_LIVE;
     if (config.value("openai_realtime", false) || config.value("realtime", false))
@@ -1158,6 +1161,7 @@ static void switch_talk_mode(int mode) {
     config["chatgpt"] = mode == TALK_MODE_CHATGPT;
     config["openai_realtime"] = mode == TALK_MODE_OPENAI_REALTIME;
     config["gemini_live"] = mode == TALK_MODE_GEMINI_LIVE;
+    config["gpt_live"] = mode == TALK_MODE_GPT_LIVE;
 
     // Write the file, and say so when it cannot be saved
     ofstream out(path);

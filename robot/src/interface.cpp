@@ -61,8 +61,8 @@ static const bool LOG_TAPS = false;
 // A tap has no client waiting on a reply, so every client hears the broadcast
 static const int NO_CLIENT = -1;
 
-// How long Listen is held to mute, a shorter press is a tap
-static const int MUTE_HOLD_MS = 800;
+// Time in ms a button is held for its hold action, a shorter press is a tap
+static const int HOLD_MS = 800;
 
 // Menu items stacked above the button
 static const int MENU_LISTEN = 0;
@@ -93,12 +93,12 @@ static const char* MENU_QUIET_LABEL = "Quiet";
 static const char* MENU_UNMUTE_LABEL = "Unmute";
 
 // Which model talk runs, a row of one button each along the bottom while the menu is open
-static const char* TALK_MODE_LABELS[] = {"Gemma", "ChatGPT", "GPT Realtime", "Gemini Live"};
-static const char* TALK_MODE_NAMES[] = {"gemma", "chatgpt", "openai_realtime", "gemini_live"};
-static const int TALK_MODE_COUNT = 4;
+static const char* TALK_MODE_LABELS[] = {"Gemma", "ChatGPT", "GPT Realtime", "Gemini Live", "GPT Live"};
+static const char* TALK_MODE_NAMES[] = {"gemma", "chatgpt", "openai_realtime", "gemini_live", "gpt_live"};
+static const int TALK_MODE_COUNT = 5;
 static const int TALK_MODE_COLUMNS = 2;
 static const int TALK_MODE_ROWS = 3;
-static const int TALK_MODE_GRID[][2] = {{0, 0}, {2, 0}, {2, 1}, {1, 0}};
+static const int TALK_MODE_GRID[][2] = {{0, 0}, {2, 0}, {-1, -1}, {1, 0}, {2, 1}};
 static const char* TALK_MODE_TITLE = "Model";
 
 // Hamburger button size and its three lines
@@ -175,6 +175,8 @@ static const SDL_Color TALK_MODE_ON_COLOR = {30, 140, 70, 255};
 static const SDL_Color TALK_MODE_OFF_COLOR = {60, 60, 70, 255};
 static const SDL_Color TALK_MODE_UNAVAILABLE_COLOR = {40, 40, 45, 255};
 static const SDL_Color TALK_MODE_UNAVAILABLE_LABEL_COLOR = {120, 120, 130, 255};
+static const SDL_Color TALK_MODE_TITLE_COLOR = {176, 176, 176, 255};
+static const SDL_Color TALK_MODE_TITLE_LABEL_COLOR = {0, 0, 0, 255};
 
 // Button for recording today's video, hidden unless shown
 static const bool ENTRY_PROMPT_SHOWN = false;
@@ -253,6 +255,10 @@ static atomic<bool> g_muted{false};
 
 // A press on Listen waiting for its release, and when it started
 static atomic<bool> g_listen_pressing{false};
+
+// A press on GPT Live waiting for its release, and when it started, a hold there picks GPT Realtime
+static atomic<bool> g_mode_pressing{false};
+static steady_clock::time_point g_mode_press_start{};
 static steady_clock::time_point g_listen_press_start{};
 
 // Who saves a camera photo when a program asks for one
@@ -292,7 +298,7 @@ static steady_clock::time_point g_last_menu_tap{};
 static atomic<int> g_talk_mode{0};
 static atomic<int> g_talk_saved_mode{0};
 static atomic<bool> g_talk_mode_pending{false};
-static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true, true};
+static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true, true, true};
 
 // Whether talk.py is running, Listen and the mode buttons grey out when not, and a tap on one that asks for talk to start
 static atomic<bool> g_talk_running{false};
@@ -328,6 +334,8 @@ static void set_menu_open(bool open);
 static void set_demo(bool on);
 static void set_mute(bool on);
 static void finish_listen_press();
+static void finish_mode_press();
+static void choose_talk_mode(int mode);
 static const char* menu_item_label(int index);
 static SDL_Color menu_item_color(int index);
 static SDL_Rect menu_button_rect();
@@ -1046,20 +1054,28 @@ void draw_menu(TTF_Font* font) {
 // Draw the three mode buttons, the running one lit and the ones talk cannot run dimmed, all dimmed while talk is not running
 static void draw_talk_modes(TTF_Font* font) {
     // Label the grid with a title box
-    draw_button(talk_mode_title_rect(), TALK_MODE_TITLE, TALK_MODE_UNAVAILABLE_COLOR, TALK_MODE_UNAVAILABLE_LABEL_COLOR, font);
+    draw_button(talk_mode_title_rect(), TALK_MODE_TITLE, TALK_MODE_TITLE_COLOR, TALK_MODE_TITLE_LABEL_COLOR, font);
 
     // Draw each mode button
     bool running = g_talk_running.load();
     for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
+        // Skip a mode with no button of its own, GPT Realtime lives under GPT Live
+        if (TALK_MODE_GRID[mode][0] < 0)
+            continue;
+
+        // GPT Live lights up and reads GPT Realtime while that one runs
+        int running_mode = g_talk_mode.load();
+        bool lit = running_mode == mode || (mode == TALK_MODE_GPT_LIVE && running_mode == TALK_MODE_OPENAI_REALTIME);
+        const char* label = mode == TALK_MODE_GPT_LIVE && running_mode == TALK_MODE_OPENAI_REALTIME ? TALK_MODE_LABELS[TALK_MODE_OPENAI_REALTIME] : TALK_MODE_LABELS[mode];
         SDL_Color fill = TALK_MODE_OFF_COLOR;
         SDL_Color label_color = BUTTON_LABEL_COLOR;
-        if (running && mode == g_talk_mode.load()) {
+        if (running && lit) {
             fill = TALK_MODE_ON_COLOR;
         } else if (!running || !g_talk_mode_available[mode].load()) {
             fill = TALK_MODE_UNAVAILABLE_COLOR;
             label_color = TALK_MODE_UNAVAILABLE_LABEL_COLOR;
         }
-        draw_button(talk_mode_rect(mode), TALK_MODE_LABELS[mode], fill, label_color, font);
+        draw_button(talk_mode_rect(mode), label, fill, label_color, font);
     }
 }
 
@@ -1458,9 +1474,10 @@ static void set_menu_open(bool open) {
 
 // Route a screen tap to the menu popup, or to the status bar
 void handle_call_event(const SDL_Event& event) {
-    // A release ends a press on Listen, wherever the finger lifted
+    // A release ends a press on Listen or GPT Live, wherever the finger lifted
     if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
         finish_listen_press();
+        finish_mode_press();
         return;
     }
 
@@ -1483,6 +1500,7 @@ void handle_call_event(const SDL_Event& event) {
 
     // A new press drops one that never saw its release
     g_listen_pressing = false;
+    g_mode_pressing = false;
 
     // The lists and a playing video take the tap before anything else
     if (!menu_open() && handle_video_tap(x, y))
@@ -1512,7 +1530,7 @@ void handle_call_event(const SDL_Event& event) {
                 item = MENU_SETTINGS_ITEMS[row];
         }
         for (int mode = 0; mode < TALK_MODE_COUNT; mode++) {
-            if (tap_in_rect(x, y, talk_mode_rect(mode)))
+            if (TALK_MODE_GRID[mode][0] >= 0 && tap_in_rect(x, y, talk_mode_rect(mode)))
                 talk_mode = mode;
         }
     }
@@ -1537,14 +1555,16 @@ void handle_call_event(const SDL_Event& event) {
     if ((item >= 0 || talk_mode != TALK_MODE_NONE) && !debounce_tap())
         return;
 
-    // Save a tap that differs from the mode in config, even when talk fell back and already lit that button
+    // GPT Live waits for the release, a hold picks GPT Realtime and a tap picks GPT Live
+    if (talk_mode == TALK_MODE_GPT_LIVE) {
+        g_mode_pressing = true;
+        g_mode_press_start = steady_clock::now();
+        return;
+    }
+
+    // Pick any other mode as soon as it is tapped
     if (talk_mode != TALK_MODE_NONE) {
-        if (talk_mode != g_talk_saved_mode.load()) {
-            g_talk_mode = talk_mode;
-            g_talk_mode_pending = true;
-        } else if (!g_talk_running.load()) {
-            g_talk_start_request = true;
-        }
+        choose_talk_mode(talk_mode);
         return;
     }
 
@@ -1646,6 +1666,37 @@ void handle_call_event(const SDL_Event& event) {
     set_status_bar_visible(!bar_showing);
 }
 
+// Save a mode that differs from the one in config, even when talk fell back and already lit that button
+static void choose_talk_mode(int mode) {
+    if (mode != g_talk_saved_mode.load()) {
+        g_talk_mode = mode;
+        g_talk_mode_pending = true;
+    } else if (!g_talk_running.load()) {
+        g_talk_start_request = true;
+    }
+}
+
+// Finish a tap on GPT Live, a hold was already handled by update_mode_hold
+static void finish_mode_press() {
+    // Skip a release that did not start a tap on GPT Live
+    if (!g_mode_pressing.exchange(false))
+        return;
+
+    // Pick GPT Live
+    choose_talk_mode(TALK_MODE_GPT_LIVE);
+}
+
+// Switch to GPT Realtime the moment a press on GPT Live has been held long enough
+void update_mode_hold() {
+    // Wait for a press held long enough
+    if (!g_mode_pressing.load() || duration_cast<milliseconds>(steady_clock::now() - g_mode_press_start).count() < HOLD_MS)
+        return;
+
+    // Take the press, so its release is not a tap, and pick GPT Realtime
+    g_mode_pressing = false;
+    choose_talk_mode(TALK_MODE_OPENAI_REALTIME);
+}
+
 // Finish a tap on Listen, a hold was already handled by update_listen_hold
 static void finish_listen_press() {
     // Skip a release that did not start a tap on Listen
@@ -1671,7 +1722,7 @@ static void finish_listen_press() {
 // Mute the moment a press on Listen has been held long enough, and drop the listening state so the hat goes down at once
 void update_listen_hold() {
     // Wait for a press held long enough
-    if (!g_listen_pressing.load() || duration_cast<milliseconds>(steady_clock::now() - g_listen_press_start).count() < MUTE_HOLD_MS)
+    if (!g_listen_pressing.load() || duration_cast<milliseconds>(steady_clock::now() - g_listen_press_start).count() < HOLD_MS)
         return;
 
     // Take the press, so its release is not a tap, and close the list
