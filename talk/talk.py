@@ -172,7 +172,7 @@ TURN_STEPS = ('speech_end', 'heard_start', 'heard', 'ask', 'replied', 'speak', '
 TIMING_ENV_NAME = 'TALK_TIMING'
 
 # Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
-TALK_MODE_NAMES = ('gemma', 'chatgpt', 'openai_realtime', 'gemini_live')
+TALK_MODE_NAMES = ('gemma', 'chatgpt', 'openai_realtime', 'gemini_live', 'gpt_live')
 
 # Config the older config.json names for the same modes, still read so a file written before the rename keeps working
 TALK_MODE_ALIASES = {'local': 'gemma', 'cloud': 'chatgpt', 'realtime': 'openai_realtime'}
@@ -194,6 +194,7 @@ TIMING_MODE = False
 CLOUD_MODE = False
 REALTIME_MODE = False
 GEMINI_MODE = False
+LIVE_MODE = False
 ACCENT_MODE = False
 LITERT_MODE = False
 LOCAL_REASON_SHOWN = False
@@ -231,15 +232,19 @@ try:
     import realtime_gemini
 except ImportError:
     realtime_gemini = None
+try:
+    import realtime_live
+except ImportError:
+    realtime_live = None
 
-# Pick the provider the realtime calls go to, main switches it to Gemini when that mode runs
+# Pick the provider the realtime calls go to, main switches it to Gemini or GPT Live when that mode runs
 realtime = realtime_openai
 
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, GEMINI_MODE, ACCENT_MODE, LITERT_MODE, text_server_process, realtime
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE, gemini_flag = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, GEMINI_MODE, LIVE_MODE, ACCENT_MODE, LITERT_MODE, text_server_process, realtime
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE, gemini_flag, live_flag = parse_args()
 
     # Load the saved mode, the robot service has no flags so it lives in config.json
     saved_mode = load_saved_mode()
@@ -253,21 +258,23 @@ def main():
     TIMING_MODE = TIMING_MODE or bool(utils.load_config({TIMING_CONFIG_NAME: False})[TIMING_CONFIG_NAME])
 
     # Run the saved mode unless a flag picked one
-    if not realtime_flag and not cloud_flag and not local_flag and not gemini_flag:
+    if not realtime_flag and not cloud_flag and not local_flag and not gemini_flag and not live_flag:
         realtime_flag = saved_mode == 'openai_realtime'
         gemini_flag = saved_mode == 'gemini_live'
+        live_flag = saved_mode == 'gpt_live'
         cloud_flag = saved_mode == 'chatgpt'
         local_flag = saved_mode == 'gemma'
-    REALTIME_MODE = realtime_flag or gemini_flag
+    REALTIME_MODE = realtime_flag or gemini_flag or live_flag
     GEMINI_MODE = gemini_flag
+    LIVE_MODE = live_flag
 
     # Two flags that contradict each other, say so rather than quietly pick one
-    if realtime_flag and gemini_flag:
-        print('Error: use --realtime or --gemini, not both.')
+    if realtime_flag + gemini_flag + live_flag > 1:
+        print('Error: use only one of --realtime, --gemini, and --gpt-live.')
         print_usage()
         sys.exit(1)
     if REALTIME_MODE and local_flag:
-        print('Error: --realtime and --gemini need the internet, so they cannot be used with --local.')
+        print('Error: --realtime, --gemini, and --gpt-live need the internet, so they cannot be used with --local.')
         print_usage()
         sys.exit(1)
 
@@ -275,11 +282,14 @@ def main():
     if local_flag:
         REALTIME_MODE = False
         GEMINI_MODE = False
+        LIVE_MODE = False
         print('Local: True', flush=True)
 
     # Send the realtime calls to Gemini when that mode runs
     if GEMINI_MODE:
         realtime = realtime_gemini
+    if LIVE_MODE:
+        realtime = realtime_live
 
     # Drop realtime when the socket, the net, or the key is missing
     if REALTIME_MODE:
@@ -288,6 +298,7 @@ def main():
             print(f'{reason} Using local.', flush=True)
             REALTIME_MODE = False
             GEMINI_MODE = False
+            LIVE_MODE = False
 
             # Realtime was asked for, so a missing key opens the setup
             if reason == NO_KEY_REASON:
@@ -295,7 +306,7 @@ def main():
             elif reason == GEMINI_NO_KEY_REASON:
                 offer_key_setup(True, GEMINI_KEY_SCRIPT_NAME)
         else:
-            print('Gemini Live: True' if GEMINI_MODE else 'Realtime: True', flush=True)
+            print('Gemini Live: True' if GEMINI_MODE else 'GPT Live: True' if LIVE_MODE else 'Realtime: True', flush=True)
 
     # Gemini needs no text backend, OpenAI realtime forces the cloud one, and neither starts llama-server
     if GEMINI_MODE:
@@ -375,6 +386,7 @@ def parse_args():
     local_mode = False
     realtime_mode = False
     gemini_mode = False
+    live_mode = False
     accent_mode = False
     model_name = ""
     arguments = sys.argv[1:]
@@ -401,6 +413,8 @@ def parse_args():
             realtime_mode = True
         elif argument == '--gemini':
             gemini_mode = True
+        elif argument == '--gpt-live':
+            live_mode = True
         elif argument == '--local':
             local_mode = True
         elif argument == '--accent':
@@ -426,7 +440,7 @@ def parse_args():
         sys.exit(1)
 
     # Return the arguments
-    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, timing_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode, gemini_mode
+    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, timing_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode, gemini_mode, live_mode
 
 # Read the one mode config.json has true, empty when none is, and stop when more than one is
 def load_saved_mode():
@@ -524,6 +538,8 @@ def use_local_text():
 def running_mode_name():
     if GEMINI_MODE:
         return 'gemini_live'
+    if LIVE_MODE:
+        return 'gpt_live'
     if REALTIME_MODE:
         return 'openai_realtime'
     if CLOUD_MODE:
@@ -543,6 +559,8 @@ def available_mode_names():
         names.append('chatgpt')
     if online and realtime_openai is not None:
         names.append('openai_realtime')
+    if online and realtime_live is not None:
+        names.append('gpt_live')
     if utils.network_available() and realtime_gemini is not None and realtime_gemini.load_key():
         names.append('gemini_live')
     return names
@@ -588,7 +606,7 @@ def say_accent_phrase():
 
 # Print usage help
 def print_usage():
-    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--timing] [--cloud] [--realtime] [--gemini] [--local] [--model name]')
+    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--timing] [--cloud] [--realtime] [--gemini] [--gpt-live] [--local] [--model name]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --accent           say the accent test phrase in the current voice, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
@@ -600,6 +618,7 @@ def print_usage():
     print('  --cloud            ask OpenAI instead of the local llama-server, see config.json')
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print('  --gemini           stream audio to Gemini Live both ways after the wake word, see config.json')
+    print('  --gpt-live         stream audio to OpenAI GPT Live both ways after the wake word, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
     print('  (no arg)           say "deskman" then a command, uses OpenAI when online, else local Gemma')
@@ -2034,6 +2053,9 @@ def print_realtime_model():
     config = realtime.load_config()
     if GEMINI_MODE:
         print(f'Realtime model: {config["gemini_model"]} on Gemini, voice {config["realtime_voice"]}.', flush=True)
+        return
+    if LIVE_MODE:
+        print(f'Realtime model: {config["live_model"]} with {config["live_backend"]} behind it on {text_client.cloud_provider_name()}, voice {config["realtime_voice"]}.', flush=True)
         return
     print(f'Realtime model: {config["realtime_model"]} on {text_client.cloud_provider_name()}, voice {config["realtime_voice"]}.', flush=True)
 
