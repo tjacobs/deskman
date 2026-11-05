@@ -9,7 +9,7 @@
 - [done] make a hold down of quiet button lock quiet mode on
 - [done] make gemini live an option for audio to audio chat mode
 - [done] make openai GPT live an option for audio to audio chat mode
-- make elevenlabs voice option with expression options with model
+- [done] make elevenlabs voice option with expression options with model
 - make hat go down when asleep at bedtime, up in the morning
 - make local gemma talk mode work on pi with 4gb memory
 - make a nice what can I say screen for new users to learn

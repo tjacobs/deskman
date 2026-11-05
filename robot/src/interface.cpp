@@ -93,12 +93,12 @@ static const char* MENU_QUIET_LABEL = "Quiet";
 static const char* MENU_UNMUTE_LABEL = "Unmute";
 
 // Which model talk runs, a row of one button each along the bottom while the menu is open
-static const char* TALK_MODE_LABELS[] = {"Gemma", "ChatGPT", "GPT Realtime", "Gemini Live", "GPT Live"};
-static const char* TALK_MODE_NAMES[] = {"gemma", "chatgpt", "openai_realtime", "gemini_live", "gpt_live"};
-static const int TALK_MODE_COUNT = 5;
+static const char* TALK_MODE_LABELS[] = {"Gemma", "ChatGPT", "GPT Realtime", "Gemini Live", "GPT Live", "ElevenLabs"};
+static const char* TALK_MODE_NAMES[] = {"gemma", "chatgpt", "openai_realtime", "gemini_live", "gpt_live", "elevenlabs"};
+static const int TALK_MODE_COUNT = 6;
 static const int TALK_MODE_COLUMNS = 2;
 static const int TALK_MODE_ROWS = 3;
-static const int TALK_MODE_GRID[][2] = {{0, 0}, {2, 0}, {-1, -1}, {1, 0}, {2, 1}};
+static const int TALK_MODE_GRID[][2] = {{0, 0}, {2, 0}, {-1, -1}, {1, 0}, {2, 1}, {1, 1}};
 static const char* TALK_MODE_TITLE = "Model";
 
 // Hamburger button size and its three lines
@@ -298,7 +298,7 @@ static steady_clock::time_point g_last_menu_tap{};
 static atomic<int> g_talk_mode{0};
 static atomic<int> g_talk_saved_mode{0};
 static atomic<bool> g_talk_mode_pending{false};
-static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true, true, true};
+static atomic<bool> g_talk_mode_available[TALK_MODE_COUNT] = {true, true, true, true, true, true};
 
 // Whether talk.py is running, Listen and the mode buttons grey out when not, and a tap on one that asks for talk to start
 static atomic<bool> g_talk_running{false};

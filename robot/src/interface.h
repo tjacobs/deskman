@@ -113,6 +113,7 @@ const int TALK_MODE_CHATGPT = 1;
 const int TALK_MODE_OPENAI_REALTIME = 2;
 const int TALK_MODE_GEMINI_LIVE = 3;
 const int TALK_MODE_GPT_LIVE = 4;
+const int TALK_MODE_ELEVENLABS = 5;
 const int TALK_MODE_NONE = -1;
 
 // Show whether the camera preview is up, so the Camera button can say so

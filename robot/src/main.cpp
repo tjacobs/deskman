@@ -1127,6 +1127,8 @@ static int load_talk_mode() {
     nlohmann::json config = nlohmann::json::parse(file, nullptr, false);
     if (config.is_discarded() || !config.is_object())
         return TALK_MODE_GEMMA;
+    if (config.value("elevenlabs", false))
+        return TALK_MODE_ELEVENLABS;
     if (config.value("gpt_live", false))
         return TALK_MODE_GPT_LIVE;
     if (config.value("gemini_live", false))
@@ -1162,6 +1164,7 @@ static void switch_talk_mode(int mode) {
     config["openai_realtime"] = mode == TALK_MODE_OPENAI_REALTIME;
     config["gemini_live"] = mode == TALK_MODE_GEMINI_LIVE;
     config["gpt_live"] = mode == TALK_MODE_GPT_LIVE;
+    config["elevenlabs"] = mode == TALK_MODE_ELEVENLABS;
 
     // Write the file, and say so when it cannot be saved
     ofstream out(path);
