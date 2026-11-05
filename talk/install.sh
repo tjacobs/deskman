@@ -41,7 +41,7 @@ DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
 # Config system packages and players, cmake and a compiler build the local model
 LINUX_PACKAGES=(espeak-ng alsa-utils htop zenity wl-clipboard xsel build-essential cmake libssl-dev)
-MAC_PACKAGES=(espeak-ng)
+MAC_PACKAGES=(espeak-ng cmake)
 MAC_LISTEN_PACKAGES=(sox)
 LINUX_PLAYER="aplay"
 MAC_PLAYER="afplay"
@@ -224,6 +224,9 @@ install_mac_packages() {
         exit 1
     fi
 
+    # Put brew tools on the path, non login shells often miss /opt/homebrew/bin
+    ensure_brew_path
+
     # Install each package when missing
     for package in "$@"; do
         if "${brew_command}" list --formula "${package}" >/dev/null 2>&1; then
@@ -293,7 +296,7 @@ install_python_packages() {
     install_packages "${SPACY_MODEL_URL}"
 }
 
-# Install torch, JetPack 7 CUDA 13.2 wheels, JetPack 6 Orin wheels, CPU on pi, CUDA 12.6 elsewhere
+# Install torch, JetPack 7 CUDA 13.2, JetPack 6 Orin, default PyPI on mac, CUDA 12.6 elsewhere, CPU on pi
 install_torch() {
     # JetPack 7 has no system libcudart.so.12, so use the upstream wheel that ships CUDA 13.2
     if is_jetpack7; then
@@ -306,6 +309,13 @@ install_torch() {
     if is_jetson; then
         echo "Installing torch ${TORCH_JETSON_PACKAGES[*]} from ${TORCH_JETSON_INDEX_URL}."
         install_packages --index-url "${TORCH_JETSON_INDEX_URL}" "${TORCH_JETSON_PACKAGES[@]}"
+        return 0
+    fi
+
+    # Use the default macOS wheel, CUDA indexes ship only linux and windows platforms
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        echo "Installing torch ${TORCH_PACKAGES[*]} for macOS."
+        install_packages "${TORCH_PACKAGES[@]}"
         return 0
     fi
 
@@ -425,9 +435,22 @@ remove_listen_sources() {
 
 # Quit early when the build tools are missing
 check_build_tools() {
+    # Resolve brew cmake on mac before looking for tools
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        ensure_brew_path
+    fi
+
+    # Suggest the package manager for this platform
+    local install_hint
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        install_hint="brew install"
+    else
+        install_hint="sudo apt install"
+    fi
+
     for tool in cmake git; do
         if ! command -v "${tool}" >/dev/null 2>&1; then
-            echo "${tool} not found. Install with: sudo apt install ${tool}"
+            echo "${tool} not found. Install with: ${install_hint} ${tool}"
             exit 1
         fi
     done
@@ -670,6 +693,22 @@ find_brew() {
             return 0
         fi
     done
+}
+
+# Put Homebrew bin on PATH so cmake and friends resolve in non login shells
+ensure_brew_path() {
+    local brew_command brew_prefix
+    brew_command="$(find_brew)"
+    if [[ -z "${brew_command}" ]]; then
+        return 0
+    fi
+
+    # Prefer brew --prefix, fall back to the directory above bin
+    brew_prefix="$("${brew_command}" --prefix 2>/dev/null || true)"
+    if [[ -z "${brew_prefix}" ]]; then
+        brew_prefix="$(dirname "$(dirname "${brew_command}")")"
+    fi
+    export PATH="${brew_prefix}/bin:${PATH}"
 }
 
 # Return the python version this machine should use for torch
