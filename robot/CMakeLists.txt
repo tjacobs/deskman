@@ -41,14 +41,19 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# Find Homebrew SDL2 on Mac, Apple Silicon or Intel
+# Prefer one Homebrew prefix on Mac so SDL2, SDL2_image, and SDL2_ttf are the same build
+# Mixing /usr/local SDL2 with Homebrew SDL2_ttf segfaults in CreateTextureFromSurface
 if(APPLE)
+    set(HOMEBREW_PREFIX "")
     foreach(prefix /opt/homebrew /usr/local)
-        if(EXISTS "${prefix}/lib/pkgconfig")
-            list(APPEND CMAKE_PREFIX_PATH "${prefix}")
-            set(ENV{PKG_CONFIG_PATH} "${prefix}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+        if(HOMEBREW_PREFIX STREQUAL "" AND EXISTS "${prefix}/lib/pkgconfig")
+            set(HOMEBREW_PREFIX "${prefix}")
         endif()
     endforeach()
+    if(NOT HOMEBREW_PREFIX STREQUAL "")
+        list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
+        set(ENV{PKG_CONFIG_PATH} "${HOMEBREW_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+    endif()
 endif()
 
 find_package(PkgConfig)
