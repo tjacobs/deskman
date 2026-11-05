@@ -41,7 +41,7 @@ DEVICE_TREE_MODEL="/proc/device-tree/model"
 RASPBERRY_PI_MATCH="Raspberry Pi"
 # Config system packages and players, cmake and a compiler build the local model
 LINUX_PACKAGES=(espeak-ng alsa-utils htop zenity wl-clipboard xsel build-essential cmake libssl-dev)
-MAC_PACKAGES=(espeak-ng cmake)
+MAC_PACKAGES=(espeak-ng cmake sox)
 MAC_LISTEN_PACKAGES=(sox)
 LINUX_PLAYER="aplay"
 MAC_PLAYER="afplay"

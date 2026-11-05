@@ -35,6 +35,7 @@ TORCH_THREADS = 4
 # Config audio
 MAC_PLAYER = 'afplay'
 LINUX_PLAYER = 'aplay'
+MAC_RAW_PLAYER = 'play'
 MAC_RECORDER = 'rec'
 LINUX_RECORDER = 'arecord'
 SAMPLE_RATE = 16000
@@ -111,12 +112,14 @@ def play_wav_command(wav_path):
 
 # Build playback command for a raw stream arriving on stdin
 def play_raw_command(rate, channels):
-    player = audio_player()
-    command = [player]
+    # On mac, afplay only plays files, sox play takes raw pcm on stdin
+    if platform.system() == 'Darwin':
+        return [MAC_RAW_PLAYER, '-t', 'raw', '-r', str(rate), '-e', 'signed', '-b', '16', '-c', str(channels), '-q', '-']
 
     # Share the USB speaker through dmix, plughw locks the card and fails while the mic is open
+    command = [LINUX_PLAYER]
     card = find_usb_card()
-    if player == LINUX_PLAYER and card is not None:
+    if card is not None:
         command += ['-D', shared_playback_device(card)]
 
     # plug converts, the card may only accept another rate or channel count
@@ -128,6 +131,11 @@ def check_audio_player():
     player = audio_player()
     if shutil.which(player) is None:
         return False, f'{player} not found'
+
+    # Live voices stream raw pcm, sox play handles that on mac
+    if player == MAC_PLAYER and shutil.which(MAC_RAW_PLAYER) is None:
+        return False, f'{MAC_RAW_PLAYER} not found, install with brew install sox'
+
     if player == LINUX_PLAYER:
         result = subprocess.run([LINUX_PLAYER, '-l'], capture_output=True)
         if result.returncode != 0:
