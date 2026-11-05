@@ -2,7 +2,7 @@
 
 Speech to text, LLM inference, and text to speech generation.
 
-Runs locally, offline, no cloud/internet/wifi needed once downloaded. With no flags, `talk.py` uses OpenAI when the internet and `OPENAI_API_KEY` are present, otherwise the local Gemma server. `--cloud` and `--local` override. `--realtime` skips the local speech models entirely and streams audio both ways to OpenAI, `--gemini` does the same with Gemini Live, and `--gpt-live` with OpenAI GPT Live.
+Runs locally, offline, no cloud/internet/wifi needed once downloaded. With no flags, `talk.py` uses OpenAI when the internet and `OPENAI_API_KEY` are present, otherwise the local Gemma server. `--cloud` and `--local` override. `--realtime` skips the local speech models entirely and streams audio both ways to OpenAI, `--gemini` does the same with Gemini Live, and `--gpt-live` with OpenAI GPT Live. `--elevenlabs` keeps the OpenAI text path but speaks in an ElevenLabs voice.
 
 Conversational AI bot with tools like time, date, volume, and google calendar integration.
 
@@ -15,6 +15,7 @@ Scripts:
 - `realtime_openai.py` — streams microphone audio to OpenAI and plays the spoken reply, no local models in the loop
 - `realtime_gemini.py` — streams microphone audio to Gemini Live and plays the spoken reply, no local models in the loop
 - `realtime_live.py` — streams microphone audio to OpenAI GPT Live and plays the spoken reply, no local models in the loop
+- `speech_elevenlabs.py` — speaks text in an ElevenLabs voice instead of Kokoro, streaming the audio as it arrives
 - `voice.py` — shared voice functions for live realtime models, microphone, speaker, conversation loop, tool handling
 - `utils.py` — shared audio, cache, device, and microphone helpers for those scripts
 
@@ -226,6 +227,27 @@ What differs from the other providers:
 - The voices are `marin`, `gleam`, `meridian`, `vesper`, and `ripple`, with `marin` as the default, and a voice set in `config.json` that is not one of these falls back to it. A voice change opens a new session seeded with the last ten turns.
 - The session is billed by the minute of audio, plus the backend model's usage. The seconds used are printed when the session closes.
 
+## speech_elevenlabs.py
+
+Speaks text in an [ElevenLabs](https://elevenlabs.io) voice, streaming the audio to the speaker as it arrives. It only replaces Kokoro, the words still come from OpenAI text, so it is a mode of its own, `elevenlabs`, rather than one of the realtime providers. It uses only the standard library, and the key from `install_elevenlabs_key.sh`.
+
+```bash
+./speech_elevenlabs.py
+./speech_elevenlabs.py "[whispers] I have a secret"
+./talk.py --elevenlabs
+```
+
+`--model` and `--voice` override `config.json` for one run, and `talk.py` runs it when `elevenlabs` is true. It needs the internet and cannot be combined with `--local`. Without a key, or when the internet is down, talk says so and uses Kokoro.
+
+- The default model is `eleven_v3`, which reads emotion tags like `[whispers]`, `[laughs]`, and `[excited]` in the text. While it is the model, the text model is told to use at most one tag a reply. Other models such as `eleven_flash_v2_5` are quicker to start but ignore tags, so the tag note is dropped and only the voice settings shape the delivery.
+- The voices are `george`, `brian`, `daniel`, `charlie`, `sarah`, `alice`, `lily`, and `jessica`, with `george` as the default. A voice id from ElevenLabs also works in `elevenlabs_voice`. The `set_voice` and `list_voices` tools use these names while the mode is on.
+- Kokoro is not loaded while ElevenLabs runs, it loads only if a line fails and needs the fallback. A failed line shows a short warning on the face, such as `ElevenLabs key rejected` or `ElevenLabs out of quota`.
+- Audio comes back at 24 kHz and plays as it arrives, mute and bedtime stop it the same as the other voices.
+
+### install_elevenlabs_key.sh
+
+Saves an ElevenLabs API key so `talk.py` can use the voice, the same way `install_gemini_key.sh` does. It opens the [API keys page](https://elevenlabs.io/app/settings/api-keys) with a paste box on top, and a copied key is saved at once to `elevenlabs.env` as `ELEVENLABS_API_KEY=`, readable only by you. `ELEVENLABS_API_KEY` in the environment wins over the file, and `--terminal` skips the browser. `talk.py` opens it by itself when `elevenlabs` is on and no key is saved.
+
 ## config.json
 
 Realtime settings live in `config.json`, next to `talk.py`. Anything missing falls back to the constants at the top of `realtime_openai.py` `realtime_gemini.py`, or `realtime_live.py`.
@@ -237,21 +259,30 @@ Realtime settings live in `config.json`, next to `talk.py`. Anything missing fal
   "openai_realtime": true,
   "gemini_live": false,
   "gpt_live": false,
+  "elevenlabs": false,
   "realtime_model": "gpt-realtime-2.1-mini",
   "gemini_model": "gemini-3.8-live",
   "live_model": "gpt-live-1",
   "live_backend": "gpt-6-luna",
+  "elevenlabs_model": "eleven_v3",
+  "elevenlabs_voice": "george",
+  "elevenlabs_stability": 0.5,
+  "elevenlabs_style": 0.0,
+  "elevenlabs_speed": 1.0,
   "realtime_voice": "echo",
   "realtime_accent": "You are a British man from London. Speak with a natural British accent."
 }
 ```
 
-- `gemma`, `chatgpt`, `openai_realtime`, `gemini_live`, `gpt_live` — the saved mode, set exactly one true, the robot mode buttons write these, and the older `local`, `cloud`, and `realtime` names still work
+- `gemma`, `chatgpt`, `openai_realtime`, `gemini_live`, `gpt_live`, `elevenlabs` — the saved mode, set exactly one true, the robot mode buttons write these, and the older `local`, `cloud`, and `realtime` names still work
 - `gemma` — the local Gemma server, the same as passing `--local`
 - `chatgpt` — OpenAI for text with the kokoro voice, the same as passing `--cloud`
 - `openai_realtime` — OpenAI speech to speech, the same as passing `--realtime`
 - `gemini_live` — Gemini Live speech to speech, the same as passing `--gemini`
 - `gpt_live` — OpenAI GPT Live speech to speech, the same as passing `--gpt-live`
+- `elevenlabs` — OpenAI text spoken in an ElevenLabs voice, the same as passing `--elevenlabs`
+- `elevenlabs_model`, `elevenlabs_voice` — the ElevenLabs model and voice, a name from the list or a voice id
+- `elevenlabs_stability`, `elevenlabs_style`, `elevenlabs_speed` — how steady, how stylised, and how fast the voice speaks, the v3 model only accepts stability of 0, 0.5, or 1
 - `live_model` — the GPT Live model
 - `live_backend` — the model GPT Live hands tool requests to
 - `realtime_model` — the OpenAI realtime model, the mini one is cheaper and quick enough to hold a conversation
@@ -277,7 +308,7 @@ journalctl -u robot -f
 tail -f log.txt
 ```
 
-The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Tap Gemma, ChatGPT, Gemini Live, or GPT Live in the robot menu, or hold GPT Live for GPT Realtime, or set exactly one of `"gemma"`, `"chatgpt"`, `"openai_realtime"`, `"gemini_live"`, or `"gpt_live"` true in `config.json` and restart. With none true, talk uses OpenAI when online with a key, otherwise Gemma. `--cloud`, `--realtime`, `--gemini`, `--gpt-live`, and `--local` on the command line still win.
+The robot binary starts `talk.py` itself with a fixed set of arguments, so flags cannot be passed through the service. Tap Gemma, ChatGPT, Gemini Live, ElevenLabs, or GPT Live in the robot menu, or hold GPT Live for GPT Realtime, or set exactly one of `"gemma"`, `"chatgpt"`, `"openai_realtime"`, `"gemini_live"`, `"elevenlabs"`, or `"gpt_live"` true in `config.json` and restart. With none true, talk uses OpenAI when online with a key, otherwise Gemma. `--cloud`, `--realtime`, `--gemini`, `--gpt-live`, `--elevenlabs`, and `--local` on the command line still win.
 
 ## Testing
 

@@ -15,6 +15,7 @@ reminders.json
 accounts.json
 openai.env*
 gemini.env*
+elevenlabs.env*
 history/
 
 text/litert/

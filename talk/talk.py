@@ -141,8 +141,10 @@ TEXT_SERVER_RESTART_TRIES = 3
 # Script that opens the key page and saves what gets pasted, and the reason that calls for it
 KEY_SCRIPT_NAME = 'install_openai_key.sh'
 GEMINI_KEY_SCRIPT_NAME = 'install_gemini_key.sh'
+ELEVENLABS_KEY_SCRIPT_NAME = 'install_elevenlabs_key.sh'
 NO_KEY_REASON = 'No OpenAI key.'
 GEMINI_NO_KEY_REASON = 'No Gemini key.'
+ELEVENLABS_NO_KEY_REASON = 'No ElevenLabs key.'
 
 # How long Kokoro and the first inference usually take on a Pi, shown on those loading lines
 PI_KOKORO_LOAD_SECONDS = 30
@@ -172,7 +174,7 @@ TURN_STEPS = ('speech_end', 'heard_start', 'heard', 'ask', 'replied', 'speak', '
 TIMING_ENV_NAME = 'TALK_TIMING'
 
 # Config talk modes, config.json has exactly one of these true, the same names as the robot mode buttons
-TALK_MODE_NAMES = ('gemma', 'chatgpt', 'openai_realtime', 'gemini_live', 'gpt_live')
+TALK_MODE_NAMES = ('gemma', 'chatgpt', 'openai_realtime', 'gemini_live', 'gpt_live', 'elevenlabs')
 
 # Config the older config.json names for the same modes, still read so a file written before the rename keeps working
 TALK_MODE_ALIASES = {'local': 'gemma', 'cloud': 'chatgpt', 'realtime': 'openai_realtime'}
@@ -195,6 +197,7 @@ CLOUD_MODE = False
 REALTIME_MODE = False
 GEMINI_MODE = False
 LIVE_MODE = False
+ELEVENLABS_MODE = False
 ACCENT_MODE = False
 LITERT_MODE = False
 LOCAL_REASON_SHOWN = False
@@ -237,14 +240,20 @@ try:
 except ImportError:
     realtime_live = None
 
+# Import the ElevenLabs voice on its own, it only needs the standard library but stays optional
+try:
+    import speech_elevenlabs
+except ImportError:
+    speech_elevenlabs = None
+
 # Pick the provider the realtime calls go to, main switches it to Gemini or GPT Live when that mode runs
 realtime = realtime_openai
 
 # Main
 def main():
     # Parse args
-    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, GEMINI_MODE, LIVE_MODE, ACCENT_MODE, LITERT_MODE, text_server_process, realtime
-    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE, gemini_flag, live_flag = parse_args()
+    global TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, CLOUD_MODE, REALTIME_MODE, GEMINI_MODE, LIVE_MODE, ELEVENLABS_MODE, ACCENT_MODE, LITERT_MODE, text_server_process, realtime
+    TEST_MODE, REPEAT_MODE, REPLAY_MODE, MEMORY_MODE, COLD_MODE, PROMPT_MODE, TIMING_MODE, cloud_flag, local_flag, model_name, realtime_flag, ACCENT_MODE, gemini_flag, live_flag, elevenlabs_flag = parse_args()
 
     # Load the saved mode, the robot service has no flags so it lives in config.json
     saved_mode = load_saved_mode()
@@ -258,23 +267,25 @@ def main():
     TIMING_MODE = TIMING_MODE or bool(utils.load_config({TIMING_CONFIG_NAME: False})[TIMING_CONFIG_NAME])
 
     # Run the saved mode unless a flag picked one
-    if not realtime_flag and not cloud_flag and not local_flag and not gemini_flag and not live_flag:
+    if not realtime_flag and not cloud_flag and not local_flag and not gemini_flag and not live_flag and not elevenlabs_flag:
         realtime_flag = saved_mode == 'openai_realtime'
         gemini_flag = saved_mode == 'gemini_live'
         live_flag = saved_mode == 'gpt_live'
+        elevenlabs_flag = saved_mode == 'elevenlabs'
         cloud_flag = saved_mode == 'chatgpt'
         local_flag = saved_mode == 'gemma'
     REALTIME_MODE = realtime_flag or gemini_flag or live_flag
     GEMINI_MODE = gemini_flag
     LIVE_MODE = live_flag
+    ELEVENLABS_MODE = elevenlabs_flag
 
     # Two flags that contradict each other, say so rather than quietly pick one
-    if realtime_flag + gemini_flag + live_flag > 1:
-        print('Error: use only one of --realtime, --gemini, and --gpt-live.')
+    if realtime_flag + gemini_flag + live_flag + elevenlabs_flag > 1:
+        print('Error: use only one of --realtime, --gemini, --gpt-live, and --elevenlabs.')
         print_usage()
         sys.exit(1)
-    if REALTIME_MODE and local_flag:
-        print('Error: --realtime, --gemini, and --gpt-live need the internet, so they cannot be used with --local.')
+    if (REALTIME_MODE or ELEVENLABS_MODE) and local_flag:
+        print('Error: --realtime, --gemini, --gpt-live, and --elevenlabs need the internet, so they cannot be used with --local.')
         print_usage()
         sys.exit(1)
 
@@ -283,6 +294,7 @@ def main():
         REALTIME_MODE = False
         GEMINI_MODE = False
         LIVE_MODE = False
+        ELEVENLABS_MODE = False
         print('Local: True', flush=True)
 
     # Send the realtime calls to Gemini when that mode runs
@@ -308,12 +320,24 @@ def main():
         else:
             print('Gemini Live: True' if GEMINI_MODE else 'GPT Live: True' if LIVE_MODE else 'Realtime: True', flush=True)
 
+    # Drop the ElevenLabs voice when the net or the key is missing, the Kokoro voice speaks instead
+    if ELEVENLABS_MODE:
+        reason = elevenlabs_unavailable_reason()
+        if reason:
+            print(f'{reason} Using the local voice.', flush=True)
+            ELEVENLABS_MODE = False
+            if reason == ELEVENLABS_NO_KEY_REASON:
+                offer_key_setup(True, ELEVENLABS_KEY_SCRIPT_NAME)
+        else:
+            print('ElevenLabs: True', flush=True)
+            text_ask.set_speech_style(speech_elevenlabs.speech_style())
+
     # Gemini needs no text backend, OpenAI realtime forces the cloud one, and neither starts llama-server
     if GEMINI_MODE:
         CLOUD_MODE = False
         text_client.disable_cloud()
     else:
-        CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE, local_flag, model_name)
+        CLOUD_MODE = choose_text_backend(cloud_flag or REALTIME_MODE or ELEVENLABS_MODE, local_flag, model_name)
 
     # Update the mode button on screen
     robot_move.show_talk_mode(running_mode_name(), available_mode_names())
@@ -387,6 +411,7 @@ def parse_args():
     realtime_mode = False
     gemini_mode = False
     live_mode = False
+    elevenlabs_mode = False
     accent_mode = False
     model_name = ""
     arguments = sys.argv[1:]
@@ -415,6 +440,8 @@ def parse_args():
             gemini_mode = True
         elif argument == '--gpt-live':
             live_mode = True
+        elif argument == '--elevenlabs':
+            elevenlabs_mode = True
         elif argument == '--local':
             local_mode = True
         elif argument == '--accent':
@@ -440,7 +467,7 @@ def parse_args():
         sys.exit(1)
 
     # Return the arguments
-    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, timing_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode, gemini_mode, live_mode
+    return test_mode, repeat_mode, replay_mode, memory_mode, cold_mode, prompt_mode, timing_mode, cloud_mode, local_mode, model_name, realtime_mode, accent_mode, gemini_mode, live_mode, elevenlabs_mode
 
 # Read the one mode config.json has true, empty when none is, and stop when more than one is
 def load_saved_mode():
@@ -540,6 +567,8 @@ def running_mode_name():
         return 'gemini_live'
     if LIVE_MODE:
         return 'gpt_live'
+    if ELEVENLABS_MODE:
+        return 'elevenlabs'
     if REALTIME_MODE:
         return 'openai_realtime'
     if CLOUD_MODE:
@@ -561,6 +590,8 @@ def available_mode_names():
         names.append('openai_realtime')
     if online and realtime_live is not None:
         names.append('gpt_live')
+    if utils.network_available() and speech_elevenlabs is not None and speech_elevenlabs.load_key():
+        names.append('elevenlabs')
     if utils.network_available() and realtime_gemini is not None and realtime_gemini.load_key():
         names.append('gemini_live')
     return names
@@ -590,6 +621,17 @@ def realtime_unavailable_reason():
         return NO_KEY_REASON
     return ''
 
+# Why the ElevenLabs voice cannot start, empty when it can
+def elevenlabs_unavailable_reason():
+    # Needs its module, the internet, and its own key
+    if speech_elevenlabs is None:
+        return 'ElevenLabs needs its module.'
+    if not utils.network_available():
+        return 'ElevenLabs needs internet.'
+    if not speech_elevenlabs.load_key():
+        return ELEVENLABS_NO_KEY_REASON
+    return ''
+
 # Say the accent phrase once, it packs the sounds that split British from American
 def say_accent_phrase():
     # Print the accent phrase
@@ -606,7 +648,7 @@ def say_accent_phrase():
 
 # Print usage help
 def print_usage():
-    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--timing] [--cloud] [--realtime] [--gemini] [--gpt-live] [--local] [--model name]')
+    print('Usage: ./talk.py [--test] [--accent] [--repeat] [--replay] [--memory] [--cold] [--prompt] [--timing] [--cloud] [--realtime] [--gemini] [--gpt-live] [--elevenlabs] [--local] [--model name]')
     print(f'  --test             ask itself "{TEST_QUESTION}", answer it, then exit')
     print('  --accent           say the accent test phrase in the current voice, then exit')
     print('  --repeat           say the transcribed words back after each utterance')
@@ -619,6 +661,7 @@ def print_usage():
     print('  --realtime         stream audio to OpenAI both ways after the wake word, see config.json')
     print('  --gemini           stream audio to Gemini Live both ways after the wake word, see config.json')
     print('  --gpt-live         stream audio to OpenAI GPT Live both ways after the wake word, see config.json')
+    print('  --elevenlabs       answer from OpenAI text and speak in an ElevenLabs voice, see config.json')
     print('  --local            force the local Gemma server even when the internet is up, see config.json')
     print('  --model            cloud model name, default gpt-4o-mini or TALK_CLOUD_MODEL')
     print('  (no arg)           say "deskman" then a command, uses OpenAI when online, else local Gemma')
@@ -928,7 +971,7 @@ def load_speech_models():
     vad_model = load_vad_model()
 
     # Realtime answers in OpenAI audio, so kokoro waits until something local needs saying
-    if REALTIME_MODE:
+    if REALTIME_MODE or ELEVENLABS_MODE:
         return whisper_model, vad_model, None
     kokoro_pipeline = load_kokoro_pipeline()
 
@@ -1047,6 +1090,8 @@ def save_volume_phrase():
 # Change the speaking voice used by talk
 def set_voice(voice_name):
     global VOICE
+    if ELEVENLABS_MODE:
+        return speech_elevenlabs.set_voice(voice_name)
     voice = normalize_voice_name(voice_name)
     if voice not in utils.VOICES:
         names = ', '.join(voice_short_name(item) for item in utils.VOICES)
@@ -1066,6 +1111,8 @@ def set_voice(voice_name):
 
 # List available speaking voices without language prefixes
 def list_voices(count=None):
+    if ELEVENLABS_MODE:
+        return speech_elevenlabs.list_voices(count)
     names = [voice_short_name(voice) for voice in utils.VOICES]
     current = voice_short_name(VOICE)
     if count is not None:
@@ -1242,7 +1289,7 @@ def hear_utterance(whisper_model, kokoro_pipeline, listener, timeout_seconds):
         print('Nearly deskman', flush=True)
 
     # Play back the recording, then say the words back, realtime only logs a near miss as kokoro stays unloaded
-    local_voice = not REALTIME_MODE
+    local_voice = not REALTIME_MODE and not ELEVENLABS_MODE
     if REPLAY_MODE or (near_miss and local_voice):
         replay(listener, audio)
     if local_voice and (near_miss or (REPEAT_MODE and text)):
@@ -1423,8 +1470,12 @@ def speak(kokoro_pipeline, text):
         print(f'Bedtime, not saying: {text}', flush=True)
         return
 
-    # Load kokoro the first time something local needs a voice, realtime skips it at startup
+    # Speak in the ElevenLabs voice, and fall back to kokoro when it fails
     TURN_TIMES['speak'] = time.perf_counter()
+    if ELEVENLABS_MODE and speak_elevenlabs(text):
+        return
+
+    # Load kokoro the first time something local needs a voice, realtime skips it at startup
     if kokoro_model is None:
         load_kokoro_pipeline()
 
@@ -1444,6 +1495,18 @@ def speak(kokoro_pipeline, text):
 
     # Hand torch's cached gpu blocks back, the Jetson gpu shares memory with llama and the desktop
     torch.cuda.empty_cache()
+
+# Speak with the ElevenLabs voice, true when it was spoken
+def speak_elevenlabs(text):
+    try:
+        TURN_TIMES['first_sound'] = time.perf_counter()
+        speech_elevenlabs.speak(text, speech_elevenlabs.load_config())
+        robot_move.clear_warning()
+        return True
+    except Exception as error:
+        print_error('elevenlabs voice failed', error)
+        robot_move.print_warning(speech_elevenlabs.describe_error(error), '')
+        return False
 
 # Start a background thread that speaks due daily reminders
 def start_reminder_checker(listener, kokoro_pipeline):
@@ -1687,6 +1750,8 @@ def play_wav(wav_path):
 
 # Cut off the wav being played, so mute silences the robot at once
 def stop_speech():
+    if ELEVENLABS_MODE:
+        speech_elevenlabs.stop()
     if player_process is not None and player_process.poll() is None:
         player_process.kill()
 

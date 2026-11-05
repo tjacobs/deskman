@@ -752,9 +752,14 @@ def load_system_prompt():
         prompt = prompt + "\n\n" + accounts.google.PROMPT
     return prompt
 
+# What the model is told about the voice that speaks its words
+speech_style = ""
+
 # Long-term memories and reminders for the user turn, empty when none are saved
 def prompt_extras():
     extras = []
+    if speech_style:
+        extras.append(speech_style)
     memory_text = memory.format_memories_for_prompt()
     if memory_text:
         extras.append(memory_text)
@@ -762,6 +767,11 @@ def prompt_extras():
     if reminder_text:
         extras.append(reminder_text)
     return "\n\n".join(extras)
+
+# Tell the model how the voice reads its words, empty when it reads them plainly
+def set_speech_style(text):
+    global speech_style
+    speech_style = text
 
 # Print everything that will go into the model for this ask
 def print_context(prompt):
