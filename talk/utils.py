@@ -57,9 +57,10 @@ VIDEO_DIR = '/sys/class/video4linux'
 CPU_SCALING_DIR = '/sys/devices/system/cpu'
 CPU_INDEX_MAX = 64
 
-# Config quiet hours on the 24 hour clock, the robot makes no sound from bedtime until wake up
+# Config quiet hours on the 24 hour clock, the robot makes no sound from bedtime until wake up, and the earliest valid year before the clock syncs at boot
 BEDTIME = 23
 WAKE_UP = 7
+MIN_VALID_YEAR = 2025
 
 # Config internet check, ping until one reply or the deadline in seconds
 INTERNET_HOST = '1.1.1.1'
@@ -93,6 +94,14 @@ def load_config(defaults):
 def is_bedtime():
     hour = time.localtime().tm_hour
     return hour >= BEDTIME or hour < WAKE_UP
+
+# Warn once when the system clock has not synced yet, such as after a dead battery reset it to 1969
+def warn_if_clock_unset():
+    now = time.localtime()
+    if now.tm_year < MIN_VALID_YEAR:
+        print(f"Warning: system clock is not set, {time.strftime('%Y-%m-%d', now)}, waiting for time sync.", flush=True)
+        return True
+    return False
 
 # Return audio player command for this platform
 def audio_player():
@@ -467,11 +476,12 @@ def configure_torch_threads():
     os.environ['MKL_NUM_THREADS'] = thread_count
     os.environ['OPENBLAS_NUM_THREADS'] = thread_count
 
-# Suppress torch warnings during kokoro import
+# Suppress torch and urllib3 warnings during kokoro import
 def suppress_torch_warnings():
     warnings.filterwarnings('ignore', category=UserWarning, module='torch.nn.modules.rnn')
     warnings.filterwarnings('ignore', category=FutureWarning, module='torch.nn.utils.weight_norm')
     warnings.filterwarnings('ignore', category=UserWarning, module='torch.cuda')
+    warnings.filterwarnings('ignore', message='System time is way off')
 
 # Return path to a cached voice file when present
 def voice_cache_path(voice):

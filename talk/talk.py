@@ -363,7 +363,8 @@ def main():
         say_accent_phrase()
         return
 
-    # Warn when free RAM is below what still needs to load
+    # Warn when the system clock is unset or free RAM is below what still needs to load
+    utils.warn_if_clock_unset()
     warn_if_low_memory()
 
     # Build the record command
@@ -1042,10 +1043,11 @@ def load_vad_model():
 def load_kokoro_pipeline():
     global kokoro, torch, soundfile, kokoro_model
 
-    # Suppress torch warnings before kokoro imports torch
+    # Suppress torch warnings before kokoro imports torch, and skip Hub checks when the voice is already cached
     print(f'Loading kokoro...{load_wait_text(PI_KOKORO_LOAD_SECONDS)}', flush=True)
     warn_if_low_memory_for('kokoro', KOKORO_EXPECTED_GB)
     load_start = time.perf_counter()
+    utils.enable_offline_if_cached(VOICE)
     utils.configure_torch_threads()
     utils.suppress_torch_warnings()
 
