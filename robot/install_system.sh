@@ -1265,7 +1265,7 @@ disable_gnome_screen_idle() {
 
 # Install Chromium and make it open web links, tapping a warning on the face and the key setup both need a browser
 install_browser() {
-    echo "Installing the browser"
+    echo "Installing browser"
 
     # Pi OS packages Chromium as a plain deb
     if [[ "${MACHINE}" == "pi" ]]; then
