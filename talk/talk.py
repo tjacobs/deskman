@@ -205,6 +205,7 @@ KEY_SETUP_OFFERED = False
 LAST_ASK_AT = 0.0
 LAST_BATTERY_CHECK_AT = 0.0
 LOW_BATTERY_BASELINE_VOLTAGE = 0.0
+LAST_BATTERY_VOLTAGE = 0.0
 LOW_BATTERY_FALLBACK_INDEX = 0
 TURN_TIMES = {}
 kokoro_model = None
@@ -1617,7 +1618,7 @@ def reminder_loop(listener, kokoro_pipeline):
 
 # Sample the pack once a minute, and ask to be plugged in once the voltage has fallen below where it first went low
 def speak_low_battery(listener, kokoro_pipeline):
-    global LAST_BATTERY_CHECK_AT, LOW_BATTERY_BASELINE_VOLTAGE
+    global LAST_BATTERY_CHECK_AT, LOW_BATTERY_BASELINE_VOLTAGE, LAST_BATTERY_VOLTAGE
 
     # Sample on the minute so two readings sit a minute apart
     now = time.time()
@@ -1635,20 +1636,27 @@ def speak_low_battery(listener, kokoro_pipeline):
     # Still plenty of charge, so forget any baseline from an earlier low spell
     if percent >= LOW_BATTERY_PERCENT:
         LOW_BATTERY_BASELINE_VOLTAGE = 0.0
+        LAST_BATTERY_VOLTAGE = 0.0
         return
 
     # Keep the first low reading as the baseline, a slow drain is measured from there rather than minute to minute
     previous = LOW_BATTERY_BASELINE_VOLTAGE
     if previous <= 0.0:
         LOW_BATTERY_BASELINE_VOLTAGE = voltage
+        LAST_BATTERY_VOLTAGE = voltage
         print(f'Low battery: {percent}%, {voltage:.2f} V', flush=True)
         return
 
-    # Charging lifts the voltage, so start the baseline again from there
-    if voltage - previous >= LOW_BATTERY_DROP_VOLTS:
+    # Charging lifts the voltage from the last sample, so start the baseline again from there
+    last = LAST_BATTERY_VOLTAGE if LAST_BATTERY_VOLTAGE > 0.0 else previous
+    if voltage - last >= LOW_BATTERY_DROP_VOLTS:
         LOW_BATTERY_BASELINE_VOLTAGE = voltage
-        print(f'Low battery: {percent}%, {voltage:.2f} V up from {previous:.2f} V, charging', flush=True)
+        LAST_BATTERY_VOLTAGE = voltage
+        print(f'Low battery: {percent}%, {voltage:.2f} V up from {last:.2f} V, charging', flush=True)
         return
+
+    # Remember this sample even when it barely moved
+    LAST_BATTERY_VOLTAGE = voltage
 
     # Not far enough below the baseline yet, the difference is meter noise
     if previous - voltage < LOW_BATTERY_DROP_VOLTS:
@@ -1659,9 +1667,10 @@ def speak_low_battery(listener, kokoro_pipeline):
         print(f'Low battery: {percent}%, {voltage:.2f} V down from {previous:.2f} V, bedtime so not asking', flush=True)
         return
 
-    # Still draining, so ask
+    # Still draining, ask once for this drop, then measure the next drop from here
     line = ask_to_be_plugged_in(listener, kokoro_pipeline)
     print(f'Low battery: {percent}%, {voltage:.2f} V down from {previous:.2f} V: {line}', flush=True)
+    LOW_BATTERY_BASELINE_VOLTAGE = voltage
 
 # Ask to be plugged in out loud, and return the words that were said
 def ask_to_be_plugged_in(listener, kokoro_pipeline):
