@@ -585,7 +585,6 @@ configure_dsi_panel() {
 
     # Leave an overlay that is already there alone
     if grep -q "^dtoverlay=${PANEL_OVERLAY}$" "${BOOT_CONFIG}"; then
-        echo "DSI panel overlay already set"
         return
     fi
 
@@ -627,7 +626,6 @@ configure_servo_uart() {
 
     # Leave an overlay that is already there alone
     if grep -q "^dtoverlay=${SERVO_UART_OVERLAY}$" "${BOOT_CONFIG}"; then
-        echo "Servo UART overlay already set"
         return
     fi
 
@@ -645,7 +643,6 @@ configure_i2c_arm() {
 
     # Leave an enabled line alone
     if grep -q "^dtparam=${I2C_ARM_PARAM}$" "${BOOT_CONFIG}"; then
-        echo "I2C1 already enabled"
         return
     fi
 
