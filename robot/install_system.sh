@@ -56,6 +56,7 @@ main() {
     remove_panel_backlight_service
     configure_servo_uart
     configure_i2c_arm
+    configure_usb_current
     persist_display_rotation
     hide_mouse_pointer
     disable_screen_idle
@@ -160,6 +161,8 @@ SERVO_UART_OVERLAY="uart0-pi5"
 SERVO_UART_COMMENT="GPIO 14/15 UART for the STS3215 servo bus"
 I2C_ARM_PARAM="i2c_arm=on"
 I2C_ARM_COMMENT="INA219 battery meter on GPIO 2 and 3"
+USB_CURRENT_KEY="usb_max_current_enable=1"
+USB_CURRENT_COMMENT="Full USB current on a 5V 5A supply, the camera, speaker, and servo bus trip the default limit"
 
 # Old panel backlight unit and script, the panel lights without them
 PANEL_BACKLIGHT_SERVICE="panel-backlight.service"
@@ -655,6 +658,23 @@ configure_i2c_arm() {
 
     # Otherwise append it
     printf '\n%s\n%s\n' "# ${I2C_ARM_COMMENT}" "dtparam=${I2C_ARM_PARAM}" >> "${BOOT_CONFIG}"
+}
+
+# Let the Pi 5 USB ports draw full current, the default limit cuts every port when the camera and servos start
+configure_usb_current() {
+    # Only the Pi 5 firmware reads this key
+    if [[ "${MACHINE}" != "pi" || ! -f "${BOOT_CONFIG}" ]]; then
+        return
+    fi
+
+    # Leave a line that is already there alone
+    if grep -q "^${USB_CURRENT_KEY}$" "${BOOT_CONFIG}"; then
+        return
+    fi
+
+    # Put it in the pi5 filter so other Pi models ignore it
+    echo "Enabling full USB current in ${BOOT_CONFIG}"
+    printf '\n%s\n%s\n%s\n' '[pi5]' "# ${USB_CURRENT_COMMENT}" "${USB_CURRENT_KEY}" >> "${BOOT_CONFIG}"
 }
 
 # Start X already in portrait and keep GNOME from flipping it back
