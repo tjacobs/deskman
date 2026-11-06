@@ -911,17 +911,28 @@ def make_reply(command):
         print(f'Error: {format_llm_error(error)}', flush=True)
         if text_client.use_cloud():
             robot_move.print_warning(*text_client.openai_warning(format_llm_error(error)))
-            return CLOUD_UNAVAILABLE
+            return cloud_unavailable_reply(error)
         return retry_ask_locally(command)
     except Exception as error:
         text_ask.last_tool_log.clear()
         print_error('ask failed', error)
         if text_client.use_cloud():
             robot_move.print_warning(*text_client.openai_warning(error))
-            return CLOUD_UNAVAILABLE
+            return cloud_unavailable_reply(error)
         print(f'Reply: {TEXT_UNAVAILABLE}', flush=True)
         print_memory('ask failed')
         return TEXT_UNAVAILABLE
+
+# Say OpenAI could not be reached, then the message OpenAI gave
+def cloud_unavailable_reply(error):
+    # Read the error text, and take the message out of an OpenAI JSON body when there is one
+    text = format_llm_error(error)
+    match = re.search(r'"message":\s*"((?:[^"\\]|\\.)*)"', text)
+    if match:
+        text = json.loads('"' + match.group(1) + '"')
+
+    # Put the message on the end of the line
+    return f'{CLOUD_UNAVAILABLE} {text}'
 
 # After a local ask fails, restart Gemma when it died and ask again
 def retry_ask_locally(command):

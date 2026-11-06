@@ -42,6 +42,9 @@ MAX_TOOL_ROUNDS = 4
 MAX_HISTORY_MESSAGES = 40
 INFERENCE_INPUT_CHARS = 200
 
+# Config the result kept in history for a tool call that was answered without sending its result back to the model
+TOOL_NO_RESULT = "Done."
+
 # Tools the local model can call, Sonos and Google Calendar are added when an account is saved
 BASE_TOOLS = move.TOOLS + dates.TOOLS + maths.TOOLS + memory.TOOLS + reminders.TOOLS + talks.TOOLS + system.TOOLS + video.TOOLS + voices.TOOLS + volume.TOOLS
 
@@ -699,9 +702,23 @@ def remember_exchange(prompt, reply):
 # Keep this ask's messages, including tool calls and results, for later asks
 def remember_turn(messages, reply):
     global conversation_history
-    conversation_history = list(messages[1:])
+    conversation_history = answer_open_tool_calls(messages[1:])
     conversation_history.append({"role": "assistant", "content": reply})
     trim_conversation_history()
+
+# Put a placeholder result after any tool call that never got one, OpenAI rejects history with a tool call left unanswered
+def answer_open_tool_calls(history):
+    # Collect the tool call ids that already have a result
+    answered = {message.get("tool_call_id") for message in history if message.get("role") == "tool"}
+
+    # Add a placeholder result straight after each assistant message with an unanswered call
+    fixed = []
+    for message in history:
+        fixed.append(message)
+        for tool_call in message.get("tool_calls") or []:
+            if tool_call.get("id") not in answered:
+                fixed.append({"role": "tool", "tool_call_id": tool_call.get("id"), "content": TOOL_NO_RESULT})
+    return fixed
 
 # Drop oldest full turns when history grows too long
 def trim_conversation_history():
